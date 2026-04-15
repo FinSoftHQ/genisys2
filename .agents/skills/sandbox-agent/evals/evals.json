@@ -1,0 +1,92 @@
+{
+  "skill_name": "sandbox-agent",
+  "evals": [
+    {
+      "id": 1,
+      "name": "setup-local-development",
+      "prompt": "I want to set up Sandbox Agent for local development to orchestrate Claude Code. How do I install and run the server locally?",
+      "expected_output": "Instructions for installing and starting the sandbox-agent server locally with proper configuration",
+      "files": [],
+      "assertions": [
+        {
+          "name": "mentions_install_command",
+          "description": "Provides install command (npx, npm, curl, etc)",
+          "type": "code_contains_any",
+          "targets": ["npx", "npm install", "curl", "bunx"]
+        },
+        {
+          "name": "mentions_server_command",
+          "description": "Shows server command",
+          "type": "code_contains",
+          "target": "server"
+        },
+        {
+          "name": "mentions_api_keys",
+          "description": "Mentions required API keys",
+          "type": "code_contains_any",
+          "targets": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "API_KEY"]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "create-session-typescript",
+      "prompt": "I have the Sandbox Agent server running. Now I need to create a TypeScript SDK client, start a Claude session, and send it a prompt. Can you show me the code?",
+      "expected_output": "TypeScript code showing SDK connection, session creation, and prompt sending",
+      "files": [],
+      "assertions": [
+        {
+          "name": "imports_SandboxAgent",
+          "description": "Imports SandboxAgent from sandbox-agent",
+          "type": "code_contains",
+          "target": "from \"sandbox-agent\""
+        },
+        {
+          "name": "uses_connect_or_start",
+          "description": "Uses SandboxAgent.connect() or start()",
+          "type": "code_contains_any",
+          "targets": ["SandboxAgent.connect", "SandboxAgent.start"]
+        },
+        {
+          "name": "creates_session",
+          "description": "Creates a session with createSession",
+          "type": "code_contains",
+          "target": "createSession"
+        },
+        {
+          "name": "sends_prompt",
+          "description": "Sends a prompt using session.prompt()",
+          "type": "code_contains",
+          "target": ".prompt("
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "deploy-to-e2b",
+      "prompt": "I want to deploy Sandbox Agent to E2B so I can run Claude Code in a sandboxed environment. How do I set this up?",
+      "expected_output": "E2B deployment instructions including environment variables and sandbox configuration",
+      "files": [],
+      "assertions": [
+        {
+          "name": "mentions_e2b",
+          "description": "Mentions E2B specifically",
+          "type": "code_contains",
+          "target": "e2b"
+        },
+        {
+          "name": "mentions_sandbox_creation",
+          "description": "Shows Sandbox.create or similar",
+          "type": "code_contains",
+          "target": "Sandbox"
+        },
+        {
+          "name": "mentions_env_vars",
+          "description": "Shows how to pass environment variables",
+          "type": "code_contains_any",
+          "targets": ["envs", "envVars", "env:", "environment"]
+        }
+      ]
+    }
+  ]
+}

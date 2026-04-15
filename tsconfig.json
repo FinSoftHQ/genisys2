@@ -1,0 +1,14 @@
+{
+  "extends": "@repo/typescript-config/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": true
+  },
+  "include": [
+    "src/**/*",
+    "e2e/**/*",
+    "*.ts",
+    "*.mjs"
+  ],
+  "exclude": ["node_modules", "dist", ".output", "src/apps/web"]
+}

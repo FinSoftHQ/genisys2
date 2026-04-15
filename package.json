@@ -1,0 +1,41 @@
+{
+  "name": "genisys",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "bun",
+      "version": ">=1.2.0"
+    }
+  },
+  "packageManager": "pnpm@10.20.0",
+  "scripts": {
+    "dev": "just dev",
+    "build": "just build",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:e2e": "just test-e2e",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit && pnpm --filter web typecheck",
+    "start": "node src/apps/api/dist/index.js"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@parcel/watcher"
+    ]
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@repo/typescript-config": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

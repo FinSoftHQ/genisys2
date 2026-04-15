@@ -1,0 +1,4 @@
+not valid json
+{"missing": "file"}
+{"file": "test.ts", "start_line": -1}
+{"file": "test.ts", "end_line": 0}

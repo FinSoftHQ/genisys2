@@ -1,0 +1,41 @@
+{
+  "skill_name": "rivet-agent-os-pi",
+  "evals": [
+    {
+      "id": 1,
+      "name": "basic-agentic-tool",
+      "prompt": "Build an Agentic Tool that use AgentOS and call Pi to write a code inside it. The tool should create a simple API endpoint file in TypeScript.",
+      "expected_output": "TypeScript code showing: 1) Import of agentOs from rivetkit/agent-os, 2) Import of pi from @rivet-dev/agent-os-pi, 3) Basic actor setup with agentOs VM, 4) Session creation and prompt to write code, 5) Proper session cleanup"
+    },
+    {
+      "id": 2,
+      "name": "durable-workflow-orchestration",
+      "prompt": "Create a Rivet workflow that: 1) Creates a Pi session to generate a React component, 2) Runs a linting check on the generated code, 3) If lint fails, creates another Pi session to fix the errors, 4) Returns the final code. Use c.step() properly for durability.",
+      "expected_output": "Complete workflow code showing: 1) workflow() definition with proper typing, 2) Multiple c.step() blocks, 3) Session created and closed within each step, 4) Error handling / conditional logic, 5) Test execution within a step, 6) Data passing between steps"
+    },
+    {
+      "id": 3,
+      "name": "agent-chaining-pattern",
+      "prompt": "Build an agent chaining workflow in Rivet agentOS where: 1) First Pi agent reviews a PR diff and writes analysis to a file, 2) Second step reads that analysis, 3) Third Pi agent implements the suggested changes. Show the full pattern with proper session management.",
+      "expected_output": "Agent chaining implementation with: 1) First step with Pi session writing to filesystem, 2) Second step reading from filesystem, 3) Third step with new Pi session using the read data, 4) All sessions properly contained within steps, 5) Filesystem paths shown explicitly"
+    },
+    {
+      "id": 4,
+      "name": "pi-extension-setup",
+      "prompt": "Show me how to install a custom Pi extension in a Rivet VM that adds a 'getCurrentTime' tool. The extension should be written to the VM before creating the Pi session.",
+      "expected_output": "Code showing: 1) Extension code with pi.tools.register(), 2) Writing extension to ~/.pi/agent/extensions/ or project dir, 3) Creating directory with recursive option, 4) Writing file with vm.writeFile(), 5) Creating session after extension is installed"
+    },
+    {
+      "id": 5,
+      "name": "complete-project-scaffold",
+      "prompt": "I need a complete Rivet agentOS + Pi project that generates documentation for TypeScript files. Include server setup, client code to trigger it, package.json, and README.",
+      "expected_output": "Complete project structure with: 1) server.ts with workflow, 2) client.ts, 3) package.json with correct dependencies (@rivet-dev/agent-os-common, @rivet-dev/agent-os-pi, rivetkit), 4) Instructions, 5) Proper TypeScript configuration"
+    },
+    {
+      "id": 6,
+      "name": "error-handling-with-retry",
+      "prompt": "Build a resilient Pi workflow that handles API failures gracefully. It should: 1) Try to generate code with Pi, 2) If it fails (e.g., rate limit), retry up to 3 times with exponential backoff, 3) On each retry, include the error message in the new prompt so Pi can adapt, 4) If all retries fail, store the error info in c.state and re-throw. Use c.step() with attempt names.",
+      "expected_output": "Error handling workflow with: 1) While loop for retries (max 3), 2) Try/catch around c.step() blocks, 3) Dynamic step names per attempt (e.g., 'attempt-0'), 4) Error message passed to subsequent prompts, 5) Backoff delay between retries (setTimeout or sleep), 6) c.state used for failure tracking, 7) Proper re-throw after exhaustion"
+    }
+  ]
+}

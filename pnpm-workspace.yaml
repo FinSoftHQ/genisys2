@@ -1,0 +1,38 @@
+packages:
+  - src/apps/*
+  - src/libs/*
+  - src/tooling/*
+  - tools/*
+  - e2e
+
+catalog:
+  '@fastify/cors': ^10.0.1
+  '@fastify/helmet': ^12.0.1
+  '@fastify/rate-limit': ^10.2.1
+  '@fastify/websocket': ^11.0.1
+  '@mastra/core': ^1.24.1
+  '@mastra/duckdb': ^1.1.1
+  '@mastra/evals': ^1.2.1
+  '@mastra/libsql': ^1.8.0
+  '@mastra/loggers': ^1.1.1
+  '@mastra/memory': ^1.15.0
+  '@mastra/observability': ^1.9.0
+  '@playwright/test': ^1.49.0
+  '@rivet-dev/agent-os-common': ^0.0.260331072558
+  '@rivet-dev/agent-os-pi': ^0.1.1
+  '@types/node': 22.19.15
+  '@typescript-eslint/eslint-plugin': ^8.18.0
+  '@typescript-eslint/parser': ^8.18.0
+  '@vitest/coverage-v8': ^2.1.8
+  eslint: ^9.17.0
+  fastify: ^5.1.0
+  fastify-type-provider-zod: ^5.1.0
+  mastra: ^1.5.0
+  nuxt: ^4.0.0
+  pino: ^9.6.0
+  rivetkit: ^2.2.1
+  tsup: ^8.3.5
+  typescript: 5.9.3
+  typescript-eslint: ^8.18.0
+  vitest: ^2.1.8
+  zod: 4.3.6

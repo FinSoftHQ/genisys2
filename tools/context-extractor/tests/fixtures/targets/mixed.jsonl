@@ -1,0 +1,9 @@
+{"file": "sample.ts"}
+
+not valid json
+
+{"file": "sample.vue", "start_line": 1, "end_line": 5}
+
+{"file": "nonexistent-file.ts"}
+
+{"file": "no-extension", "reasoning": "some reasoning"}

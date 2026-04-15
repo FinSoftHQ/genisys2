@@ -1,0 +1,92 @@
+{
+  "skill_name": "rivetkit",
+  "evals": [
+    {
+      "id": 1,
+      "name": "create-chat-room-actor",
+      "prompt": "I need to build a real-time chat room using Rivet Actors. It should support multiple rooms, store message history persistently, and allow users to join with a username. Can you create the backend code for this?",
+      "expected_output": "A working chat room actor with state persistence, connection handling, and broadcast events",
+      "files": [],
+      "assertions": [
+        {
+          "name": "uses_rivetkit_actor",
+          "description": "Code uses actor() from rivetkit",
+          "type": "code_contains",
+          "target": "actor({"
+        },
+        {
+          "name": "has_state_for_messages",
+          "description": "Actor has state to store messages",
+          "type": "code_contains",
+          "target": "state:"
+        },
+        {
+          "name": "has_broadcast_event",
+          "description": "Uses broadcast for realtime events",
+          "type": "code_contains",
+          "target": "c.broadcast"
+        },
+        {
+          "name": "has_setup_registry",
+          "description": "Creates and exports a registry",
+          "type": "code_contains",
+          "target": "setup({"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "actor-to-actor-communication",
+      "prompt": "I'm building an e-commerce system with Rivet Actors. I have an Inventory actor and an Order actor. When a new order is placed, the Order actor needs to check and reserve inventory. How do I set up actor-to-actor communication for this?",
+      "expected_output": "Two actors with proper registry setup and c.client() usage for cross-actor calls",
+      "files": [],
+      "assertions": [
+        {
+          "name": "uses_client_for_communication",
+          "description": "Uses c.client() for actor communication",
+          "type": "code_contains",
+          "target": "c.client<"
+        },
+        {
+          "name": "has_multiple_actors",
+          "description": "Defines at least two actors",
+          "type": "code_contains",
+          "target": "actor({"
+        },
+        {
+          "name": "has_registry_export",
+          "description": "Exports registry for type inference",
+          "type": "code_contains",
+          "target": "export const registry"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "deploy-to-railway",
+      "prompt": "I've built my Rivet Actors backend locally and it's working great. Now I want to deploy it to Railway. What do I need to do?",
+      "expected_output": "Deployment instructions including Dockerfile, versioning setup, and environment variable configuration",
+      "files": [],
+      "assertions": [
+        {
+          "name": "mentions_dockerfile",
+          "description": "Provides or references a Dockerfile",
+          "type": "code_contains",
+          "target": "Dockerfile"
+        },
+        {
+          "name": "mentions_versioning",
+          "description": "Mentions versioning configuration",
+          "type": "code_contains",
+          "target": "version"
+        },
+        {
+          "name": "mentions_railway",
+          "description": "Mentions Railway-specific deployment steps",
+          "type": "code_contains",
+          "target": "railway"
+        }
+      ]
+    }
+  ]
+}

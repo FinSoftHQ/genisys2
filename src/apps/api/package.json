@@ -1,0 +1,29 @@
+{
+  "name": "@repo/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "build": "tsup src/index.ts --format esm --out-dir dist --target node22",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "catalog:",
+    "@fastify/helmet": "catalog:",
+    "@fastify/rate-limit": "catalog:",
+    "@fastify/websocket": "catalog:",
+    "@repo/logger": "workspace:*",
+    "@repo/shared": "workspace:*",
+    "fastify": "catalog:",
+    "fastify-type-provider-zod": "catalog:",
+    "pino": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:"
+  }
+}

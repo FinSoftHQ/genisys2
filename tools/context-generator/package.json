@@ -1,0 +1,31 @@
+{
+  "name": "@repo/context-generator",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "context-generator": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "build": "tsup src/index.ts --format esm --out-dir dist --target node22",
+    "build:binary": "bun build --compile src/index.ts --outfile context-generator",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  
+  "dependencies": {
+    "commander": "^12.1.0",
+    "fast-glob": "^3.3.2",
+    "ignore": "^7.0.0",
+    "typescript": "catalog:"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "skill_name": "rivetkit-client-javascript",
+  "evals": [
+    {
+      "id": 1,
+      "name": "react-chat-client",
+      "prompt": "I'm building a React app that needs to connect to a Rivet chat room actor. I want to display messages in real-time and allow users to send new messages. Can you show me how to set up the client?",
+      "expected_output": "React component using rivetkit/client with connection, event subscription, and action calls",
+      "files": [],
+      "assertions": [
+        {
+          "name": "imports_createClient",
+          "description": "Imports createClient from rivetkit/client",
+          "type": "code_contains",
+          "target": "from \"rivetkit/client\""
+        },
+        {
+          "name": "uses_connect_method",
+          "description": "Uses .connect() for stateful connection",
+          "type": "code_contains",
+          "target": ".connect()"
+        },
+        {
+          "name": "handles_events",
+          "description": "Subscribes to events with .on()",
+          "type": "code_contains",
+          "target": ".on("
+        },
+        {
+          "name": "calls_actions",
+          "description": "Calls actor actions",
+          "type": "code_contains",
+          "target": "await"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "connection-params-auth",
+      "prompt": "My Rivet actor requires authentication. Users pass a JWT token when connecting. How do I set up the client to send auth parameters when connecting to the actor?",
+      "expected_output": "Client code showing params or getParams configuration for connection authentication",
+      "files": [],
+      "assertions": [
+        {
+          "name": "uses_params_or_getParams",
+          "description": "Uses params or getParams for connection",
+          "type": "code_contains_any",
+          "targets": ["params:", "getParams:"]
+        },
+        {
+          "name": "shows_client_creation",
+          "description": "Shows createClient usage",
+          "type": "code_contains",
+          "target": "createClient"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "error-handling-client",
+      "prompt": "I need to handle errors properly in my Rivet client. The actor can throw UserError with specific error codes. How do I catch and handle these errors on the client side?",
+      "expected_output": "Error handling code using ActorError class with proper type checking",
+      "files": [],
+      "assertions": [
+        {
+          "name": "imports_ActorError",
+          "description": "Imports ActorError from rivetkit/client",
+          "type": "code_contains",
+          "target": "ActorError"
+        },
+        {
+          "name": "uses_instanceof_check",
+          "description": "Uses instanceof ActorError for error checking",
+          "type": "code_contains",
+          "target": "instanceof ActorError"
+        },
+        {
+          "name": "accesses_error_properties",
+          "description": "Accesses error.code or error.metadata",
+          "type": "code_contains_any",
+          "targets": ["error.code", "error.metadata"]
+        }
+      ]
+    }
+  ]
+}

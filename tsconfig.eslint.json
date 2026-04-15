@@ -1,0 +1,15 @@
+{
+  "extends": "@repo/typescript-config/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true
+  },
+  "include": [
+    "src/**/*",
+    "src/**/*.mjs",
+    "e2e/**/*",
+    "tools/**/*",
+    "*.ts",
+    "*.mjs"
+  ]
+}

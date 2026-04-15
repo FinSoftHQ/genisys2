@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "skills": {
+    "agent-browser": {
+      "source": "vercel-labs/agent-browser",
+      "sourceType": "github",
+      "computedHash": "6bee044f51bfe9bcc20e2a779ca2a31fae5c6b0095ad30b264ecef9a27cb3ce6"
+    },
+    "ai-sdk": {
+      "source": "vercel/ai",
+      "sourceType": "github",
+      "computedHash": "81af098a4ce6f0e323c1bd02b8e79df3bbaed57cbf1c4060f58ddc95de5545a1"
+    },
+    "mastra": {
+      "source": "mastra-ai/skills",
+      "sourceType": "github",
+      "computedHash": "b42f583342dfee7deb541f4d094f03e8748898257f1f884fa71de1fdba9f38a2"
+    },
+    "nuxt-ui": {
+      "source": "nuxt/ui",
+      "sourceType": "github",
+      "computedHash": "c3dbbd219dc94e345faa0b5cc4c03638f4361f8b0efa9f34c7dfa2c6dba65a9d"
+    },
+    "openapi-spec-generation": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "computedHash": "a18234366d829a7c87ac8f419846da9fe010c3b52b78be2f28e2e2d101b77273"
+    },
+    "rivetkit": {
+      "source": "rivet-dev/skills",
+      "sourceType": "github",
+      "computedHash": "55e8c0c3e9df38d7d48fdd65c78b2212d27248f03c14310a5821a5fd719683bf"
+    },
+    "rivetkit-client-javascript": {
+      "source": "rivet-dev/skills",
+      "sourceType": "github",
+      "computedHash": "9a92026b211eb932cd9431cc5e932b4ff0dd9f8cc905be24e6fe06b160c72f9a"
+    },
+    "sandbox-agent": {
+      "source": "rivet-dev/skills",
+      "sourceType": "github",
+      "computedHash": "52d74874f6b15618028981bff02054e392b52e2416396dd384f48ac75d769a58"
+    },
+    "skill-creator": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "computedHash": "b122f4d1e91aa1d83027e050b5b37c3156203ee85458d7b1360bc48167c9e02a"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+{"file": "sample.ts"}
+{"file": "sample.vue", "start_line": 1, "end_line": 5}
+{"file": "no-extension"}
+{"file": "sample.ts", "start_line": 10, "end_line": 20, "reasoning": "Extract class definition"}
