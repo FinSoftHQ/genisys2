@@ -5,7 +5,8 @@ export class Formatter {
 	private textBuffer = "";
 	private thinkingBuffer = "";
 	private currentTimestamp = Date.now();
-	private agentName = process.env.PIFMT_AGENT_NAME ?? "Pi";
+
+	constructor(private agentName: string) {}
 
 	private gray(text: string): string {
 		return this.isTTY ? `\x1b[90m${text}\x1b[0m` : text;

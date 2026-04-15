@@ -86,7 +86,9 @@ attachJsonlReader(pi.stdout, async (line) => {
 			break;
 		}
 		case "message_start": {
-			formatter.onMessageStart(event.message as { role?: string });
+			formatter.onMessageStart(
+				event.message as { role?: string; timestamp?: number },
+			);
 			break;
 		}
 		case "message_update": {
