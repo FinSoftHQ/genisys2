@@ -43,10 +43,13 @@ test-e2e-ci:
 
 build-tools:
     @echo "Building all CLI tools..."
+    @mkdir -p .bin
     @for tool in tools/*/; do \
         tool_name=`basename "$tool"`; \
         echo "  Building $tool_name..."; \
         cd "$tool" && pnpm run build:binary && cd - > /dev/null || exit 1; \
+        mv "tools/${tool_name}/${tool_name}" .bin/; \
+        echo "  Moved $tool_name to .bin/"; \
     done
     @echo "All CLI tools built successfully!"
 

@@ -426,6 +426,7 @@ test-results/
 .output/
 
 # Projects specific
+.bin/
 src/libs/shared/dist/
 src/libs/api/dist/
 src/apps/web/.output/
