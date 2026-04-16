@@ -12,3 +12,5 @@ export const UserSchema = z
   .strict();
 
 export type User = z.infer<typeof UserSchema>;
+
+export { parseProtocol, type Protocol } from './protocol-parser.js';
