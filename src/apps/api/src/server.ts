@@ -11,6 +11,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { createLogger } from '@repo/logger';
 import { squadRoutes } from './squads/routes.js';
+import { agentRoomRoutes } from './agent-rooms/index.js';
 
 if (process.versions.bun && process.env.NODE_ENV === 'production') {
   throw new Error('Production requires Node.js 22. Bun runtime is not supported in Azure Oryx.');
@@ -70,6 +71,7 @@ await app.register(
 );
 
 await app.register(squadRoutes, { prefix: '/api/v1/squads' });
+await app.register(agentRoomRoutes, { prefix: '/api/v1/agent-rooms' });
 
 process.on('SIGTERM', () => {
   (async () => {

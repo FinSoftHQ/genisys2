@@ -166,3 +166,155 @@ Event types (overview)
 Integration tips
 - Use the SSE stream to build live UIs showing agent progress and tool executions.
 - Use resume and instructions to recover from agent failures or to drive additional interactions.
+
+---
+
+# API: /api/v1/agent-rooms
+
+Purpose
+
+This API manages "agent rooms" — chat rooms for AI agents where messages from one agent are automatically routed to other agents. Like squads, a room is created from a protocol Markdown document (YAML front matter with a `team:` block plus a body). The server spawns one `pi` process per team member and injects the protocol body as the initial prompt.
+
+The key behavioral difference from squads is **inter-agent message routing**: when an agent produces an assistant message, that message is forwarded to the other agents in the room so they can react and continue the conversation.
+
+Notes
+- The create endpoint requires `Content-Type: text/markdown` and a protocol with front matter containing a `team:` block.
+- Rooms auto-expire after 2 hours of inactivity.
+- The host must have the `pi` binary available (spawned as `pi --mode rpc --no-session`).
+- You can optionally declare a `routes:` block in the front matter to control which agents receive messages from which sender. When omitted, the default behavior is to broadcast each assistant message to all other agents.
+
+Endpoints (starter guide)
+
+1) Create room
+- Purpose: Create a new agent room from a protocol Markdown document and start agent processes.
+- Request (HTTP):
+  POST /api/v1/agent-rooms/
+  Headers:
+    Content-Type: text/markdown
+  Body: (raw protocol Markdown, must include front matter with team)
+
+- Success: 201 Created
+  Body: { roomId: string, status: "initialized" }
+- Common error: 415 if Content-Type does not include text/markdown
+
+- Example raw protocol with optional routing rules:
+
+```md
+---
+team:
+  architect: System Architect
+  developer: Senior Developer
+routes:
+  architect:
+    - developer
+  developer:
+    - architect
+---
+
+# Working Protocol
+
+Discuss the API design and then the developer should implement it.
+```
+
+2) Get room status
+- Purpose: Get a compact status snapshot for a room and per-agent status, plus a pointer to the most recent stored event.
+- Request (HTTP):
+  GET /api/v1/agent-rooms/:roomId/status
+  Headers: (none required)
+  Body: none
+
+- Success: 200 OK
+  Body: {
+    roomId: string,
+    status: "initialized" | "running" | "suspended" | "error" | "completed",
+    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
+    // present once at least one event has been stored:
+    lastEventId?: number,
+    lastEventAt?: string,
+    lastEventType?: string,
+    lastEventFrom?: string,
+    // optional if failure:
+    failedAgent?: string,
+    reason?: string
+  }
+- Common error: 404 if room not found
+
+3) Get stored events
+- Purpose: Retrieve all coalesced events buffered for a room (up to 2500 most recent).
+- Request (HTTP):
+  GET /api/v1/agent-rooms/:roomId/events
+  GET /api/v1/agent-rooms/:roomId/events?since=<eventId>
+  Headers: (none required)
+  Body: none
+
+- Query params:
+  since (optional): integer event id — return only events with id > since.
+
+- Success: 200 OK
+  Body: {
+    roomId: string,
+    total: number,
+    events: Array<{
+      id: number,
+      from: string,
+      at: string,
+      type: "thinking" | "message" | "tool_start" | "tool_end"
+           | "retry_start" | "retry_end" | "agent_start" | "agent_end" | "room_error",
+      // type-specific fields are identical to squads
+    }>
+  }
+- Common errors: 400 for invalid since, 404 if room not found
+
+4) Subscribe to SSE stream
+- Purpose: Receive real-time agent events and room lifecycle events via Server-Sent Events.
+- Request (HTTP):
+  GET /api/v1/agent-rooms/:roomId/stream
+  Headers: none (client should handle SSE)
+  Body: none
+
+- Success: 200 OK with headers:
+    Content-Type: text/event-stream
+    Cache-Control: no-cache
+    Connection: keep-alive
+- Common error: 404 if room not found
+
+5) Send instructions / follow-ups to agent(s)
+- Purpose: Queue follow-up messages to one or more agents in a room. Messages are sent as `prompt` (if agent idle) or `follow_up` (if streaming).
+- Request (HTTP):
+  POST /api/v1/agent-rooms/:roomId/instructions
+  Headers:
+    Content-Type: application/json
+  Body (JSON):
+    {
+      "targetAgents": ["agentName1", "agentName2"],
+      "followUp": ["Please focus on performance.", "Add error handling."]
+    }
+
+- Success: 200 OK
+  Body: { roomId: string, queuedItems: number }
+- Common errors: 400 for invalid body or unknown agent, 404 if room not found
+
+6) Complete (destroy) room
+- Purpose: Mark a room completed and clean up processes and SSE clients.
+- Request (HTTP):
+  DELETE /api/v1/agent-rooms/:roomId
+  Headers: none
+  Body: none
+
+- Success: 200 OK
+  Body: { roomId: string, status: "completed" }
+- Common error: 404 if room not found
+
+Event types (overview)
+- Events are emitted by agent processes and forwarded through SSE. Typical `type` values include:
+  - agent_start, agent_end
+  - message_start, message_update, message_end
+  - tool_execution_start, tool_execution_end
+  - auto_retry_start, auto_retry_end
+  - response
+  - room_error (from manager)
+  - room_closed (from manager when room destroyed; reason: "expired"|"completed"|"manual")
+
+Key behavioral difference from squads
+- When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
+- You can influence routing with the optional `routes:` front-matter block, or in the future by including `@attn:<agent>` in message text.
