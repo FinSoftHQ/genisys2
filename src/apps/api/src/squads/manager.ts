@@ -14,6 +14,25 @@ export type SquadStatus =
 	| "error"
 	| "completed";
 
+const EVENT_BUFFER_CAP = 2500;
+
+type StoredEventBase = { id: number; from: string; at: string };
+
+export type StoredEvent =
+	| (StoredEventBase & { type: "thinking"; thinking: string })
+	| (StoredEventBase & { type: "message"; text: string })
+	| (StoredEventBase & { type: "tool_start"; toolName: string; args: unknown })
+	| (StoredEventBase & { type: "tool_end"; toolName: string; result: string; isError: boolean })
+	| (StoredEventBase & { type: "retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string })
+	| (StoredEventBase & { type: "retry_end"; success: boolean; attempt: number; finalError?: string })
+	| (StoredEventBase & { type: "agent_start" })
+	| (StoredEventBase & { type: "agent_end" })
+	| (StoredEventBase & { type: "squad_error"; reason: string });
+
+// Distributive Omit so pushEvent accepts each union member without the id field.
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+type StoredEventInput = DistributiveOmit<StoredEvent, "id">;
+
 interface AgentState {
 	proc: ChildProcess;
 	name: string;
@@ -22,6 +41,10 @@ interface AgentState {
 	pendingUiRequest: boolean;
 	status: "idle" | "streaming" | "error";
 	logger: SquadLogger;
+	// Event coalescing buffers (mirrors SquadLogger internals)
+	_textBuf: string;
+	_thinkingBuf: string;
+	_msgTs: number;
 }
 
 interface Squad {
@@ -35,6 +58,8 @@ interface Squad {
 	failedAgent?: string;
 	failedReason?: string;
 	expireTimeout?: ReturnType<typeof setTimeout>;
+	events: StoredEvent[];
+	eventSeq: number;
 }
 
 const squads = new Map<string, Squad>();
@@ -49,6 +74,15 @@ function resetExpiry(squad: Squad): void {
 	squad.expireTimeout = setTimeout(() => {
 		destroySquad(squad.id, "expired");
 	}, EXPIRY_MS);
+}
+
+function pushEvent(squad: Squad, event: StoredEventInput): void {
+	squad.eventSeq += 1;
+	const record = { id: squad.eventSeq, ...event } as StoredEvent;
+	squad.events.push(record);
+	if (squad.events.length > EVENT_BUFFER_CAP) {
+		squad.events.shift();
+	}
 }
 
 function updateActivity(squad: Squad): void {
@@ -97,6 +131,8 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 		createdAt: Date.now(),
 		lastActivityAt: Date.now(),
 		protocolBody: protocol.body,
+		events: [],
+		eventSeq: 0,
 	};
 
 	for (const [name, role] of Object.entries(protocol.team)) {
@@ -113,6 +149,9 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 			pendingUiRequest: false,
 			status: "idle",
 			logger,
+			_textBuf: "",
+			_thinkingBuf: "",
+			_msgTs: 0,
 		};
 
 		proc.on("exit", (code) => {
@@ -122,11 +161,9 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 				squad.status = "error";
 				squad.failedAgent = name;
 				squad.failedReason = `Process exited with code ${String(code)}`;
-				broadcast(squad, {
-					type: "squad_error",
-					from: name,
-					reason: squad.failedReason,
-				});
+				const reason = squad.failedReason;
+				pushEvent(squad, { type: "squad_error", from: name, at: new Date().toISOString(), reason });
+				broadcast(squad, { type: "squad_error", from: name, reason });
 			}
 		});
 
@@ -135,11 +172,8 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 			squad.status = "error";
 			squad.failedAgent = name;
 			squad.failedReason = err.message;
-			broadcast(squad, {
-				type: "squad_error",
-				from: name,
-				reason: err.message,
-			});
+			pushEvent(squad, { type: "squad_error", from: name, at: new Date().toISOString(), reason: err.message });
+			broadcast(squad, { type: "squad_error", from: name, reason: err.message });
 		});
 
 		attachJsonlReader(proc.stdout!, (line) => {
@@ -213,6 +247,83 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 				}
 			}
 
+			// ── Event storage (coalesced, mirrors SquadLogger output) ────────────
+			const now = new Date().toISOString();
+			switch (type) {
+				case "message_start": {
+					const msg = event.message as { role?: string; timestamp?: number } | undefined;
+					if (msg?.role === "assistant") {
+						agent._textBuf = "";
+						agent._thinkingBuf = "";
+						agent._msgTs = msg.timestamp ?? Date.now();
+					}
+					break;
+				}
+				case "message_update": {
+					const ame = (event as { assistantMessageEvent?: { type: string; delta?: string } }).assistantMessageEvent;
+					if (!ame) break;
+					switch (ame.type) {
+						case "text_delta": agent._textBuf += ame.delta ?? ""; break;
+						case "thinking_start": agent._thinkingBuf = ""; break;
+						case "thinking_delta": agent._thinkingBuf += ame.delta ?? ""; break;
+						case "thinking_end":
+							if (agent._thinkingBuf) {
+								pushEvent(squad, { type: "thinking", from: name, at: new Date(agent._msgTs).toISOString(), thinking: agent._thinkingBuf });
+								agent._thinkingBuf = "";
+							}
+							break;
+						default: break;
+					}
+					break;
+				}
+				case "message_end": {
+					const msg = event.message as { role?: string } | undefined;
+					if (msg?.role === "assistant") {
+						if (agent._thinkingBuf) {
+							pushEvent(squad, { type: "thinking", from: name, at: new Date(agent._msgTs).toISOString(), thinking: agent._thinkingBuf });
+							agent._thinkingBuf = "";
+						}
+						if (agent._textBuf) {
+							pushEvent(squad, { type: "message", from: name, at: new Date(agent._msgTs).toISOString(), text: agent._textBuf });
+							agent._textBuf = "";
+						}
+					}
+					break;
+				}
+				case "tool_execution_start":
+					pushEvent(squad, { type: "tool_start", from: name, at: now, toolName: String(event.toolName), args: event.args });
+					break;
+				case "tool_execution_end": {
+					const res = event.result;
+					let resultText = "";
+					if (res && typeof res === "object" && "content" in res && Array.isArray((res as { content?: unknown }).content)) {
+						for (const block of (res as { content: Array<{ type?: string; text?: string }> }).content) {
+							if (block.type === "text" && block.text) resultText += block.text;
+						}
+					} else if (typeof res === "string") {
+						resultText = res;
+					} else if (res !== undefined && res !== null) {
+						resultText = JSON.stringify(res);
+					}
+					pushEvent(squad, { type: "tool_end", from: name, at: now, toolName: String(event.toolName), result: resultText, isError: Boolean(event.isError) });
+					break;
+				}
+				case "auto_retry_start":
+					pushEvent(squad, { type: "retry_start", from: name, at: now, attempt: Number(event.attempt), maxAttempts: Number(event.maxAttempts), delayMs: Number(event.delayMs), errorMessage: String(event.errorMessage) });
+					break;
+				case "auto_retry_end":
+					pushEvent(squad, { type: "retry_end", from: name, at: now, success: Boolean(event.success), attempt: Number(event.attempt), ...(event.finalError ? { finalError: String(event.finalError) } : {}) });
+					break;
+				case "agent_start":
+					pushEvent(squad, { type: "agent_start", from: name, at: now });
+					break;
+				case "agent_end":
+					pushEvent(squad, { type: "agent_end", from: name, at: now });
+					break;
+				default: break;
+			}
+
+			// ── Agent status bookkeeping ──────────────────────────────────────────
 			switch (type) {
 				case "agent_start":
 					agent.isStreaming = true;
@@ -256,6 +367,7 @@ export function getSquadStatus(squad: Squad): object {
 	for (const [name, agent] of squad.agents) {
 		agentStatuses[name] = { status: agent.status };
 	}
+	const lastEvent = squad.events.length > 0 ? squad.events[squad.events.length - 1] : undefined;
 	return {
 		squadId: squad.id,
 		status: squad.status,
@@ -263,7 +375,20 @@ export function getSquadStatus(squad: Squad): object {
 			? { failedAgent: squad.failedAgent, reason: squad.failedReason }
 			: {}),
 		agents: agentStatuses,
+		...(lastEvent
+			? {
+					lastEventId: lastEvent.id,
+					lastEventAt: lastEvent.at,
+					lastEventType: lastEvent.type,
+					lastEventFrom: lastEvent.from,
+				}
+			: {}),
 	};
+}
+
+export function getSquadEvents(squad: Squad, since?: number): StoredEvent[] {
+	if (since === undefined) return squad.events;
+	return squad.events.filter((e) => e.id > since);
 }
 
 export function addSseClient(squad: Squad, reply: FastifyReply): void {
