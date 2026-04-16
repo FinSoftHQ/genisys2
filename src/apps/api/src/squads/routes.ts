@@ -4,6 +4,7 @@ import {
   createSquadFromMarkdown,
   getSquad,
   getSquadStatus,
+  getSquadEvents,
   addSseClient,
   removeSseClient,
   resumeSquad,
@@ -47,6 +48,26 @@ export async function squadRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: "Squad not found" });
     }
     return reply.status(200).send(getSquadStatus(squad));
+  });
+
+  instance.get("/:squadId/events", async (request, reply) => {
+    const { squadId } = request.params as { squadId: string };
+    const squad = getSquad(squadId);
+    if (!squad) {
+      return reply.status(404).send({ error: "Squad not found" });
+    }
+
+    const { since } = request.query as { since?: string };
+    let sinceId: number | undefined;
+    if (since !== undefined) {
+      sinceId = parseInt(since, 10);
+      if (isNaN(sinceId)) {
+        return reply.status(400).send({ error: "Invalid 'since' parameter, must be an integer event id" });
+      }
+    }
+
+    const events = getSquadEvents(squad, sinceId);
+    return reply.status(200).send({ squadId, total: squad.events.length, events });
   });
 
   instance.get("/:squadId/stream", async (request, reply) => {

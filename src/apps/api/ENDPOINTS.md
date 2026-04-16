@@ -40,7 +40,7 @@ When you're ready, please say something, so that we know you're ready!
 ```
 
 2) Get squad status
-- Purpose: Get a compact status snapshot for a squad and per-agent status.
+- Purpose: Get a compact status snapshot for a squad and per-agent status, plus a pointer to the most recent stored event.
 - Request (HTTP):
   GET /api/v1/squads/:squadId/status
   Headers: (none required)
@@ -51,13 +51,55 @@ When you're ready, please say something, so that we know you're ready!
     squadId: string,
     status: "initialized" | "running" | "suspended" | "error" | "completed",
     agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
+    // present once at least one event has been stored:
+    lastEventId?: number,       // monotonic integer id, use as ?since= cursor
+    lastEventAt?: string,       // ISO 8601 timestamp
+    lastEventType?: string,     // e.g. "message", "tool_start", "agent_end"
+    lastEventFrom?: string,     // agent name that emitted the event
     // optional if failure:
     failedAgent?: string,
     reason?: string
   }
 - Common error: 404 if squad not found
 
-3) Subscribe to SSE stream
+3) Get stored events
+- Purpose: Retrieve all coalesced events buffered for a squad (up to 2500 most recent). These are the same events shown in the server console — full assembled messages, tool calls, retries, and lifecycle events. Per-token streaming deltas are NOT included.
+- Request (HTTP):
+  GET /api/v1/squads/:squadId/events
+  GET /api/v1/squads/:squadId/events?since=<eventId>
+  Headers: (none required)
+  Body: none
+
+- Query params:
+  since (optional): integer event id — return only events with id > since. Use lastEventId from /status as the cursor for efficient incremental polling.
+
+- Success: 200 OK
+  Body: {
+    squadId: string,
+    total: number,      // total events currently in buffer (before since filter)
+    events: Array<{
+      id: number,       // monotonic, 1-based per squad
+      from: string,     // agent name
+      at: string,       // ISO 8601 timestamp
+      type: "thinking" | "message" | "tool_start" | "tool_end"
+           | "retry_start" | "retry_end" | "agent_start" | "agent_end" | "squad_error",
+      // type-specific fields:
+      // thinking:    thinking: string
+      // message:     text: string
+      // tool_start:  toolName: string, args: unknown
+      // tool_end:    toolName: string, result: string, isError: boolean
+      // retry_start: attempt: number, maxAttempts: number, delayMs: number, errorMessage: string
+      // retry_end:   success: boolean, attempt: number, finalError?: string
+      // squad_error: reason: string
+    }>
+  }
+- Common errors: 400 for invalid since, 404 if squad not found
+
+- Notes:
+  - Buffer cap is 2500 events. Oldest events are dropped once the cap is reached.
+  - Poll pattern: call /status to get lastEventId, then call /events?since=<lastEventId> for incremental updates.
+
+4) Subscribe to SSE stream
 - Purpose: Receive real-time agent events and squad lifecycle events via Server-Sent Events.
 - Request (HTTP):
   GET /api/v1/squads/:squadId/stream
@@ -71,7 +113,7 @@ When you're ready, please say something, so that we know you're ready!
   The server sends SSE events (event: message) where `data` is a JSON object containing agent events. Manager broadcasts include a `from` property.
 - Common error: 404 if squad not found
 
-4) Resume squad (after error)
+5) Resume squad (after error)
 - Purpose: Resume a squad that entered an error state (retry failed operations).
 - Request (HTTP):
   POST /api/v1/squads/:squadId/resume
@@ -84,7 +126,7 @@ When you're ready, please say something, so that we know you're ready!
   Body: { squadId: string, status: string }
 - Common errors: 400 for invalid body, 404 if squad not found
 
-5) Send instructions / follow-ups to agent(s)
+6) Send instructions / follow-ups to agent(s)
 - Purpose: Queue follow-up messages to one or more agents in a squad. Messages are sent as `prompt` (if agent idle) or `follow_up` (if streaming).
 - Request (HTTP):
   POST /api/v1/squads/:squadId/instructions
@@ -100,7 +142,7 @@ When you're ready, please say something, so that we know you're ready!
   Body: { squadId: string, queuedItems: number }
 - Common errors: 400 for invalid body or unknown agent, 404 if squad not found
 
-6) Complete (destroy) squad
+7) Complete (destroy) squad
 - Purpose: Mark a squad completed and clean up processes and SSE clients.
 - Request (HTTP):
   DELETE /api/v1/squads/:squadId
