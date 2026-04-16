@@ -264,6 +264,10 @@ importers:
         version: 5.9.3
 
   tools/piteam:
+    dependencies:
+      '@repo/shared':
+        specifier: workspace:*
+        version: link:../../src/libs/shared
     devDependencies:
       '@repo/typescript-config':
         specifier: workspace:*
