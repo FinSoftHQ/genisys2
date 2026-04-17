@@ -266,11 +266,16 @@ describe('agent-rooms manager', () => {
 	});
 
 	describe('determineRecipients', () => {
-		function makeRoom(routingStrategy: 'broadcast' | 'explicit', agents: string[], routes?: Record<string, string[]>, facilitator?: string): Room {
+		function makeRoom(
+			routingStrategy: 'broadcast' | 'explicit',
+			agents: Array<{ name: string; role: string }>,
+			routes?: Record<string, string[]>,
+			facilitator?: string,
+		): Room {
 			return {
 				id: 'test',
 				status: 'running',
-				agents: new Map(agents.map((name) => [name, { name } as any])),
+				agents: new Map(agents.map((a) => [a.name, { name: a.name, role: a.role } as any])),
 				sseClients: new Set(),
 				createdAt: Date.now(),
 				lastActivityAt: Date.now(),
@@ -285,55 +290,143 @@ describe('agent-rooms manager', () => {
 		}
 
 		it('broadcast mode sends to all other agents', () => {
-			const room = makeRoom('broadcast', ['alpha', 'beta', 'gamma']);
+			const room = makeRoom('broadcast', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'gamma', role: 'Dev' },
+			]);
 			expect(determineRecipients(room, 'alpha', 'hello')).toEqual(['beta', 'gamma']);
 		});
 
 		it('explicit mode with static routes only', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta', 'gamma'], { alpha: ['beta'] });
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'gamma', role: 'Dev' },
+			], { alpha: ['beta'] });
 			expect(determineRecipients(room, 'alpha', 'hello')).toEqual(['beta']);
 		});
 
 		it('explicit mode with @attn: tags only', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta', 'gamma']);
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'gamma', role: 'Dev' },
+			]);
 			expect(determineRecipients(room, 'alpha', 'hey @attn:gamma check this')).toEqual(['gamma']);
 		});
 
 		it('explicit mode combines static routes and @attn: tags', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta', 'gamma'], { alpha: ['beta'] });
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'gamma', role: 'Dev' },
+			], { alpha: ['beta'] });
 			expect(determineRecipients(room, 'alpha', 'hey @attn:gamma check this')).toEqual(
 				expect.arrayContaining(['beta', 'gamma']),
 			);
 		});
 
 		it('explicit mode deduplicates recipients', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta', 'gamma'], { alpha: ['beta'] });
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'gamma', role: 'Dev' },
+			], { alpha: ['beta'] });
 			expect(determineRecipients(room, 'alpha', 'hey @attn:beta')).toEqual(['beta']);
 		});
 
 		it('explicit mode excludes self from static routes', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta'], { alpha: ['alpha', 'beta'] });
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+			], { alpha: ['alpha', 'beta'] });
 			expect(determineRecipients(room, 'alpha', 'hello')).toEqual(['beta']);
 		});
 
 		it('explicit mode excludes self from @attn: tags', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta']);
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+			]);
 			expect(determineRecipients(room, 'alpha', '@attn:alpha')).toEqual([]);
 		});
 
 		it('explicit mode ignores non-existent agents in @attn:', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta']);
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+			]);
 			expect(determineRecipients(room, 'alpha', '@attn:delta hello')).toEqual([]);
 		});
 
 		it('explicit mode ignores non-existent agents in routes', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta'], { alpha: ['delta'] });
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+			], { alpha: ['delta'] });
 			expect(determineRecipients(room, 'alpha', 'hello')).toEqual([]);
 		});
 
 		it('explicit mode returns empty array when sender has no routes and no mentions', () => {
-			const room = makeRoom('explicit', ['alpha', 'beta'], { beta: ['alpha'] });
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+			], { beta: ['alpha'] });
 			expect(determineRecipients(room, 'alpha', 'hello')).toEqual([]);
+		});
+
+		it('explicit mode resolves @attn: by role', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'gamma', role: 'Dev' },
+			]);
+			expect(determineRecipients(room, 'alpha', 'hey @attn:Dev')).toEqual(
+				expect.arrayContaining(['beta', 'gamma']),
+			);
+		});
+
+		it('explicit mode resolves @attn: by role for multiple matching agents', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'gamma', role: 'Dev' },
+				{ name: 'delta', role: 'Dev' },
+			]);
+			expect(determineRecipients(room, 'alpha', '@attn:Dev')).toEqual(
+				expect.arrayContaining(['beta', 'gamma', 'delta']),
+			);
+		});
+
+		it('explicit mode deduplicates when name and role match the same agent', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'gamma', role: 'Dev' },
+			]);
+			// @attn:beta matches by name, @attn:Dev matches by role (includes beta and gamma)
+			expect(determineRecipients(room, 'alpha', '@attn:beta @attn:Dev')).toEqual(
+				expect.arrayContaining(['beta', 'gamma']),
+			);
+		});
+
+		it('explicit mode excludes sender when mentioning own role', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Lead' },
+				{ name: 'gamma', role: 'Dev' },
+			]);
+			// alpha mentions Lead role; alpha should be excluded, beta should receive
+			expect(determineRecipients(room, 'alpha', '@attn:Lead')).toEqual(['beta']);
+		});
+
+		it('explicit mode ignores non-existent roles in @attn:', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+			]);
+			expect(determineRecipients(room, 'alpha', '@attn:QA hello')).toEqual([]);
 		});
 	});
 

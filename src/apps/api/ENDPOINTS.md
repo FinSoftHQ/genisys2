@@ -185,7 +185,7 @@ Notes
   - If the front matter contains a `routes:` block, the room operates in **Explicit Mode** (zero-trust routing).
   - If the `routes:` block is omitted, the room operates in **Broadcast Mode** (default): every assistant message is forwarded to all other agents.
 - In **Explicit Mode**, when an agent sends a message the system resolves recipients by:
-  1. Scanning the message text for inline `@attn:<agent_name>` tags (dynamic targeting).
+  1. Scanning the message text for inline `@attn:<identifier>` tags (dynamic targeting). An identifier is resolved against **both agent names and roles** — if it matches a name, that agent is targeted; if it matches a role, all agents with that role are targeted.
   2. Looking up the sender's statically configured recipients in the `routes:` block.
   3. Merging both pools, deduplicating them, and excluding the sender.
   4. If no valid recipients remain, the message is forwarded to the designated `facilitator:` agent (if configured) with a `[SYSTEM_ROUTING_FAILURE]` wrapper. If no facilitator is configured, the message is dropped with a system warning. If the sender *is* the facilitator, the message is dropped with a critical error to prevent infinite loops.
@@ -345,4 +345,4 @@ Event types (overview)
 Key behavioral difference from squads
 - When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
 - **Broadcast Mode** (no `routes:` block): messages are broadcast to all other agents.
-- **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<agent>` inline mentions or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists.
+- **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists.

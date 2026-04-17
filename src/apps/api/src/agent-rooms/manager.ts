@@ -128,9 +128,16 @@ export function determineRecipients(room: Room, fromAgent: string, text: string)
 	const mentionRegex = /@attn:(\w+)/g;
 	let match: RegExpExecArray | null;
 	while ((match = mentionRegex.exec(text)) !== null) {
-		const name = match[1];
-		if (room.agents.has(name)) {
-			pool.add(name);
+		const identifier = match[1];
+		// Name match
+		if (room.agents.has(identifier)) {
+			pool.add(identifier);
+		}
+		// Role match — route to all agents with this role
+		for (const [name, agent] of room.agents) {
+			if (agent.role === identifier) {
+				pool.add(name);
+			}
 		}
 	}
 
