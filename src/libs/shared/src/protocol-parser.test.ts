@@ -109,6 +109,28 @@ describe('parseProtocol', () => {
 			},
 		);
 	});
+
+	it('parses facilitator field', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\n  bob: Tester\nfacilitator: alice\n---\n\nHello team!`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.team).toEqual({ alice: 'Developer', bob: 'Tester' });
+				expect(result.facilitator).toBe('alice');
+				expect(result.body).toBe('Hello team!');
+			},
+		);
+	});
+
+	it('leaves facilitator undefined when omitted', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\n---\n\nHello team!`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.facilitator).toBeUndefined();
+			},
+		);
+	});
 });
 
 describe('parseAgentPromptFile', () => {

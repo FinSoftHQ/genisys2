@@ -52,9 +52,9 @@ interface AgentState {
 	_readyTimeout?: ReturnType<typeof setTimeout>;
 }
 
-export type RoutingStrategy = "broadcast" | "mention" | "custom";
+export type RoutingStrategy = "broadcast" | "explicit";
 
-interface Room {
+export interface Room {
 	id: string;
 	status: RoomStatus;
 	agents: Map<string, AgentState>;
@@ -63,6 +63,7 @@ interface Room {
 	lastActivityAt: number;
 	protocolBody: string;
 	routes?: Record<string, string[]>;
+	facilitator?: string;
 	routingStrategy: RoutingStrategy;
 	failedAgent?: string;
 	failedReason?: string;
@@ -115,42 +116,83 @@ function sendToAgent(agent: AgentState, cmd: object): void {
 	agent.proc.stdin!.write(`${JSON.stringify(cmd)}\n`);
 }
 
-function determineRecipients(room: Room, fromAgent: string, text: string): string[] {
+export function determineRecipients(room: Room, fromAgent: string, text: string): string[] {
 	if (room.routingStrategy === "broadcast") {
 		return [...room.agents.keys()].filter((name) => name !== fromAgent);
 	}
-	if (room.routingStrategy === "mention") {
-		const mentionRegex = /@attn:(\w+)/g;
-		const mentioned: string[] = [];
-		let match: RegExpExecArray | null;
-		while ((match = mentionRegex.exec(text)) !== null) {
-			const name = match[1];
-			if (room.agents.has(name) && !mentioned.includes(name)) {
-				mentioned.push(name);
+
+	// Explicit mode: combine dynamic @attn: mentions with static routes
+	const pool = new Set<string>();
+
+	// Dynamic targeting (inline mentions)
+	const mentionRegex = /@attn:(\w+)/g;
+	let match: RegExpExecArray | null;
+	while ((match = mentionRegex.exec(text)) !== null) {
+		const name = match[1];
+		if (room.agents.has(name)) {
+			pool.add(name);
+		}
+	}
+
+	// Static targeting (configured routes)
+	if (room.routes && room.routes[fromAgent]) {
+		for (const name of room.routes[fromAgent]) {
+			if (room.agents.has(name)) {
+				pool.add(name);
 			}
 		}
-		return mentioned.length > 0
-			? mentioned
-			: [...room.agents.keys()].filter((name) => name !== fromAgent);
 	}
-	// custom / front-matter routes
-	if (room.routes && room.routes[fromAgent]) {
-		return room.routes[fromAgent].filter((name) => room.agents.has(name) && name !== fromAgent);
-	}
-	return [...room.agents.keys()].filter((name) => name !== fromAgent);
+
+	// Self-exclusion
+	pool.delete(fromAgent);
+
+	return Array.from(pool);
 }
 
-function routeMessageToAgents(room: Room, fromAgent: string, text: string): void {
+export function routeMessageToAgents(room: Room, fromAgent: string, text: string): void {
 	const recipients = determineRecipients(room, fromAgent, text);
-	const formattedMessage = `[${fromAgent}]: ${text}`;
-	for (const recipientName of recipients) {
-		const agent = room.agents.get(recipientName);
-		if (!agent) continue;
-		sendToAgent(agent, {
-			type: agent.isStreaming ? "follow_up" : "prompt",
-			message: formattedMessage,
-		});
+
+	if (recipients.length > 0) {
+		const formattedMessage = `[${fromAgent}]: ${text}`;
+		for (const recipientName of recipients) {
+			const agent = room.agents.get(recipientName);
+			if (!agent) continue;
+			sendToAgent(agent, {
+				type: agent.isStreaming ? "follow_up" : "prompt",
+				message: formattedMessage,
+			});
+		}
+		return;
 	}
+
+	// Phase 3: Fallback Protocol
+	if (!room.facilitator) {
+		console.warn(
+			`[SYSTEM WARNING] Dropped message from ${fromAgent}: no recipients and no facilitator configured.`,
+		);
+		return;
+	}
+
+	if (room.facilitator === fromAgent) {
+		console.error(
+			`[CRITICAL ERROR] Facilitator ${fromAgent} sent a message with no recipients. This creates an infinite loop. Configure routes for the facilitator agent.`,
+		);
+		return;
+	}
+
+	const facilitatorAgent = room.agents.get(room.facilitator);
+	if (!facilitatorAgent) {
+		console.warn(
+			`[SYSTEM WARNING] Facilitator ${room.facilitator} not found in room. Dropping message from ${fromAgent}.`,
+		);
+		return;
+	}
+
+	const wrappedMessage = `[SYSTEM_ROUTING_FAILURE]\n**Original Sender:** ${fromAgent}\n**Status:** This message reached no one because no attention tags were used and no static routes exist.\n**Content:**\n> ---\n${text}`;
+	sendToAgent(facilitatorAgent, {
+		type: facilitatorAgent.isStreaming ? "follow_up" : "prompt",
+		message: wrappedMessage,
+	});
 }
 
 export async function createRoomFromMarkdown(markdown: string): Promise<{ roomId: string }> {
@@ -240,7 +282,8 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 		lastActivityAt: Date.now(),
 		protocolBody: protocol.body,
 		routes: protocol.routes,
-		routingStrategy: protocol.routes ? "custom" : "broadcast",
+		facilitator: protocol.facilitator,
+		routingStrategy: protocol.routes ? "explicit" : "broadcast",
 		events: [],
 		eventSeq: 0,
 		promptDir,

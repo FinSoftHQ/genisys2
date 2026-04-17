@@ -181,7 +181,16 @@ Notes
 - The create endpoint requires `Content-Type: text/markdown` and a protocol with front matter containing a `team:` block.
 - Rooms auto-expire after 2 hours of inactivity.
 - The host must have the `pi` binary available (spawned as `pi --mode rpc --no-session`).
-- You can optionally declare a `routes:` block in the front matter to control which agents receive messages from which sender. When omitted, the default behavior is to broadcast each assistant message to all other agents.
+- **Routing behavior:**
+  - If the front matter contains a `routes:` block, the room operates in **Explicit Mode** (zero-trust routing).
+  - If the `routes:` block is omitted, the room operates in **Broadcast Mode** (default): every assistant message is forwarded to all other agents.
+- In **Explicit Mode**, when an agent sends a message the system resolves recipients by:
+  1. Scanning the message text for inline `@attn:<agent_name>` tags (dynamic targeting).
+  2. Looking up the sender's statically configured recipients in the `routes:` block.
+  3. Merging both pools, deduplicating them, and excluding the sender.
+  4. If no valid recipients remain, the message is forwarded to the designated `facilitator:` agent (if configured) with a `[SYSTEM_ROUTING_FAILURE]` wrapper. If no facilitator is configured, the message is dropped with a system warning. If the sender *is* the facilitator, the message is dropped with a critical error to prevent infinite loops.
+- You can optionally declare a `facilitator:` key in the front matter to designate a fallback agent for orphaned messages in Explicit Mode.
+- You can optionally declare a `routes:` block in the front matter to control which agents receive messages from which sender.
 - You can optionally declare a `tailor_shop:` block in the front matter to point to a directory containing agent-specific prompt files (`agents/<agent_name>.md`, falling back to `agents/<role>.md`) and an optional shared protocol (`working_protocol.md`). These files are passed as `--append-system-prompt` to each `pi` process. Agent files may include an optional YAML front matter with `model:` to override the model for that agent.
 - You can optionally declare an `instructions:` block in the front matter to send per-agent prompt messages immediately after the room is created. When omitted, no initial prompt is sent — callers must use `POST /api/v1/agent-rooms/:roomId/instructions` to trigger agents.
 
@@ -215,6 +224,7 @@ routes:
     - john
   john:
     - smith
+facilitator: smith
 ---
 
 Design and implement the v1 API.
@@ -223,7 +233,11 @@ Design and implement the v1 API.
 With this protocol:
 1. The body (`Design and implement the v1 API.`) is written to a temp file and passed as `--append-system-prompt` to both agents.
 2. `instructions:` are sent as JSONL `prompt` messages to `smith` and `john` immediately after spawn. Agents without an instruction entry remain idle.
-3. `tailor_shop` resolution:
+3. Because a `routes:` block is present, the room runs in **Explicit Mode**:
+   - `smith`'s messages are delivered to `john` (and any `@attn:<agent>` tags used inline).
+   - `john`'s messages are delivered to `smith`.
+   - If either agent sends a message with no valid recipients, it is forwarded to the `facilitator` (`smith`) wrapped in a `[SYSTEM_ROUTING_FAILURE]` alert.
+4. `tailor_shop` resolution:
    - The server looks for `./prompts/agents/smith.md` first; if missing, it falls back to `./prompts/agents/architect.md`.
    - For `john`, it looks for `./prompts/agents/john.md` first, then falls back to `./prompts/agents/developer.md`.
    - If an agent file contains YAML front matter with `model:`, that model is passed as `--model` to `pi` and only the body (after `---`) is appended as `--append-system-prompt`. If there is no front matter, the entire file is appended directly.
@@ -330,4 +344,5 @@ Event types (overview)
 
 Key behavioral difference from squads
 - When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
-- You can influence routing with the optional `routes:` front-matter block, or in the future by including `@attn:<agent>` in message text.
+- **Broadcast Mode** (no `routes:` block): messages are broadcast to all other agents.
+- **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<agent>` inline mentions or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists.
