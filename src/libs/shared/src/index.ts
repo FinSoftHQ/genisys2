@@ -13,4 +13,4 @@ export const UserSchema = z
 
 export type User = z.infer<typeof UserSchema>;
 
-export { parseProtocol, type Protocol } from './protocol-parser.js';
+export { parseProtocol, parseAgentPromptFile, type Protocol } from './protocol-parser.js';

@@ -4,6 +4,8 @@ export interface Protocol {
 	team: Record<string, string>;
 	body: string;
 	routes?: Record<string, string[]>;
+	tailorShop?: string;
+	instructions?: Record<string, string>;
 }
 
 export function parseProtocol(filePath: string): Protocol {
@@ -23,9 +25,12 @@ export function parseProtocol(filePath: string): Protocol {
 
 	const team: Record<string, string> = {};
 	const routes: Record<string, string[]> = {};
+	let tailorShop: string | undefined;
+	const instructions: Record<string, string> = {};
 	const lines = frontMatter.split("\n");
 	let inTeam = false;
 	let inRoutes = false;
+	let inInstructions = false;
 	let currentRouteAgent: string | null = null;
 
 	for (const rawLine of lines) {
@@ -34,12 +39,29 @@ export function parseProtocol(filePath: string): Protocol {
 		if (line.startsWith("team:")) {
 			inTeam = true;
 			inRoutes = false;
+			inInstructions = false;
 			currentRouteAgent = null;
 			continue;
 		}
 		if (line.startsWith("routes:")) {
 			inRoutes = true;
 			inTeam = false;
+			inInstructions = false;
+			currentRouteAgent = null;
+			continue;
+		}
+		if (line.startsWith("tailor_shop:")) {
+			inTeam = false;
+			inRoutes = false;
+			inInstructions = false;
+			currentRouteAgent = null;
+			tailorShop = line.slice("tailor_shop:".length).trim();
+			continue;
+		}
+		if (line.startsWith("instructions:")) {
+			inTeam = false;
+			inRoutes = false;
+			inInstructions = true;
 			currentRouteAgent = null;
 			continue;
 		}
@@ -80,11 +102,51 @@ export function parseProtocol(filePath: string): Protocol {
 				currentRouteAgent = null;
 			}
 		}
+
+		if (inInstructions) {
+			if (line.startsWith("  ") || line.startsWith("\t")) {
+				const trimmed = line.trim();
+				const colonIdx = trimmed.indexOf(":");
+				if (colonIdx !== -1) {
+					const name = trimmed.slice(0, colonIdx).trim();
+					const value = trimmed.slice(colonIdx + 1).trim();
+					instructions[name] = value;
+				}
+			} else if (line.trim() !== "") {
+				inInstructions = false;
+			}
+		}
 	}
 
 	if (Object.keys(team).length === 0) {
 		throw new Error("No team members found in front matter");
 	}
 
-	return { team, body, ...(Object.keys(routes).length > 0 ? { routes } : {}) };
+	return {
+		team,
+		body,
+		...(Object.keys(routes).length > 0 ? { routes } : {}),
+		...(tailorShop ? { tailorShop } : {}),
+		...(Object.keys(instructions).length > 0 ? { instructions } : {}),
+	};
+}
+
+export function parseAgentPromptFile(content: string): { model?: string; body: string } {
+	if (!content.startsWith("---")) {
+		return { body: content };
+	}
+
+	const endIdx = content.indexOf("\n---", 3);
+	if (endIdx === -1) {
+		return { body: content };
+	}
+
+	const frontMatter = content.slice(3, endIdx).trim();
+	const body = content.slice(endIdx + 4).trimStart();
+
+	const modelMatch = frontMatter.match(/^model:\s*(.+)$/m);
+	return {
+		model: modelMatch ? modelMatch[1].trim() : undefined,
+		body,
+	};
 }

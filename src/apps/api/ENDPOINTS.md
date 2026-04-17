@@ -173,7 +173,7 @@ Integration tips
 
 Purpose
 
-This API manages "agent rooms" — chat rooms for AI agents where messages from one agent are automatically routed to other agents. Like squads, a room is created from a protocol Markdown document (YAML front matter with a `team:` block plus a body). The server spawns one `pi` process per team member and injects the protocol body as the initial prompt.
+This API manages "agent rooms" — chat rooms for AI agents where messages from one agent are automatically routed to other agents. Like squads, a room is created from a protocol Markdown document (YAML front matter with a `team:` block plus a body). The server spawns one `pi` process per team member, passes the protocol body as `--append-system-prompt`, and optionally sends per-agent instructions via JSONL RPC.
 
 The key behavioral difference from squads is **inter-agent message routing**: when an agent produces an assistant message, that message is forwarded to the other agents in the room so they can react and continue the conversation.
 
@@ -182,6 +182,8 @@ Notes
 - Rooms auto-expire after 2 hours of inactivity.
 - The host must have the `pi` binary available (spawned as `pi --mode rpc --no-session`).
 - You can optionally declare a `routes:` block in the front matter to control which agents receive messages from which sender. When omitted, the default behavior is to broadcast each assistant message to all other agents.
+- You can optionally declare a `tailor_shop:` block in the front matter to point to a directory containing agent-specific prompt files (`agents/<agent_name>.md`, falling back to `agents/<role>.md`) and an optional shared protocol (`working_protocol.md`). These files are passed as `--append-system-prompt` to each `pi` process. Agent files may include an optional YAML front matter with `model:` to override the model for that agent.
+- You can optionally declare an `instructions:` block in the front matter to send per-agent prompt messages immediately after the room is created. When omitted, no initial prompt is sent — callers must use `POST /api/v1/agent-rooms/:roomId/instructions` to trigger agents.
 
 Endpoints (starter guide)
 
@@ -197,24 +199,35 @@ Endpoints (starter guide)
   Body: { roomId: string, status: "initialized" }
 - Common error: 415 if Content-Type does not include text/markdown
 
-- Example raw protocol with optional routing rules:
+- Example raw protocol with routing rules, tailor_shop, instructions, and agent files with front matter:
 
 ```md
 ---
 team:
-  architect: System Architect
-  developer: Senior Developer
+  smith: architect
+  john: developer
+tailor_shop: ./prompts
+instructions:
+  smith: Please start design using 'requirements.md'
+  john: Please implement the auth module
 routes:
-  architect:
-    - developer
-  developer:
-    - architect
+  smith:
+    - john
+  john:
+    - smith
 ---
 
-# Working Protocol
-
-Discuss the API design and then the developer should implement it.
+Design and implement the v1 API.
 ```
+
+With this protocol:
+1. The body (`Design and implement the v1 API.`) is written to a temp file and passed as `--append-system-prompt` to both agents.
+2. `instructions:` are sent as JSONL `prompt` messages to `smith` and `john` immediately after spawn. Agents without an instruction entry remain idle.
+3. `tailor_shop` resolution:
+   - The server looks for `./prompts/agents/smith.md` first; if missing, it falls back to `./prompts/agents/architect.md`.
+   - For `john`, it looks for `./prompts/agents/john.md` first, then falls back to `./prompts/agents/developer.md`.
+   - If an agent file contains YAML front matter with `model:`, that model is passed as `--model` to `pi` and only the body (after `---`) is appended as `--append-system-prompt`. If there is no front matter, the entire file is appended directly.
+   - `./prompts/working_protocol.md` is appended silently if it exists.
 
 2) Get room status
 - Purpose: Get a compact status snapshot for a room and per-agent status, plus a pointer to the most recent stored event.

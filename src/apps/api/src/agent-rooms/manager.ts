@@ -1,9 +1,9 @@
 import { spawn, ChildProcess } from "child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { FastifyReply } from "fastify";
-import { parseProtocol, type Protocol } from "@repo/shared";
+import { parseProtocol, type Protocol, parseAgentPromptFile } from "@repo/shared";
 import { attachJsonlReader } from "../squads/jsonl.js";
 import { SquadLogger, loggingEnabled } from "../squads/logger.js";
 
@@ -64,6 +64,7 @@ interface Room {
 	expireTimeout?: ReturnType<typeof setTimeout>;
 	events: StoredEvent[];
 	eventSeq: number;
+	promptDir: string;
 }
 
 const rooms = new Map<string, Room>();
@@ -163,8 +164,68 @@ export function createRoomFromMarkdown(markdown: string): { roomId: string } {
 	}
 }
 
+export function buildPiArgs(
+	agentName: string,
+	role: string,
+	tailorShop: string | undefined,
+	bodyPromptPath: string,
+	roomPromptDir: string,
+): string[] {
+	const args = ["--mode", "rpc", "--no-session"];
+
+	// 1. Protocol body as system prompt
+	args.push("--append-system-prompt", bodyPromptPath);
+
+	if (tailorShop) {
+		// 2. Agent-specific prompt file: name first, then role fallback
+		const namePath = join(tailorShop, "agents", `${agentName}.md`);
+		const rolePath = join(tailorShop, "agents", `${role}.md`);
+
+		let resolvedPath: string | undefined;
+		let resolvedContent: string | undefined;
+
+		if (existsSync(namePath)) {
+			resolvedPath = namePath;
+			resolvedContent = readFileSync(namePath, "utf-8");
+		} else if (existsSync(rolePath)) {
+			resolvedPath = rolePath;
+			resolvedContent = readFileSync(rolePath, "utf-8");
+		}
+
+		if (resolvedPath && resolvedContent) {
+			const parsed = parseAgentPromptFile(resolvedContent);
+			if (parsed.model) {
+				args.push("--model", parsed.model);
+			}
+			if (resolvedContent.startsWith("---") && parsed.body) {
+				// Write stripped body to a temp file so pi doesn't ingest raw YAML
+				const promptFile = join(roomPromptDir, `${agentName}.prompt`);
+				writeFileSync(promptFile, parsed.body, "utf-8");
+				args.push("--append-system-prompt", promptFile);
+			} else {
+				// No front matter (or empty body) — pass original file path directly
+				args.push("--append-system-prompt", resolvedPath);
+			}
+		} else {
+			console.warn("[agent-rooms] tailor_shop agent prompt not found:", namePath);
+		}
+
+		// 3. Optional shared working protocol
+		const workingPath = join(tailorShop, "working_protocol.md");
+		if (existsSync(workingPath)) {
+			args.push("--append-system-prompt", workingPath);
+		}
+	}
+
+	return args;
+}
+
 export function createRoom(protocol: Protocol): { roomId: string } {
 	const id = generateId();
+	const promptDir = mkdtempSync(join(tmpdir(), `piroom-${id}-`));
+	const bodyPromptPath = join(promptDir, "body.prompt");
+	writeFileSync(bodyPromptPath, protocol.body, "utf-8");
+
 	const room: Room = {
 		id,
 		status: "initialized",
@@ -177,10 +238,12 @@ export function createRoom(protocol: Protocol): { roomId: string } {
 		routingStrategy: protocol.routes ? "custom" : "broadcast",
 		events: [],
 		eventSeq: 0,
+		promptDir,
 	};
 
 	for (const [name, role] of Object.entries(protocol.team)) {
-		const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
+		const args = buildPiArgs(name, role, protocol.tailorShop, bodyPromptPath, promptDir);
+		const proc = spawn("pi", args, {
 			stdio: ["pipe", "pipe", "inherit"],
 		});
 
@@ -399,9 +462,18 @@ export function createRoom(protocol: Protocol): { roomId: string } {
 		});
 
 		room.agents.set(name, agent);
+	}
 
-		// Inject protocol body as first prompt
-		sendToAgent(agent, { type: "prompt", message: protocol.body });
+	// Dispatch instructions after all agents are spawned
+	if (protocol.instructions) {
+		for (const [agentName, message] of Object.entries(protocol.instructions)) {
+			const agent = room.agents.get(agentName);
+			if (agent) {
+				sendToAgent(agent, { type: "prompt", message });
+			} else {
+				console.warn("[agent-rooms] instruction target not found:", agentName);
+			}
+		}
 	}
 
 	resetExpiry(room);
@@ -504,6 +576,12 @@ export function destroyRoom(id: string, reason = "manual"): void {
 	room.sseClients.clear();
 	room.agents.clear();
 	rooms.delete(id);
+
+	try {
+		rmSync(room.promptDir, { recursive: true, force: true });
+	} catch {
+		// ignore cleanup failure
+	}
 }
 
 export function completeRoom(id: string): void {
