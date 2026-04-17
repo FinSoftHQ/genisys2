@@ -9,6 +9,7 @@ import {
 	getRoomEvents,
 	sendInstructions,
 	completeRoom,
+	destroyRoom,
 	buildPiArgs,
 } from './manager.js';
 
@@ -23,7 +24,7 @@ describe('agent-rooms manager', () => {
 
 	afterEach(() => {
 		try {
-			completeRoom(roomId);
+			destroyRoom(roomId);
 		} catch {
 			// ignore cleanup failures
 		}
@@ -69,8 +70,22 @@ describe('agent-rooms manager', () => {
 		);
 	});
 
-	it('completes and removes the room', () => {
+	it('rejects instructions for a completed room', async () => {
+		const room = getRoom(roomId)!;
 		completeRoom(roomId);
+		await expect(sendInstructions(room, 'alpha', ['Hello'])).rejects.toThrow(
+			'Room is completed',
+		);
+		destroyRoom(roomId);
+	});
+
+	it('completes and preserves room until hard-deleted', () => {
+		completeRoom(roomId);
+		const room = getRoom(roomId);
+		expect(room).toBeDefined();
+		expect(room!.status).toBe('completed');
+		expect(getRoomEvents(room!).length).toBeGreaterThanOrEqual(0);
+		destroyRoom(roomId);
 		expect(getRoom(roomId)).toBeUndefined();
 	});
 
@@ -80,6 +95,8 @@ describe('agent-rooms manager', () => {
 		expect(existsSync(promptDir)).toBe(true);
 		completeRoom(roomId);
 		expect(existsSync(promptDir)).toBe(false);
+		expect(getRoom(roomId)).toBeDefined();
+		destroyRoom(roomId);
 	});
 
 	describe('buildPiArgs', () => {
@@ -227,7 +244,7 @@ describe('agent-rooms manager', () => {
 			const room = getRoom(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(room.agents.size).toBe(2);
-			completeRoom(result.roomId);
+			destroyRoom(result.roomId);
 		});
 
 		it('warns when instruction target is unknown', async () => {
@@ -241,7 +258,7 @@ describe('agent-rooms manager', () => {
 				'gamma',
 			);
 			warnSpy.mockRestore();
-			completeRoom(result.roomId);
+			destroyRoom(result.roomId);
 		});
 	});
 });

@@ -8,7 +8,7 @@ import {
 	addSseClient,
 	removeSseClient,
 	sendInstructions,
-	completeRoom,
+	destroyRoom,
 } from "./manager.js";
 
 const InstructionsBodySchema = z.object({
@@ -92,6 +92,10 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			return reply.status(404).send({ error: "Room not found" });
 		}
 
+		if (room.status === "completed") {
+			return reply.status(409).send({ error: "Room is completed" });
+		}
+
 		const body = InstructionsBodySchema.safeParse(request.body);
 		if (!body.success) {
 			return reply.status(400).send({ error: "Invalid body", issues: body.error.issues });
@@ -116,7 +120,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		if (!room) {
 			return reply.status(404).send({ error: "Room not found" });
 		}
-		completeRoom(roomId);
-		return reply.status(200).send({ roomId, status: "completed" });
+		destroyRoom(roomId);
+		return reply.status(200).send({ roomId, status: "deleted" });
 	});
 }

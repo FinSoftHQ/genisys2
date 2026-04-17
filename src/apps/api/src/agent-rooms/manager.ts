@@ -46,6 +46,7 @@ interface AgentState {
 	_thinkingBuf: string;
 	_msgTs: number;
 	ready: boolean;
+	taskCompleted: boolean;
 	_readyResolve?: () => void;
 	_readyReject?: (err: Error) => void;
 	_readyTimeout?: ReturnType<typeof setTimeout>;
@@ -264,6 +265,7 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 			_thinkingBuf: "",
 			_msgTs: 0,
 			ready: false,
+			taskCompleted: false,
 		};
 
 		proc.on("exit", (code) => {
@@ -408,6 +410,13 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 							pushEvent(room, { type: "message", from: name, at: new Date(agent._msgTs).toISOString(), text: agent._textBuf });
 							messageText = agent._textBuf;
 							agent._textBuf = "";
+						}
+						if (messageText.includes("[@TASK: VIPER-RTB]")) {
+							agent.taskCompleted = true;
+							const allDone = Array.from(room.agents.values()).every((a) => a.taskCompleted);
+							if (allDone) {
+								completeRoom(room.id);
+							}
 						}
 					}
 					break;
@@ -568,6 +577,10 @@ export async function sendInstructions(
 	targetAgent: string,
 	followUp: string[],
 ): Promise<{ queuedItems: number }> {
+	if (room.status === "completed") {
+		throw new Error("Room is completed");
+	}
+
 	await waitForAllAgentsReady(room);
 
 	const agent = room.agents.get(targetAgent);
@@ -589,6 +602,12 @@ export async function sendInstructions(
 export function destroyRoom(id: string, reason = "manual"): void {
 	const room = rooms.get(id);
 	if (!room) return;
+
+	// Already soft-closed — just hard-delete from the registry
+	if (room.status === "completed" || room.status === "error") {
+		rooms.delete(id);
+		return;
+	}
 
 	if (room.expireTimeout) clearTimeout(room.expireTimeout);
 
@@ -627,6 +646,36 @@ export function destroyRoom(id: string, reason = "manual"): void {
 export function completeRoom(id: string): void {
 	const room = rooms.get(id);
 	if (!room) return;
+	if (room.status === "completed" || room.status === "error") return;
+
+	for (const agent of room.agents.values()) {
+		try {
+			sendToAgent(agent, { type: "abort" });
+			agent.proc.stdin!.end();
+			agent.proc.kill("SIGTERM");
+		} catch {
+			// ignore
+		}
+	}
+
+	for (const client of room.sseClients) {
+		try {
+			client.raw.write(
+				`event: message\ndata: ${JSON.stringify({ type: "room_closed", reason: "completed" })}\n\n`,
+			);
+			client.raw.end();
+		} catch {
+			// ignore
+		}
+	}
+
+	room.sseClients.clear();
+	room.agents.clear();
 	room.status = "completed";
-	destroyRoom(id, "completed");
+
+	try {
+		rmSync(room.promptDir, { recursive: true, force: true });
+	} catch {
+		// ignore cleanup failure
+	}
 }
