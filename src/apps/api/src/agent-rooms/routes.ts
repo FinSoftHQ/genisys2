@@ -32,7 +32,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		}
 
 		const markdown = request.body as string;
-		const result = createRoomFromMarkdown(markdown);
+		const result = await createRoomFromMarkdown(markdown);
 		return reply.status(201).send({ roomId: result.roomId, status: "initialized" });
 	});
 
@@ -100,7 +100,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		let totalQueued = 0;
 		for (const agentName of body.data.targetAgents) {
 			try {
-				const result = sendInstructions(room, agentName, body.data.followUp);
+				const result = await sendInstructions(room, agentName, body.data.followUp);
 				totalQueued += result.queuedItems;
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);

@@ -15,9 +15,9 @@ import {
 describe('agent-rooms manager', () => {
 	let roomId: string;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		const markdown = `---\nteam:\n  alpha: Lead\n  beta: Dev\n---\n\nSay hello briefly.\n`;
-		const result = createRoomFromMarkdown(markdown);
+		const result = await createRoomFromMarkdown(markdown);
 		roomId = result.roomId;
 	});
 
@@ -56,15 +56,15 @@ describe('agent-rooms manager', () => {
 		expect(sinceEvents).toEqual([]);
 	});
 
-	it('sends instructions to a target agent', () => {
+	it('sends instructions to a target agent', async () => {
 		const room = getRoom(roomId)!;
-		const result = sendInstructions(room, 'alpha', ['Please summarize.']);
+		const result = await sendInstructions(room, 'alpha', ['Please summarize.']);
 		expect(result.queuedItems).toBe(1);
 	});
 
-	it('throws for unknown agent in instructions', () => {
+	it('throws for unknown agent in instructions', async () => {
 		const room = getRoom(roomId)!;
-		expect(() => sendInstructions(room, 'gamma', ['Hello'])).toThrow(
+		await expect(sendInstructions(room, 'gamma', ['Hello'])).rejects.toThrow(
 			'Agent gamma not found in room',
 		);
 	});
@@ -221,19 +221,19 @@ describe('agent-rooms manager', () => {
 	});
 
 	describe('instructions front-matter', () => {
-		it('sends instructions to matching agents and leaves others idle', () => {
+		it('sends instructions to matching agents and leaves others idle', async () => {
 			const markdown = `---\nteam:\n  alpha: Lead\n  beta: Dev\ninstructions:\n  alpha: Please start\n---\n\nProtocol body.\n`;
-			const result = createRoomFromMarkdown(markdown);
+			const result = await createRoomFromMarkdown(markdown);
 			const room = getRoom(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(room.agents.size).toBe(2);
 			completeRoom(result.roomId);
 		});
 
-		it('warns when instruction target is unknown', () => {
+		it('warns when instruction target is unknown', async () => {
 			const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 			const markdown = `---\nteam:\n  alpha: Lead\ninstructions:\n  gamma: Hello\n---\n\nProtocol body.\n`;
-			const result = createRoomFromMarkdown(markdown);
+			const result = await createRoomFromMarkdown(markdown);
 			const room = getRoom(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(warnSpy).toHaveBeenCalledWith(

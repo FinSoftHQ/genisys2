@@ -45,6 +45,10 @@ interface AgentState {
 	_textBuf: string;
 	_thinkingBuf: string;
 	_msgTs: number;
+	ready: boolean;
+	_readyResolve?: () => void;
+	_readyReject?: (err: Error) => void;
+	_readyTimeout?: ReturnType<typeof setTimeout>;
 }
 
 export type RoutingStrategy = "broadcast" | "mention" | "custom";
@@ -148,13 +152,13 @@ function routeMessageToAgents(room: Room, fromAgent: string, text: string): void
 	}
 }
 
-export function createRoomFromMarkdown(markdown: string): { roomId: string } {
+export async function createRoomFromMarkdown(markdown: string): Promise<{ roomId: string }> {
 	const dir = mkdtempSync(join(tmpdir(), "piroom-"));
 	const filePath = join(dir, "protocol.md");
 	writeFileSync(filePath, markdown, "utf-8");
 	try {
 		const protocol = parseProtocol(filePath);
-		return createRoom(protocol);
+		return await createRoom(protocol);
 	} finally {
 		try {
 			rmSync(dir, { recursive: true, force: true });
@@ -220,7 +224,7 @@ export function buildPiArgs(
 	return args;
 }
 
-export function createRoom(protocol: Protocol): { roomId: string } {
+export async function createRoom(protocol: Protocol): Promise<{ roomId: string }> {
 	const id = generateId();
 	const promptDir = mkdtempSync(join(tmpdir(), `piroom-${id}-`));
 	const bodyPromptPath = join(promptDir, "body.prompt");
@@ -259,10 +263,15 @@ export function createRoom(protocol: Protocol): { roomId: string } {
 			_textBuf: "",
 			_thinkingBuf: "",
 			_msgTs: 0,
+			ready: false,
 		};
 
 		proc.on("exit", (code) => {
 			if (room.status === "completed") return;
+			if (!agent.ready) {
+				if (agent._readyTimeout) clearTimeout(agent._readyTimeout);
+				agent._readyReject?.(new Error(`Agent ${name} process exited before ready`));
+			}
 			if (code !== 0 && code !== null) {
 				agent.status = "error";
 				room.status = "error";
@@ -275,6 +284,10 @@ export function createRoom(protocol: Protocol): { roomId: string } {
 		});
 
 		proc.on("error", (err) => {
+			if (!agent.ready) {
+				if (agent._readyTimeout) clearTimeout(agent._readyTimeout);
+				agent._readyReject?.(new Error(`Agent ${name} process failed to start: ${err.message}`));
+			}
 			agent.status = "error";
 			room.status = "error";
 			room.failedAgent = name;
@@ -444,6 +457,11 @@ export function createRoom(protocol: Protocol): { roomId: string } {
 					agent.status = "idle";
 					break;
 				case "response":
+					if (event.command === "get_state" && event.success && !agent.ready) {
+						agent.ready = true;
+						if (agent._readyTimeout) clearTimeout(agent._readyTimeout);
+						agent._readyResolve?.();
+					}
 					if (!event.success) {
 						// non-fatal command error
 					}
@@ -461,10 +479,18 @@ export function createRoom(protocol: Protocol): { roomId: string } {
 			}
 		});
 
+		// Send readiness probe and set up promise
+		sendToAgent(agent, { type: "get_state" });
+		agent._readyTimeout = setTimeout(() => {
+			agent._readyReject?.(new Error(`Agent ${name} did not become ready in time`));
+		}, 30000);
+
 		room.agents.set(name, agent);
 	}
 
-	// Dispatch instructions after all agents are spawned
+	// Wait for all agents to be ready before dispatching instructions
+	await waitForAllAgentsReady(room);
+
 	if (protocol.instructions) {
 		for (const [agentName, message] of Object.entries(protocol.instructions)) {
 			const agent = room.agents.get(agentName);
@@ -479,6 +505,18 @@ export function createRoom(protocol: Protocol): { roomId: string } {
 	resetExpiry(room);
 	rooms.set(id, room);
 	return { roomId: id };
+}
+
+export async function waitForAllAgentsReady(room: Room): Promise<void> {
+	await Promise.all(
+		Array.from(room.agents.values()).map((agent) => {
+			if (agent.ready) return Promise.resolve();
+			return new Promise<void>((resolve, reject) => {
+				agent._readyResolve = resolve;
+				agent._readyReject = reject;
+			});
+		}),
+	);
 }
 
 export function getRoom(id: string): Room | undefined {
@@ -525,11 +563,13 @@ export function removeSseClient(room: Room, reply: FastifyReply): void {
 	room.sseClients.delete(reply);
 }
 
-export function sendInstructions(
+export async function sendInstructions(
 	room: Room,
 	targetAgent: string,
 	followUp: string[],
-): { queuedItems: number } {
+): Promise<{ queuedItems: number }> {
+	await waitForAllAgentsReady(room);
+
 	const agent = room.agents.get(targetAgent);
 	if (!agent) {
 		throw new Error(`Agent ${targetAgent} not found in room`);
