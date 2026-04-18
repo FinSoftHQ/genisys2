@@ -1,7 +1,7 @@
 import { spawn, ChildProcess } from "child_process";
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve, isAbsolute } from "path";
 import type { FastifyReply } from "fastify";
 import { parseProtocol, type Protocol, parseAgentPromptFile } from "@repo/shared";
 import { attachJsonlReader } from "../squads/jsonl.js";
@@ -73,6 +73,7 @@ export interface Room {
 	events: StoredEvent[];
 	eventSeq: number;
 	promptDir: string;
+	workingDir?: string;
 }
 
 const rooms = new Map<string, Room>();
@@ -226,6 +227,7 @@ export function buildPiArgs(
 	tailorShop: string | undefined,
 	bodyPromptPath: string,
 	roomPromptDir: string,
+	workingDir?: string,
 ): string[] {
 	const args = ["--mode", "rpc", "--no-session"];
 
@@ -233,9 +235,12 @@ export function buildPiArgs(
 	args.push("--append-system-prompt", bodyPromptPath);
 
 	if (tailorShop) {
+		// Resolve tailorShop to absolute so pi can find it regardless of cwd
+		const resolvedTailorShop = isAbsolute(tailorShop) ? tailorShop : resolve(workingDir ?? process.cwd(), tailorShop);
+
 		// 2. Agent-specific prompt file: name first, then role fallback
-		const namePath = join(tailorShop, "agents", `${agentName}.md`);
-		const rolePath = join(tailorShop, "agents", `${role}.md`);
+		const namePath = join(resolvedTailorShop, "agents", `${agentName}.md`);
+		const rolePath = join(resolvedTailorShop, "agents", `${role}.md`);
 
 		let resolvedPath: string | undefined;
 		let resolvedContent: string | undefined;
@@ -267,7 +272,7 @@ export function buildPiArgs(
 		}
 
 		// 3. Optional shared working protocol
-		const workingPath = join(tailorShop, "working_protocol.md");
+		const workingPath = join(resolvedTailorShop, "working_protocol.md");
 		if (existsSync(workingPath)) {
 			args.push("--append-system-prompt", workingPath);
 		}
@@ -281,6 +286,11 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 	const promptDir = mkdtempSync(join(tmpdir(), `piroom-${id}-`));
 	const bodyPromptPath = join(promptDir, "body.prompt");
 	writeFileSync(bodyPromptPath, protocol.body, "utf-8");
+
+	// Resolve working_dir relative to server CWD if not absolute
+	const workingDir = protocol.workingDir
+		? (isAbsolute(protocol.workingDir) ? protocol.workingDir : resolve(process.cwd(), protocol.workingDir))
+		: undefined;
 
 	const room: Room = {
 		id,
@@ -296,12 +306,14 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 		events: [],
 		eventSeq: 0,
 		promptDir,
+		workingDir,
 	};
 
 	for (const [name, role] of Object.entries(protocol.team)) {
-		const args = buildPiArgs(name, role, protocol.tailorShop, bodyPromptPath, promptDir);
+		const args = buildPiArgs(name, role, protocol.tailorShop, bodyPromptPath, promptDir, workingDir);
 		const proc = spawn("pi", args, {
 			stdio: ["pipe", "pipe", "inherit"],
+			...(workingDir ? { cwd: workingDir } : {}),
 		});
 
 		const logger = new SquadLogger(name);

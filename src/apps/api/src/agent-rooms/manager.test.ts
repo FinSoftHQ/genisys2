@@ -241,6 +241,17 @@ describe('agent-rooms manager', () => {
 				join(tailorDir, 'agents', 'alpha.md'),
 			);
 		});
+
+		it('resolves relative tailorShop against workingDir when provided', () => {
+			const baseDir = mkdtempSync(join(tmpdir(), 'base-test-'));
+			tailorDir = join(baseDir, 'prompts');
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
+
+			const args = buildPiArgs('alpha', 'Lead', './prompts', bodyPromptPath, roomPromptDir, baseDir);
+			expect(args).toContain(join(tailorDir, 'agents', 'alpha.md'));
+		});
 	});
 
 	describe('instructions front-matter', () => {
@@ -264,6 +275,18 @@ describe('agent-rooms manager', () => {
 				'gamma',
 			);
 			warnSpy.mockRestore();
+			destroyRoom(result.roomId);
+		});
+	});
+
+	describe('working_dir front-matter', () => {
+		it('resolves relative working_dir and stores absolute path on room', async () => {
+			const baseDir = mkdtempSync(join(tmpdir(), 'workdir-test-'));
+			const markdown = `---\nteam:\n  alpha: Lead\nworking_dir: ${baseDir}\n---\n\nProtocol body.\n`;
+			const result = await createRoomFromMarkdown(markdown);
+			const room = getRoom(result.roomId)!;
+			expect(room).toBeDefined();
+			expect(room.workingDir).toBe(baseDir);
 			destroyRoom(result.roomId);
 		});
 	});

@@ -221,6 +221,7 @@ Notes
 - You can optionally declare a `facilitator:` key in the front matter to designate a fallback agent for orphaned messages in Explicit Mode.
 - You can optionally declare a `routes:` block in the front matter to control which agents receive messages from which sender.
 - You can optionally declare a `tailor_shop:` block in the front matter to point to a directory containing agent-specific prompt files (`agents/<agent_name>.md`, falling back to `agents/<role>.md`) and an optional shared protocol (`working_protocol.md`). These files are passed as `--append-system-prompt` to each `pi` process. Agent files may include an optional YAML front matter with `model:` to override the model for that agent.
+- You can optionally declare a `working_dir:` block in the front matter to set the working directory for all spawned `pi` processes. Relative paths are resolved against the API server's CWD; absolute paths are used as-is. When omitted, `pi` inherits the API server's CWD.
 - You can optionally declare an `instructions:` block in the front matter to send per-agent prompt messages immediately after the room is created. When omitted, no initial prompt is sent — callers must use `POST /api/v1/agent-rooms/:roomId/instructions` to trigger agents.
 
 Endpoints (starter guide)
@@ -245,6 +246,7 @@ team:
   smith: architect
   john: developer
 tailor_shop: ./prompts
+working_dir: ./project
 instructions:
   smith: Please start design using 'requirements.md'
   john: Please implement the auth module

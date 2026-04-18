@@ -32,6 +32,14 @@ When the user wants to create a room:
 2. Call createAgentRoomTool with the file path.
 3. Report the roomId and status to the user.
 
+The protocol markdown front matter supports these optional keys:
+- team (required): maps agent names to roles
+- tailor_shop: directory with agent-specific prompts and optional working_protocol.md
+- working_dir: directory where spawned pi processes will run (relative to API server CWD or absolute)
+- instructions: per-agent initial prompt messages
+- routes: explicit message routing rules
+- facilitator: fallback agent for unrouted messages
+
 When the user wants updates on an active room:
 1. Call getAgentRoomEventsTool with the roomId (and optionally since=0 for the first batch).
 2. The tool returns a batch of events along with hasMore, returned, and nextSince.

@@ -6,6 +6,7 @@ export interface Protocol {
 	routes?: Record<string, string[]>;
 	facilitator?: string;
 	tailorShop?: string;
+	workingDir?: string;
 	instructions?: Record<string, string>;
 }
 
@@ -28,6 +29,7 @@ export function parseProtocol(filePath: string): Protocol {
 	const routes: Record<string, string[]> = {};
 	let facilitator: string | undefined;
 	let tailorShop: string | undefined;
+	let workingDir: string | undefined;
 	const instructions: Record<string, string> = {};
 	const lines = frontMatter.split("\n");
 	let inTeam = false;
@@ -58,6 +60,14 @@ export function parseProtocol(filePath: string): Protocol {
 			inInstructions = false;
 			currentRouteAgent = null;
 			tailorShop = line.slice("tailor_shop:".length).trim();
+			continue;
+		}
+		if (line.startsWith("working_dir:")) {
+			inTeam = false;
+			inRoutes = false;
+			inInstructions = false;
+			currentRouteAgent = null;
+			workingDir = line.slice("working_dir:".length).trim();
 			continue;
 		}
 		if (line.startsWith("instructions:")) {
@@ -138,6 +148,7 @@ export function parseProtocol(filePath: string): Protocol {
 		...(Object.keys(routes).length > 0 ? { routes } : {}),
 		...(facilitator ? { facilitator } : {}),
 		...(tailorShop ? { tailorShop } : {}),
+		...(workingDir ? { workingDir } : {}),
 		...(Object.keys(instructions).length > 0 ? { instructions } : {}),
 	};
 }
