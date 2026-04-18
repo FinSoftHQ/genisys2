@@ -125,7 +125,7 @@ export function determineRecipients(room: Room, fromAgent: string, text: string)
 	const pool = new Set<string>();
 
 	// Dynamic targeting (inline mentions)
-	const mentionRegex = /@attn:(\w+)/g;
+	const mentionRegex = /@attn:([\w-]+)/g;
 	let match: RegExpExecArray | null;
 	while ((match = mentionRegex.exec(text)) !== null) {
 		const identifier = match[1];
