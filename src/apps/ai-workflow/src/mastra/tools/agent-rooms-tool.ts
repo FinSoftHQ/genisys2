@@ -124,22 +124,28 @@ export const getAgentRoomStatusTool = createTool({
 
 export const getAgentRoomEventsTool = createTool({
   id: 'get-agent-room-events',
-  description: 'Retrieve stored events for an agent room, optionally since a specific event ID cursor. Returns nextSince for subsequent polling.',
+  description: 'Retrieve a batch of stored events for an agent room. Use since cursor and check hasMore to paginate through all events.',
   inputSchema: z.object({
     roomId: z.string().describe('The room ID'),
     since: z.number().optional().describe('Event ID cursor — return only events with id > since. Defaults to 0.'),
+    limit: z.number().optional().describe('Maximum events to return in this batch. Uses server default (100) if omitted.'),
     apiBaseUrl: z.string().optional().describe('Optional base URL for the agent rooms API'),
   }),
   outputSchema: z.object({
     roomId: z.string(),
     total: z.number(),
+    returned: z.number(),
+    hasMore: z.boolean(),
     events: z.array(z.unknown()),
     nextSince: z.number(),
   }),
-  execute: async ({ roomId, since, apiBaseUrl }) => {
+  execute: async ({ roomId, since, limit, apiBaseUrl }) => {
     const baseUrl = getBaseUrl(apiBaseUrl);
     const sinceParam = since ?? 0;
-    const res = await fetch(`${baseUrl}/${roomId}/events?since=${sinceParam}`);
+    const params = new URLSearchParams();
+    params.set('since', String(sinceParam));
+    if (limit !== undefined) params.set('limit', String(limit));
+    const res = await fetch(`${baseUrl}/${roomId}/events?${params.toString()}`);
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Failed to get room events: ${res.status} ${text}`);
@@ -148,6 +154,8 @@ export const getAgentRoomEventsTool = createTool({
     const data = (await res.json()) as {
       roomId: string;
       total: number;
+      returned: number;
+      hasMore: boolean;
       events: Array<{ id: number }>;
     };
 
@@ -155,6 +163,8 @@ export const getAgentRoomEventsTool = createTool({
     return {
       roomId: data.roomId,
       total: data.total,
+      returned: data.returned,
+      hasMore: data.hasMore,
       events: data.events,
       nextSince: maxId,
     };

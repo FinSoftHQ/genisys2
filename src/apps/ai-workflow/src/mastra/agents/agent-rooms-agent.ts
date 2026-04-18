@@ -33,9 +33,10 @@ When the user wants to create a room:
 3. Report the roomId and status to the user.
 
 When the user wants updates on an active room:
-1. Call getAgentRoomEventsTool with the roomId (or infer it from conversation context).
-2. Use the returned nextSince cursor on subsequent calls to get only new events.
-3. Summarize new events concisely: group by agent, highlight messages, tools, and errors.
+1. Call getAgentRoomEventsTool with the roomId (and optionally since=0 for the first batch).
+2. The tool returns a batch of events along with hasMore, returned, and nextSince.
+3. If hasMore is true, call again with since=nextSince to fetch the next batch. Continue until hasMore is false.
+4. Summarize events concisely: group by agent, highlight messages, tools, and errors. Note that events with _fieldTruncated: true had their text truncated by the server due to length.
 
 When the user wants to send instructions:
 1. Call sendAgentRoomInstructionsTool with targetAgents and followUp messages.

@@ -123,12 +123,14 @@ describe('agent-rooms tools', () => {
   });
 
   describe('getAgentRoomEventsTool', () => {
-    it('should return events and nextSince', async () => {
+    it('should return events, hasMore, returned, and nextSince', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           roomId: 'room-123',
           total: 10,
+          returned: 2,
+          hasMore: true,
           events: [
             { id: 1, from: 'smith', type: 'message', text: 'Hello' },
             { id: 3, from: 'john', type: 'thinking', thinking: 'Hmm' },
@@ -139,10 +141,12 @@ describe('agent-rooms tools', () => {
       const result = (await getAgentRoomEventsTool.execute!(
         { roomId: 'room-123' },
         {} as any
-      )) as { roomId: string; total: number; events: unknown[]; nextSince: number };
+      )) as { roomId: string; total: number; returned: number; hasMore: boolean; events: unknown[]; nextSince: number };
 
       expect(result.roomId).toBe('room-123');
       expect(result.total).toBe(10);
+      expect(result.returned).toBe(2);
+      expect(result.hasMore).toBe(true);
       expect(result.events).toHaveLength(2);
       expect(result.nextSince).toBe(3);
     });
@@ -153,6 +157,8 @@ describe('agent-rooms tools', () => {
         json: async () => ({
           roomId: 'room-123',
           total: 10,
+          returned: 1,
+          hasMore: false,
           events: [{ id: 7, from: 'smith', type: 'message', text: 'Done' }],
         }),
       });
@@ -160,11 +166,35 @@ describe('agent-rooms tools', () => {
       const result = (await getAgentRoomEventsTool.execute!(
         { roomId: 'room-123', since: 5 },
         {} as any
-      )) as { roomId: string; total: number; events: unknown[]; nextSince: number };
+      )) as { roomId: string; total: number; returned: number; hasMore: boolean; events: unknown[]; nextSince: number };
 
       expect(result.nextSince).toBe(7);
+      expect(result.hasMore).toBe(false);
       const url = mockFetch.mock.calls[0][0];
       expect(url).toContain('since=5');
+    });
+
+    it('should pass limit parameter', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          roomId: 'room-123',
+          total: 10,
+          returned: 5,
+          hasMore: true,
+          events: [
+            { id: 1, from: 'smith', type: 'message', text: 'Hello' },
+          ],
+        }),
+      });
+
+      await getAgentRoomEventsTool.execute!(
+        { roomId: 'room-123', limit: 5 },
+        {} as any
+      );
+
+      const url = mockFetch.mock.calls[0][0];
+      expect(url).toContain('limit=5');
     });
   });
 
