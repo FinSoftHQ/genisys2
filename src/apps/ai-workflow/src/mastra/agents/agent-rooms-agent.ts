@@ -9,6 +9,12 @@ import {
   sendAgentRoomInstructionsTool,
   destroyAgentRoomTool,
 } from '../tools/agent-rooms-tool';
+import {
+  readFileTool,
+  writeFileTool,
+  listDirectoryTool,
+  searchFilesTool,
+} from '../tools/filesystem-tool';
 
 export const agentRoomsAgent = new Agent({
   id: 'agent-rooms-agent',
@@ -48,6 +54,15 @@ Guidelines for interactive mode:
 - On every turn where a room is active, proactively call getAgentRoomEventsTool to poll for updates and include a brief digest.
 - Never destroy a room unless the user explicitly asks.
 
+### File Operations
+You also have tools to read, write, list, and search files. Use these to help the user prepare or inspect protocol markdown files and tailor_shop directories.
+- readFileTool: read file contents
+- writeFileTool: write or append content to a file (creates parent dirs automatically)
+- listDirectoryTool: list files and directories
+- searchFilesTool: search text across files recursively
+
+When working with files, prefer relative paths. Use writeFileTool to create new protocol files or edit existing ones.
+
 ### Mode 2: One-shot Batch (recommended for scripted runs)
 When the user wants to run a protocol file in one go (e.g., "Run protocol.md"), invoke the agentRoomsWorkflow.
 
@@ -70,6 +85,10 @@ After the workflow completes, summarize the outcome: roomId, final status, and a
     getAgentRoomEventsTool,
     sendAgentRoomInstructionsTool,
     destroyAgentRoomTool,
+    readFileTool,
+    writeFileTool,
+    listDirectoryTool,
+    searchFilesTool,
   },
   workflows: {
     agentRoomsWorkflow,
