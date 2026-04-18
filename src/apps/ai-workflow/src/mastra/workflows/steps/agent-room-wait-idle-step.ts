@@ -11,7 +11,7 @@ export const agentRoomWaitIdleStep = createStep({
       throw new Error('Input data is required for agent-room-wait-idle-step');
     }
 
-    const { roomId, apiBaseUrl, instructions } = inputData;
+    const { roomId, apiBaseUrl } = inputData;
     const maxAttempts = 120;
     const intervalMs = 1000;
 
@@ -38,7 +38,7 @@ export const agentRoomWaitIdleStep = createStep({
 
       const allIdle = Object.values(data.agents).every((a) => a.status === 'idle');
       if (allIdle) {
-        return { roomId, apiBaseUrl, instructions, agents: data.agents };
+        return { roomId, apiBaseUrl, agents: data.agents };
       }
 
       await new Promise((r) => setTimeout(r, intervalMs));

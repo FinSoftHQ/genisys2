@@ -49,21 +49,18 @@ Guidelines for interactive mode:
 - Never destroy a room unless the user explicitly asks.
 
 ### Mode 2: One-shot Batch (recommended for scripted runs)
-When the user provides a protocol file path and instructions in a single request (e.g., "Run protocol.md with instructions 'Design the API'"), invoke the agentRoomsWorkflow.
+When the user wants to run a protocol file in one go (e.g., "Run protocol.md"), invoke the agentRoomsWorkflow.
 
 The workflow accepts:
 - protocolFilePath (required)
-- instructions (required)
 - apiBaseUrl (optional)
 
 It will:
-1. Create the room from the protocol file.
+1. Create the room from the protocol file. The markdown front matter may include instructions, team, routes, and other configuration.
 2. Wait until all agents are idle.
-3. Send instructions and stream SSE events in real-time via writer.
-4. Wait until idle again.
-5. Return the result WITHOUT destroying the room.
+3. Return the final status and collected events WITHOUT destroying the room.
 
-After the workflow completes, summarize the outcome: roomId, final status, and a concise digest of the events collected.
+After the workflow completes, summarize the outcome: roomId, final status, and a concise digest of the events.
 `,
   model: 'google/gemini-2.5-pro',
   tools: {

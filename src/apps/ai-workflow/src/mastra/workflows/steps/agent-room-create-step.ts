@@ -12,7 +12,7 @@ export const agentRoomCreateStep = createStep({
       throw new Error('Input data is required for agent-room-create-step');
     }
 
-    const { protocolFilePath, instructions, apiBaseUrl } = inputData;
+    const { protocolFilePath, apiBaseUrl } = inputData;
     const baseUrl = (apiBaseUrl ?? process.env.AGENT_ROOMS_API_URL ?? 'http://localhost:8080/api/v1/agent-rooms').replace(/\/+$/, '');
     const markdown = readFileSync(protocolFilePath, 'utf-8');
 
@@ -28,6 +28,6 @@ export const agentRoomCreateStep = createStep({
     }
 
     const data = (await res.json()) as { roomId: string; status: string };
-    return { roomId: data.roomId, apiBaseUrl: baseUrl, instructions };
+    return { roomId: data.roomId, apiBaseUrl: baseUrl };
   },
 });

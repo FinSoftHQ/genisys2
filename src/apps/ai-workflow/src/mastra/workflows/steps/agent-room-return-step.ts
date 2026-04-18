@@ -1,25 +1,32 @@
 import { createStep } from '@mastra/core/workflows';
-import { sendInstructionsOutputSchema, agentRoomsWorkflowOutputSchema } from './agent-rooms-workflow-schemas';
+import { waitIdleOutputSchema, agentRoomsWorkflowOutputSchema } from './agent-rooms-workflow-schemas';
 
 export const agentRoomReturnStep = createStep({
   id: 'agent-room-return-step',
   description: 'Returns the final result of the agent room workflow without destroying the room.',
-  inputSchema: sendInstructionsOutputSchema,
+  inputSchema: waitIdleOutputSchema,
   outputSchema: agentRoomsWorkflowOutputSchema,
   execute: async ({ inputData }) => {
     if (!inputData) {
       throw new Error('Input data is required for agent-room-return-step');
     }
 
-    const { roomId, agents, events } = inputData;
+    const { roomId, apiBaseUrl, agents } = inputData;
 
-    // Fetch final status to include in output
-    const { apiBaseUrl } = inputData;
-    const res = await fetch(`${apiBaseUrl}/${roomId}/status`);
+    // Fetch final status
+    const statusRes = await fetch(`${apiBaseUrl}/${roomId}/status`);
     let status = 'unknown';
-    if (res.ok) {
-      const data = (await res.json()) as { status: string };
+    if (statusRes.ok) {
+      const data = (await statusRes.json()) as { status: string };
       status = data.status;
+    }
+
+    // Fetch all events for the summary
+    const eventsRes = await fetch(`${apiBaseUrl}/${roomId}/events`);
+    const events: unknown[] = [];
+    if (eventsRes.ok) {
+      const data = (await eventsRes.json()) as { events: unknown[] };
+      events.push(...data.events);
     }
 
     return { roomId, status, agents, events };
