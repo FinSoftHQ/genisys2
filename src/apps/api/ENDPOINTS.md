@@ -153,6 +153,35 @@ When you're ready, please say something, so that we know you're ready!
   Body: { squadId: string, status: "completed" }
 - Common error: 404 if squad not found
 
+8) List squads
+- Purpose: Retrieve a lightweight list of all active squad sessions with optional filtering and pagination.
+- Request (HTTP):
+  GET /api/v1/squads
+  GET /api/v1/squads?status=<status>
+  GET /api/v1/squads?limit=<number>&offset=<number>
+  Headers: (none required)
+  Body: none
+
+- Query params:
+  status (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
+  limit (optional): maximum number of squads to return. Default: `50`. Max: `200`.
+  offset (optional): number of squads to skip. Default: `0`.
+
+- Success: 200 OK
+  Body: Array<{
+    squadId: string,
+    status: "initialized" | "running" | "suspended" | "error" | "completed",
+    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
+    // present once at least one event has been stored:
+    lastEventId?: number,
+    lastEventAt?: string,
+    lastEventType?: string,
+    lastEventFrom?: string,
+    // optional if failure:
+    failedAgent?: string,
+    reason?: string
+  }>
+
 Event types (overview)
 - Events are emitted by agent processes and forwarded through SSE. Typical `type` values include:
   - agent_start, agent_end
@@ -331,6 +360,35 @@ With this protocol:
 - Success: 200 OK
   Body: { roomId: string, status: "completed" }
 - Common error: 404 if room not found
+
+7) List agent rooms
+- Purpose: Retrieve a lightweight list of all active agent room sessions with optional filtering and pagination.
+- Request (HTTP):
+  GET /api/v1/agent-rooms
+  GET /api/v1/agent-rooms?status=<status>
+  GET /api/v1/agent-rooms?limit=<number>&offset=<number>
+  Headers: (none required)
+  Body: none
+
+- Query params:
+  status (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
+  limit (optional): maximum number of rooms to return. Default: `50`. Max: `200`.
+  offset (optional): number of rooms to skip. Default: `0`.
+
+- Success: 200 OK
+  Body: Array<{
+    roomId: string,
+    status: "initialized" | "running" | "suspended" | "error" | "completed",
+    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
+    // present once at least one event has been stored:
+    lastEventId?: number,
+    lastEventAt?: string,
+    lastEventType?: string,
+    lastEventFrom?: string,
+    // optional if failure:
+    failedAgent?: string,
+    reason?: string
+  }>
 
 Event types (overview)
 - Events are emitted by agent processes and forwarded through SSE. Typical `type` values include:

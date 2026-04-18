@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   createSquadFromMarkdown,
+  listSquads,
   getSquad,
   getSquadStatus,
   getSquadEvents,
@@ -29,6 +30,25 @@ export async function squadRoutes(instance: FastifyInstance): Promise<void> {
       done(null, body);
     },
   );
+
+  instance.get("/", async (request, reply) => {
+    const { status } = request.query as { status?: string };
+    const { limit: limitRaw, offset: offsetRaw } = request.query as {
+      limit?: string;
+      offset?: string;
+    };
+    let limit = 50;
+    let offset = 0;
+    if (limitRaw !== undefined) {
+      const parsed = parseInt(limitRaw, 10);
+      if (!isNaN(parsed)) limit = parsed;
+    }
+    if (offsetRaw !== undefined) {
+      const parsed = parseInt(offsetRaw, 10);
+      if (!isNaN(parsed)) offset = parsed;
+    }
+    return reply.status(200).send(listSquads(status, limit, offset));
+  });
 
   instance.post("/", async (request, reply) => {
     const contentType = request.headers["content-type"] ?? "";

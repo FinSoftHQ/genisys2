@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
 	createRoomFromMarkdown,
+	listRooms,
 	getRoom,
 	getRoomStatus,
 	getRoomEvents,
@@ -509,6 +510,39 @@ describe('agent-rooms manager', () => {
 				'[SYSTEM WARNING] Facilitator ghost not found in room. Dropping message from alpha.',
 			);
 			warnSpy.mockRestore();
+		});
+	});
+
+	describe('listRooms', () => {
+		it('returns all rooms when no filters provided', () => {
+			const rooms = listRooms();
+			expect(Array.isArray(rooms)).toBe(true);
+			expect(rooms.length).toBeGreaterThanOrEqual(1);
+			expect(rooms.some((r: any) => r.roomId === roomId)).toBe(true);
+		});
+
+		it('filters by status', () => {
+			const running = listRooms('running');
+			const completed = listRooms('completed');
+			expect(Array.isArray(running)).toBe(true);
+			expect(Array.isArray(completed)).toBe(true);
+			expect(running.some((r: any) => r.roomId === roomId)).toBe(false);
+			expect(completed.some((r: any) => r.roomId === roomId)).toBe(false);
+		});
+
+		it('respects limit and offset', () => {
+			const all = listRooms();
+			const limited = listRooms(undefined, 1, 0);
+			expect(limited.length).toBeLessThanOrEqual(1);
+			if (all.length > 1) {
+				const offset = listRooms(undefined, 1, 1);
+				expect(offset.length).toBeLessThanOrEqual(1);
+			}
+		});
+
+		it('returns empty array when no rooms match status', () => {
+			const rooms = listRooms('nonexistent');
+			expect(rooms).toEqual([]);
 		});
 	});
 });

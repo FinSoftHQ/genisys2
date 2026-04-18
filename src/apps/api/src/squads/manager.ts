@@ -358,6 +358,20 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 	return { squadId: id };
 }
 
+export function listSquads(
+	status?: string,
+	limit = 50,
+	offset = 0,
+): object[] {
+	let values = Array.from(squads.values());
+	if (status !== undefined) {
+		values = values.filter((squad) => squad.status === status);
+	}
+	const clampedLimit = Math.max(1, Math.min(200, limit));
+	const clampedOffset = Math.max(0, offset);
+	return values.slice(clampedOffset, clampedOffset + clampedLimit).map(getSquadStatus);
+}
+
 export function getSquad(id: string): Squad | undefined {
 	return squads.get(id);
 }

@@ -578,6 +578,20 @@ export async function waitForAllAgentsReady(room: Room): Promise<void> {
 	);
 }
 
+export function listRooms(
+	status?: string,
+	limit = 50,
+	offset = 0,
+): object[] {
+	let values = Array.from(rooms.values());
+	if (status !== undefined) {
+		values = values.filter((room) => room.status === status);
+	}
+	const clampedLimit = Math.max(1, Math.min(200, limit));
+	const clampedOffset = Math.max(0, offset);
+	return values.slice(clampedOffset, clampedOffset + clampedLimit).map(getRoomStatus);
+}
+
 export function getRoom(id: string): Room | undefined {
 	return rooms.get(id);
 }
