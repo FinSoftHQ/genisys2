@@ -82,7 +82,7 @@ Outputs:
 
 ### Unit Tests (Vitest workspace)
 ```bash
-just test-unit
+just test
 ```
 Runs all tests in `src/apps/*/vitest.config.ts` and `src/libs/*/vitest.config.ts`.
 
@@ -112,7 +112,7 @@ pnpm typecheck
 ```bash
 just azure-deploy
 ```
-Runs `lint` → `typecheck` → `test-unit` → `build`.
+Runs `lint` → `typecheck` → `test` → `build`.
 
 ### Required App Settings
 Copy `.env.example` to `.env` and set your values in Azure App Service **Configuration**:

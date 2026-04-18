@@ -29,8 +29,10 @@ build:
     pnpm --filter web build
     #pnpm --filter ai-workflow build
 
-test-unit:
+test:
     pnpm vitest run
+
+alias test-unit := test
 
 test-ai-workflow:
     pnpm --filter ai-workflow test
@@ -57,6 +59,6 @@ azure-deploy:
     @echo "=== Pre-deployment validation ==="
     pnpm lint
     pnpm typecheck
-    just test-unit
+    just test
     just build
     @echo "=== Ready for Azure deployment ==="
