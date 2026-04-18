@@ -55,10 +55,12 @@ describe('agent-rooms manager', () => {
 
 	it('returns events and supports since cursor', () => {
 		const room = getRoom(roomId)!;
-		const events = getRoomEvents(room);
-		expect(Array.isArray(events)).toBe(true);
-		const sinceEvents = getRoomEvents(room, 999_999);
-		expect(sinceEvents).toEqual([]);
+		const result = getRoomEvents(room);
+		expect(Array.isArray(result.events)).toBe(true);
+		expect(result.hasMore).toBe(false);
+		const sinceResult = getRoomEvents(room, 999_999);
+		expect(sinceResult.events).toEqual([]);
+		expect(sinceResult.hasMore).toBe(false);
 	});
 
 	it('sends instructions to a target agent', async () => {
@@ -88,7 +90,7 @@ describe('agent-rooms manager', () => {
 		const room = getRoom(roomId);
 		expect(room).toBeDefined();
 		expect(room!.status).toBe('completed');
-		expect(getRoomEvents(room!).length).toBeGreaterThanOrEqual(0);
+		expect(getRoomEvents(room!).events.length).toBeGreaterThanOrEqual(0);
 		destroyRoom(roomId);
 		expect(getRoom(roomId)).toBeUndefined();
 	});

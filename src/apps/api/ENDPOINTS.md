@@ -296,20 +296,24 @@ With this protocol:
 - Common error: 404 if room not found
 
 3) Get stored events
-- Purpose: Retrieve all coalesced events buffered for a room (up to 2500 most recent).
+- Purpose: Retrieve coalesced events buffered for a room. Events are paginated and large text fields are automatically truncated.
 - Request (HTTP):
   GET /api/v1/agent-rooms/:roomId/events
   GET /api/v1/agent-rooms/:roomId/events?since=<eventId>
+  GET /api/v1/agent-rooms/:roomId/events?since=<eventId>&limit=<number>
   Headers: (none required)
   Body: none
 
 - Query params:
   since (optional): integer event id — return only events with id > since.
+  limit (optional): maximum number of events to return. Default: 100. Must be a positive integer.
 
 - Success: 200 OK
   Body: {
     roomId: string,
-    total: number,
+    total: number,        // total events currently in buffer (before since filter)
+    returned: number,     // number of events in this response
+    hasMore: boolean,     // true if more events are available beyond this page
     events: Array<{
       id: number,
       from: string,
@@ -317,9 +321,16 @@ With this protocol:
       type: "thinking" | "message" | "tool_start" | "tool_end"
            | "retry_start" | "retry_end" | "agent_start" | "agent_end" | "room_error",
       // type-specific fields are identical to squads
+      // present if any field in this event was truncated:
+      _fieldTruncated?: boolean,
     }>
   }
-- Common errors: 400 for invalid since, 404 if room not found
+- Common errors: 400 for invalid since or limit, 404 if room not found
+
+- Notes:
+  - If limit is omitted, the server defaults to 100 events.
+  - Individual string fields (message text, thinking blocks, tool results) are truncated at 4000 characters. A _fieldTruncated flag is added to affected events.
+  - Use hasMore + since cursors to paginate through large buffers.
 
 4) Subscribe to SSE stream
 - Purpose: Receive real-time agent events and room lifecycle events via Server-Sent Events.

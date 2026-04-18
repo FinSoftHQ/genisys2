@@ -81,8 +81,17 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			}
 		}
 
-		const events = getRoomEvents(room, sinceId);
-		return reply.status(200).send({ roomId, total: room.events.length, events });
+		const { limit: limitRaw } = request.query as { limit?: string };
+		let limit: number | undefined;
+		if (limitRaw !== undefined) {
+			limit = parseInt(limitRaw, 10);
+			if (isNaN(limit) || limit < 1) {
+				return reply.status(400).send({ error: "Invalid 'limit' parameter, must be a positive integer" });
+			}
+		}
+
+		const { events, hasMore } = getRoomEvents(room, sinceId, limit);
+		return reply.status(200).send({ roomId, total: room.events.length, returned: events.length, hasMore, events });
 	});
 
 	instance.get("/:roomId/stream", async (request, reply) => {
