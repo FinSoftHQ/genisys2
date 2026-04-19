@@ -6,20 +6,14 @@ import { DuckDBStore } from "@mastra/duckdb";
 import { MastraCompositeStore } from '@mastra/core/storage';
 import { Observability, DefaultExporter, CloudExporter, SensitiveDataFilter } from '@mastra/observability';
 // import { startAgentOsServer } from './agent-os-server';
-import { weatherWorkflow } from './workflows/weather-workflow';
-import { squadWorkflow } from './workflows/squad-workflow';
 import { agentRoomsWorkflow } from './workflows/agent-rooms-workflow';
-import { weatherAgent } from './agents/weather-agent';
-import { squadAgent } from './agents/squad-agent';
 import { agentRoomsAgent } from './agents/agent-rooms-agent';
-import { toolCallAppropriatenessScorer, completenessScorer, translationScorer } from './scorers/weather-scorer';
 
 // await startAgentOsServer();
 
 export const mastra = new Mastra({
-  workflows: { weatherWorkflow, squadWorkflow, agentRoomsWorkflow },
-  agents: { weatherAgent, squadAgent, agentRoomsAgent },
-  scorers: { toolCallAppropriatenessScorer, completenessScorer, translationScorer },
+  workflows: { agentRoomsWorkflow },
+  agents: { agentRoomsAgent },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({
