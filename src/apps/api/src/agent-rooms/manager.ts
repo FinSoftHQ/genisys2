@@ -210,7 +210,40 @@ export async function createRoomFromMarkdown(markdown: string): Promise<{ roomId
 	const filePath = join(dir, "protocol.md");
 	writeFileSync(filePath, markdown, "utf-8");
 	try {
-		const protocol = parseProtocol(filePath);
+		let protocol = parseProtocol(filePath, { requireTeam: false });
+
+		// Merge defaults from tailor_shop/working_protocol.md when present
+		if (protocol.tailorShop) {
+			const resolvedTailorShop = isAbsolute(protocol.tailorShop)
+				? protocol.tailorShop
+				: resolve(process.cwd(), protocol.tailorShop);
+			const workingPath = join(resolvedTailorShop, "working_protocol.md");
+			if (existsSync(workingPath)) {
+				const defaults = parseProtocol(workingPath, { requireTeam: false });
+				if (Object.keys(protocol.team).length === 0 && Object.keys(defaults.team).length > 0) {
+					protocol = { ...protocol, team: defaults.team };
+				}
+				if (!protocol.routes && defaults.routes) {
+					protocol = { ...protocol, routes: defaults.routes };
+				}
+				if (!protocol.facilitator && defaults.facilitator) {
+					protocol = { ...protocol, facilitator: defaults.facilitator };
+				}
+				if (!protocol.instructions && defaults.instructions) {
+					protocol = { ...protocol, instructions: defaults.instructions };
+				} else if (protocol.instructions && defaults.instructions) {
+					protocol = { ...protocol, instructions: { ...defaults.instructions, ...protocol.instructions } };
+				}
+				if (!protocol.workingDir && defaults.workingDir) {
+					protocol = { ...protocol, workingDir: defaults.workingDir };
+				}
+			}
+		}
+
+		if (Object.keys(protocol.team).length === 0) {
+			throw new Error("No team members found in front matter or working_protocol.md defaults");
+		}
+
 		return await createRoom(protocol);
 	} finally {
 		try {

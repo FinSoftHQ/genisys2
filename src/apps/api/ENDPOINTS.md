@@ -7,7 +7,8 @@ This API manages "squads" — short-lived groups of autonomous agents spawned fr
 This behavior mirrors tools/piteam/ (both use parseProtocol and operate on the same protocol Markdown format).
 
 Notes
-- The create endpoint requires Content-Type: text/markdown and a protocol with front matter containing a `team:` block.
+- The create endpoint requires `Content-Type: text/markdown`.
+- The protocol must contain a `team:` block either in its own front matter or in the `working_protocol.md` of a configured `tailor_shop` (see **Defaults from working_protocol.md** below).
 - Squads auto-expire after 2 hours of inactivity.
 - The host must have the `pi` binary available (spawned as `pi --mode rpc --no-session`).
 
@@ -232,11 +233,11 @@ Endpoints (starter guide)
   POST /api/v1/agent-rooms/
   Headers:
     Content-Type: text/markdown
-  Body: (raw protocol Markdown, must include front matter with team)
+  Body: (raw protocol Markdown. Front matter may omit `team:` if defaults are provided by `tailor_shop/working_protocol.md`.)
 
 - Success: 201 Created
   Body: { roomId: string, status: "initialized" }
-- Common error: 415 if Content-Type does not include text/markdown
+- Common errors: 415 if Content-Type does not include text/markdown; 500 if no team is found in either the protocol or `working_protocol.md` defaults.
 
 - Example raw protocol with routing rules, tailor_shop, instructions, and agent files with front matter:
 
@@ -273,6 +274,19 @@ With this protocol:
    - For `john`, it looks for `./prompts/agents/john.md` first, then falls back to `./prompts/agents/developer.md`.
    - If an agent file contains YAML front matter with `model:`, that model is passed as `--model` to `pi` and only the body (after `---`) is appended as `--append-system-prompt`. If there is no front matter, the entire file is appended directly.
    - `./prompts/working_protocol.md` is appended silently if it exists.
+
+#### Defaults from working_protocol.md
+When the protocol front matter includes a `tailor_shop:` path, the server also reads `tailor_shop/working_protocol.md` and treats its front matter as **defaults** for any missing keys:
+
+| Key | Merge behavior |
+|-----|---------------|
+| `team:` | Used only if the main protocol has no team. |
+| `routes:` | Used only if the main protocol has no routes. |
+| `facilitator:` | Used only if the main protocol has no facilitator. |
+| `instructions:` | Merged agent-by-agent; the main protocol overrides individual agents. |
+| `working_dir:` | Used only if the main protocol has no working_dir. |
+
+This allows you to keep shared configuration (team roster, routing rules, etc.) in a central `working_protocol.md` and create lightweight per-task protocols that only specify `tailor_shop:` and task-specific overrides such as `instructions:`. The main protocol always takes precedence.
 
 2) Get room status
 - Purpose: Get a compact status snapshot for a room and per-agent status, plus a pointer to the most recent stored event.

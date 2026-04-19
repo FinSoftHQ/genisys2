@@ -321,6 +321,86 @@ describe('agent-rooms manager', () => {
 		});
 	});
 
+	describe('working_protocol.md defaults', () => {
+		it('merges team from working_protocol.md when main protocol omits team', async () => {
+			const tailorDir = mkdtempSync(join(tmpdir(), 'tailor-defaults-'));
+			writeFileSync(
+				join(tailorDir, 'working_protocol.md'),
+				'---\nteam:\n  gamma: Lead\n  delta: Dev\n---\n\nDefault protocol.',
+				'utf-8',
+			);
+			const markdown = `---\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
+			const result = await createRoomFromMarkdown(markdown);
+			const room = getRoom(result.roomId)!;
+			expect(room).toBeDefined();
+			expect(room.agents.size).toBe(2);
+			expect(room.agents.has('gamma')).toBe(true);
+			expect(room.agents.has('delta')).toBe(true);
+			destroyRoom(result.roomId);
+		});
+
+		it('merges routes and facilitator from working_protocol.md defaults', async () => {
+			const tailorDir = mkdtempSync(join(tmpdir(), 'tailor-defaults-'));
+			writeFileSync(
+				join(tailorDir, 'working_protocol.md'),
+				'---\nteam:\n  gamma: Lead\n  delta: Dev\nroutes:\n  gamma:\n    - delta\nfacilitator: gamma\n---\n\nDefault protocol.',
+				'utf-8',
+			);
+			const markdown = `---\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
+			const result = await createRoomFromMarkdown(markdown);
+			const room = getRoom(result.roomId)!;
+			expect(room).toBeDefined();
+			expect(room.routes).toEqual({ gamma: ['delta'] });
+			expect(room.facilitator).toBe('gamma');
+			destroyRoom(result.roomId);
+		});
+
+		it('main protocol overrides working_protocol.md defaults', async () => {
+			const tailorDir = mkdtempSync(join(tmpdir(), 'tailor-defaults-'));
+			writeFileSync(
+				join(tailorDir, 'working_protocol.md'),
+				'---\nteam:\n  gamma: Lead\n  delta: Dev\nroutes:\n  gamma:\n    - delta\n---\n\nDefault protocol.',
+				'utf-8',
+			);
+			const markdown = `---\nteam:\n  epsilon: Architect\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
+			const result = await createRoomFromMarkdown(markdown);
+			const room = getRoom(result.roomId)!;
+			expect(room).toBeDefined();
+			expect(room.agents.size).toBe(1);
+			expect(room.agents.has('epsilon')).toBe(true);
+			// routes still merge because main protocol does not define routes
+			expect(room.routes).toEqual({ gamma: ['delta'] });
+			destroyRoom(result.roomId);
+		});
+
+		it('merges instructions agent-by-agent with main taking precedence', async () => {
+			const tailorDir = mkdtempSync(join(tmpdir(), 'tailor-defaults-'));
+			writeFileSync(
+				join(tailorDir, 'working_protocol.md'),
+				'---\nteam:\n  gamma: Lead\n  delta: Dev\ninstructions:\n  gamma: Default start\n  delta: Default task\n---\n\nDefault protocol.',
+				'utf-8',
+			);
+			const markdown = `---\nteam:\n  gamma: Lead\n  delta: Dev\ntailor_shop: ${tailorDir}\ninstructions:\n  gamma: Override start\n---\n\nProtocol body.\n`;
+			const result = await createRoomFromMarkdown(markdown);
+			const room = getRoom(result.roomId)!;
+			expect(room).toBeDefined();
+			destroyRoom(result.roomId);
+		});
+
+		it('throws when no team in main or working_protocol.md', async () => {
+			const tailorDir = mkdtempSync(join(tmpdir(), 'tailor-defaults-'));
+			writeFileSync(
+				join(tailorDir, 'working_protocol.md'),
+				'---\nfacilitator: gamma\n---\n\nDefault protocol.',
+				'utf-8',
+			);
+			const markdown = `---\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
+			await expect(createRoomFromMarkdown(markdown)).rejects.toThrow(
+				'No team members found in front matter or working_protocol.md defaults',
+			);
+		});
+	});
+
 	describe('determineRecipients', () => {
 		function makeRoom(
 			routingStrategy: 'broadcast' | 'explicit',

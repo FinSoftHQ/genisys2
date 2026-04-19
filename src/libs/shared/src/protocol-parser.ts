@@ -10,7 +10,7 @@ export interface Protocol {
 	instructions?: Record<string, string>;
 }
 
-export function parseProtocol(filePath: string): Protocol {
+export function parseProtocol(filePath: string, options?: { requireTeam?: boolean }): Protocol {
 	const content = fs.readFileSync(filePath, "utf-8");
 
 	if (!content.startsWith("---")) {
@@ -138,7 +138,7 @@ export function parseProtocol(filePath: string): Protocol {
 		}
 	}
 
-	if (Object.keys(team).length === 0) {
+	if ((options?.requireTeam ?? true) && Object.keys(team).length === 0) {
 		throw new Error("No team members found in front matter");
 	}
 

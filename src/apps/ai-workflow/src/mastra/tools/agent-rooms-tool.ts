@@ -10,7 +10,7 @@ function getBaseUrl(apiBaseUrl?: string): string {
 
 export const createAgentRoomTool = createTool({
   id: 'create-agent-room',
-  description: 'Create a new agent room from a protocol markdown file with YAML front matter containing a team block.',
+  description: 'Create a new agent room from a protocol markdown file with optional YAML front matter. The team block may be omitted if it is provided by a tailor_shop/working_protocol.md default.',
   inputSchema: z.object({
     protocolFilePath: z.string().describe('Absolute or relative path to the protocol markdown file'),
     apiBaseUrl: z.string().optional().describe('Optional base URL for the agent rooms API'),

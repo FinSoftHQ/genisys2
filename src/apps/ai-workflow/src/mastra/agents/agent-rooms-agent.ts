@@ -32,13 +32,15 @@ When the user wants to create a room:
 2. Call createAgentRoomTool with the file path.
 3. Report the roomId and status to the user.
 
-The protocol markdown front matter supports these optional keys:
-- team (required): maps agent names to roles
-- tailor_shop: directory with agent-specific prompts and optional working_protocol.md
+The protocol markdown front matter supports these keys:
+- team: maps agent names to roles. This is required unless a tailor_shop is configured and its working_protocol.md provides the team.
+- tailor_shop: directory with agent-specific prompts and an optional working_protocol.md
 - working_dir: directory where spawned pi processes will run (relative to API server CWD or absolute)
 - instructions: per-agent initial prompt messages
 - routes: explicit message routing rules
 - facilitator: fallback agent for unrouted messages
+
+**Defaults from working_protocol.md:** If tailor_shop is set, the server reads tailor_shop/working_protocol.md and uses its front matter as defaults. The main protocol file takes precedence for every key. For example, if working_protocol.md defines team and routes, the main protocol can omit them. If the main protocol defines its own team or routes, those override the defaults.
 
 When the user wants updates on an active room:
 1. Call getAgentRoomEventsTool with the roomId (and optionally since=0 for the first batch).

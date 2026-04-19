@@ -7,7 +7,7 @@ import { agentRoomReturnStep } from './steps/agent-room-return-step';
 export const agentRoomsWorkflow = createWorkflow({
   id: 'agent-rooms-workflow',
   description:
-    'Creates an agent room from a protocol markdown file, waits until all agents are idle, and returns the final status and events without destroying the room.',
+    'Creates an agent room from a protocol markdown file (front matter may be relaxed if defaults are provided by tailor_shop/working_protocol.md), waits until all agents are idle, and returns the final status and events without destroying the room.',
   inputSchema: agentRoomsWorkflowInputSchema,
   outputSchema: agentRoomsWorkflowOutputSchema,
 })

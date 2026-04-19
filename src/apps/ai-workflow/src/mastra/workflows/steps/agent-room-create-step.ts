@@ -4,7 +4,7 @@ import { agentRoomsWorkflowInputSchema, createRoomOutputSchema } from './agent-r
 
 export const agentRoomCreateStep = createStep({
   id: 'agent-room-create-step',
-  description: 'Reads the protocol markdown file and creates an agent room via the API.',
+  description: 'Reads the protocol markdown file and creates an agent room via the API. The protocol front matter may omit team, routes, facilitator, instructions, or working_dir if they are provided by a tailor_shop/working_protocol.md default.',
   inputSchema: agentRoomsWorkflowInputSchema,
   outputSchema: createRoomOutputSchema,
   execute: async ({ inputData }) => {
