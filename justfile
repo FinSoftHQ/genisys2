@@ -18,8 +18,8 @@ dev:
     pnpm --filter api dev & pnpm --filter web dev & wait
 
 dev-ai:
-    @echo "Starting AI Workflow (Mastra dev) and The Architect..."
-    pnpm --filter ai-workflow dev & pnpm --filter the-architect dev & wait
+    @echo "Starting API, Web, and AI Workflow..."
+    pnpm --filter api dev & pnpm --filter web dev & pnpm --filter ai-workflow dev & wait
 
 build:
     pnpm install --frozen-lockfile
@@ -42,6 +42,13 @@ test-e2e:
 
 test-e2e-ci:
     pnpm --filter e2e test:ci
+
+bootup:
+    just install
+    @echo "Building workspace packages (libs and tooling)..."
+    pnpm --filter @repo/shared build
+    pnpm --filter @repo/logger build
+    @echo "Bootup complete!"
 
 build-tools:
     @echo "Building all CLI tools..."
