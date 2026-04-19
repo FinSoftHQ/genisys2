@@ -274,7 +274,17 @@ export function buildPiArgs(
 		// 3. Optional shared working protocol
 		const workingPath = join(resolvedTailorShop, "working_protocol.md");
 		if (existsSync(workingPath)) {
-			args.push("--append-system-prompt", workingPath);
+			const workingContent = readFileSync(workingPath, "utf-8");
+			const parsedWorking = parseAgentPromptFile(workingContent);
+			if (workingContent.startsWith("---") && parsedWorking.body) {
+				// Write stripped body to a temp file so pi doesn't ingest raw YAML
+				const promptFile = join(roomPromptDir, "working_protocol.prompt");
+				writeFileSync(promptFile, parsedWorking.body, "utf-8");
+				args.push("--append-system-prompt", promptFile);
+			} else {
+				// No front matter (or empty body) — pass original file path directly
+				args.push("--append-system-prompt", workingPath);
+			}
 		}
 	}
 

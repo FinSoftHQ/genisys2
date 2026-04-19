@@ -212,6 +212,36 @@ describe('agent-rooms manager', () => {
 			expect(args).not.toContain(join(roomPromptDir, 'alpha.prompt'));
 		});
 
+		it('extracts model from working_protocol front matter and writes stripped body to temp file', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
+			writeFileSync(
+				join(tailorDir, 'working_protocol.md'),
+				"---\nmodel: gpt-4o\n---\n\nShared protocol body.",
+				'utf-8',
+			);
+
+			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const tempPromptPath = join(roomPromptDir, 'working_protocol.prompt');
+			expect(existsSync(tempPromptPath)).toBe(true);
+			expect(args).toContain(tempPromptPath);
+			expect(args).not.toContain(join(tailorDir, 'working_protocol.md'));
+		});
+
+		it('passes original working_protocol path when it has no front matter', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
+			writeFileSync(join(tailorDir, 'working_protocol.md'), 'Shared protocol body.', 'utf-8');
+
+			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(args).toContain(join(tailorDir, 'working_protocol.md'));
+			expect(args).not.toContain(join(roomPromptDir, 'working_protocol.prompt'));
+		});
+
 		it('warns and skips missing agent prompt but still appends working_protocol', () => {
 			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
 			writeFileSync(join(tailorDir, 'working_protocol.md'), 'Work hard.', 'utf-8');
