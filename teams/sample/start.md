@@ -1,5 +1,5 @@
 ---
-working_dir: ../../..
+working_dir: .
 tailor_shop: ../../../teams/sample
 instructions:
   Rinda: คุณชื่อ 'Rinda' ในทีมงานที่มี 3 คน กรุณาสร้างแผนการท่องเที่ยว ขอนแก่น ระยะเวลา 3 คืน 4 วัน สำหรับผู้สูงอายุ
