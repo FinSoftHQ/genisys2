@@ -17,6 +17,11 @@ export type RoomStatus =
 const EVENT_BUFFER_CAP = 2500;
 const DEFAULT_EVENT_LIMIT = 100;
 const MAX_EVENT_FIELD_LENGTH = 4000;
+const TASK_COMPLETION_MARKER = "[@TASK: VIPER-RTB]";
+const idleCompletionGraceMsRaw = Number(process.env.AGENT_ROOM_IDLE_COMPLETION_MS ?? 60_000);
+const IDLE_COMPLETION_GRACE_MS = Number.isFinite(idleCompletionGraceMsRaw)
+	? Math.max(1000, idleCompletionGraceMsRaw)
+	: 60_000;
 
 type StoredEventBase = { id: number; from: string; at: string };
 
@@ -49,6 +54,7 @@ interface AgentState {
 	_msgTs: number;
 	ready: boolean;
 	taskCompleted: boolean;
+	hasParticipated: boolean;
 	_readyResolve?: () => void;
 	_readyReject?: (err: Error) => void;
 	_readyTimeout?: ReturnType<typeof setTimeout>;
@@ -74,6 +80,7 @@ export interface Room {
 	eventSeq: number;
 	promptDir: string;
 	workingDir?: string;
+	idleCompletionTimeout?: ReturnType<typeof setTimeout>;
 }
 
 const rooms = new Map<string, Room>();
@@ -159,10 +166,86 @@ export function determineRecipients(room: Room, fromAgent: string, text: string)
 	return Array.from(pool);
 }
 
+export function resolveMessageTargets(room: Room, fromAgent: string, text: string): string[] {
+	const recipients = determineRecipients(room, fromAgent, text);
+	if (recipients.length > 0) {
+		return recipients;
+	}
+
+	if (!room.facilitator) {
+		return [];
+	}
+	if (room.facilitator === fromAgent) {
+		return [];
+	}
+	if (!room.agents.has(room.facilitator)) {
+		return [];
+	}
+	return [room.facilitator];
+}
+
+export function shouldCheckCompletionAfterTaskMarker(room: Room, fromAgent: string, text: string): boolean {
+	const targets = resolveMessageTargets(room, fromAgent, text);
+	if (targets.length === 0) {
+		return true;
+	}
+	return targets.every((targetName) => room.agents.get(targetName)?.taskCompleted === true);
+}
+
+function allActiveAgentsCompleted(room: Room): boolean {
+	const activeAgents = Array.from(room.agents.values()).filter((a) => a.hasParticipated);
+	return activeAgents.length > 0 && activeAgents.every((a) => a.taskCompleted);
+}
+
+function areAllAgentsIdle(room: Room): boolean {
+	return room.agents.size > 0 && Array.from(room.agents.values()).every((a) => a.status === "idle");
+}
+
+function clearIdleCompletionTimeout(room: Room): void {
+	if (!room.idleCompletionTimeout) return;
+	clearTimeout(room.idleCompletionTimeout);
+	room.idleCompletionTimeout = undefined;
+}
+
+function scheduleIdleCompletionTimeout(room: Room): void {
+	if (room.status !== "running") return;
+	if (!areAllAgentsIdle(room)) {
+		clearIdleCompletionTimeout(room);
+		return;
+	}
+	if (room.idleCompletionTimeout) return;
+
+	room.idleCompletionTimeout = setTimeout(() => {
+		room.idleCompletionTimeout = undefined;
+		const current = rooms.get(room.id);
+		if (!current) return;
+		if (current.status !== "running") return;
+		if (!areAllAgentsIdle(current)) return;
+		completeRoom(current.id);
+	}, IDLE_COMPLETION_GRACE_MS);
+}
+
+function handleTaskCompletionMarker(room: Room, fromAgent: string, text: string): void {
+	const agent = room.agents.get(fromAgent);
+	if (!agent) return;
+
+	agent.taskCompleted = true;
+	agent.hasParticipated = true;
+
+	if (!shouldCheckCompletionAfterTaskMarker(room, fromAgent, text)) {
+		return;
+	}
+
+	if (allActiveAgentsCompleted(room)) {
+		completeRoom(room.id);
+	}
+}
+
 export function routeMessageToAgents(room: Room, fromAgent: string, text: string): void {
 	const recipients = determineRecipients(room, fromAgent, text);
 
 	if (recipients.length > 0) {
+		clearIdleCompletionTimeout(room);
 		const formattedMessage = `[${fromAgent}]: ${text}`;
 		for (const recipientName of recipients) {
 			const agent = room.agents.get(recipientName);
@@ -198,6 +281,7 @@ export function routeMessageToAgents(room: Room, fromAgent: string, text: string
 		return;
 	}
 
+	clearIdleCompletionTimeout(room);
 	const wrappedMessage = `[SYSTEM_ROUTING_FAILURE]\n**Original Sender:** ${fromAgent}\n**Status:** This message reached no one because no attention tags were used and no static routes exist.\n**Content:**\n> ---\n${text}`;
 	sendToAgent(facilitatorAgent, {
 		type: facilitatorAgent.isStreaming ? "follow_up" : "prompt",
@@ -350,6 +434,7 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 		eventSeq: 0,
 		promptDir,
 		workingDir,
+		idleCompletionTimeout: undefined,
 	};
 
 	for (const [name, role] of Object.entries(protocol.team)) {
@@ -373,6 +458,7 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 			_msgTs: 0,
 			ready: false,
 			taskCompleted: false,
+			hasParticipated: false,
 		};
 
 		proc.on("exit", (code) => {
@@ -518,12 +604,8 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 							messageText = agent._textBuf;
 							agent._textBuf = "";
 						}
-						if (messageText.includes("[@TASK: VIPER-RTB]")) {
-							agent.taskCompleted = true;
-							const allDone = Array.from(room.agents.values()).every((a) => a.taskCompleted);
-							if (allDone) {
-								completeRoom(room.id);
-							}
+						if (messageText.includes(TASK_COMPLETION_MARKER)) {
+							handleTaskCompletionMarker(room, name, messageText);
 						}
 					}
 					break;
@@ -566,11 +648,14 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 				case "agent_start":
 					agent.isStreaming = true;
 					agent.status = "streaming";
+					agent.hasParticipated = true;
 					room.status = "running";
+					clearIdleCompletionTimeout(room);
 					break;
 				case "agent_end":
 					agent.isStreaming = false;
 					agent.status = "idle";
+					scheduleIdleCompletionTimeout(room);
 					break;
 				case "response":
 					if (event.command === "get_state" && event.success && !agent.ready) {
@@ -590,7 +675,7 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 			broadcast(room, { from: name, ...event });
 
 			// ── Inter-agent routing ───────────────────────────────────────────────
-			if (type === "message_end" && messageText) {
+			if (type === "message_end" && messageText && room.status !== "completed" && room.status !== "error") {
 				routeMessageToAgents(room, name, messageText);
 			}
 		});
@@ -608,6 +693,7 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 	await waitForAllAgentsReady(room);
 
 	if (protocol.instructions) {
+		clearIdleCompletionTimeout(room);
 		for (const [agentName, message] of Object.entries(protocol.instructions)) {
 			const agent = room.agents.get(agentName);
 			if (agent) {
@@ -753,6 +839,7 @@ export async function sendInstructions(
 		throw new Error(`Agent ${targetAgent} not found in room`);
 	}
 
+	clearIdleCompletionTimeout(room);
 	for (const message of followUp) {
 		sendToAgent(agent, {
 			type: agent.isStreaming ? "follow_up" : "prompt",
@@ -775,6 +862,7 @@ export function destroyRoom(id: string, reason = "manual"): void {
 	}
 
 	if (room.expireTimeout) clearTimeout(room.expireTimeout);
+	clearIdleCompletionTimeout(room);
 
 	for (const agent of room.agents.values()) {
 		try {
@@ -812,6 +900,7 @@ export function completeRoom(id: string): void {
 	const room = rooms.get(id);
 	if (!room) return;
 	if (room.status === "completed" || room.status === "error") return;
+	clearIdleCompletionTimeout(room);
 
 	for (const agent of room.agents.values()) {
 		try {

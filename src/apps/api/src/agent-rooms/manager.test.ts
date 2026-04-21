@@ -13,6 +13,8 @@ import {
 	destroyRoom,
 	buildPiArgs,
 	determineRecipients,
+	resolveMessageTargets,
+	shouldCheckCompletionAfterTaskMarker,
 	routeMessageToAgents,
 	type Room,
 } from './manager.js';
@@ -563,6 +565,76 @@ describe('agent-rooms manager', () => {
 				{ name: 'beta', role: 'Dev' },
 			]);
 			expect(determineRecipients(room, 'alpha', '@attn:QA hello')).toEqual([]);
+		});
+	});
+
+	describe('completion flow helpers', () => {
+		function makeRoom(
+			routingStrategy: 'broadcast' | 'explicit',
+			agents: Array<{ name: string; role: string; taskCompleted?: boolean }>,
+			routes?: Record<string, string[]>,
+			facilitator?: string,
+		): Room {
+			return {
+				id: 'test',
+				status: 'running',
+				agents: new Map(agents.map((a) => [a.name, {
+					name: a.name,
+					role: a.role,
+					taskCompleted: Boolean(a.taskCompleted),
+				} as any])),
+				sseClients: new Set(),
+				createdAt: Date.now(),
+				lastActivityAt: Date.now(),
+				protocolBody: '',
+				routingStrategy,
+				routes,
+				facilitator,
+				events: [],
+				eventSeq: 0,
+				promptDir: '',
+			} as Room;
+		}
+
+		it('resolveMessageTargets returns explicit recipients first', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'fac', role: 'Lead' },
+			], { alpha: ['beta'] }, 'fac');
+			expect(resolveMessageTargets(room, 'alpha', 'hello')).toEqual(['beta']);
+		});
+
+		it('resolveMessageTargets falls back to facilitator when no recipients', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'fac', role: 'Lead' },
+			], undefined, 'fac');
+			expect(resolveMessageTargets(room, 'alpha', 'hello')).toEqual(['fac']);
+		});
+
+		it('shouldCheckCompletionAfterTaskMarker is false when routing to incomplete target', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead', taskCompleted: true },
+				{ name: 'beta', role: 'Dev', taskCompleted: false },
+			], { alpha: ['beta'] });
+			expect(shouldCheckCompletionAfterTaskMarker(room, 'alpha', 'done')).toBe(false);
+		});
+
+		it('shouldCheckCompletionAfterTaskMarker is true when all targets already completed', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead', taskCompleted: true },
+				{ name: 'beta', role: 'Dev', taskCompleted: true },
+			], { alpha: ['beta'] });
+			expect(shouldCheckCompletionAfterTaskMarker(room, 'alpha', 'done')).toBe(true);
+		});
+
+		it('shouldCheckCompletionAfterTaskMarker is true when there are no targets', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead', taskCompleted: true },
+				{ name: 'beta', role: 'Dev', taskCompleted: false },
+			]);
+			expect(shouldCheckCompletionAfterTaskMarker(room, 'alpha', 'done')).toBe(true);
 		});
 	});
 
