@@ -3,6 +3,7 @@ description: Orchestrates the Full-Stack Nuxt/Fastify development team by parsin
 mode: primary
 model: kimi-coding/kimi-for-coding
 temperature: 0.1
+execution: session
 ---
 
 # (FS) Team Lead — Orchestrator & Router

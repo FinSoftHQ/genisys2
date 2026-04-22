@@ -139,7 +139,7 @@ describe('agent-rooms manager', () => {
 		});
 
 		it('always appends body prompt', () => {
-			const args = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
 				'--append-system-prompt', bodyPromptPath,
@@ -153,7 +153,7 @@ describe('agent-rooms manager', () => {
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 			writeFileSync(join(tailorDir, 'working_protocol.md'), 'Work hard.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
 				'--append-system-prompt', bodyPromptPath,
@@ -168,7 +168,7 @@ describe('agent-rooms manager', () => {
 			mkdirSync(agentsDir, { recursive: true });
 			writeFileSync(join(agentsDir, 'Lead.md'), 'You are a lead.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain(join(tailorDir, 'agents', 'Lead.md'));
 			expect(warnSpy).not.toHaveBeenCalled();
 		});
@@ -180,7 +180,7 @@ describe('agent-rooms manager', () => {
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 			writeFileSync(join(agentsDir, 'Lead.md'), 'You are a lead.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain(join(tailorDir, 'agents', 'alpha.md'));
 			expect(args).not.toContain(join(tailorDir, 'agents', 'Lead.md'));
 		});
@@ -195,7 +195,7 @@ describe('agent-rooms manager', () => {
 				'utf-8',
 			);
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain('--model');
 			expect(args).toContain('gpt-4o');
 			const tempPromptPath = join(roomPromptDir, 'alpha.prompt');
@@ -209,7 +209,7 @@ describe('agent-rooms manager', () => {
 			mkdirSync(agentsDir, { recursive: true });
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain(join(tailorDir, 'agents', 'alpha.md'));
 			expect(args).not.toContain(join(roomPromptDir, 'alpha.prompt'));
 		});
@@ -225,7 +225,7 @@ describe('agent-rooms manager', () => {
 				'utf-8',
 			);
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			const tempPromptPath = join(roomPromptDir, 'working_protocol.prompt');
 			expect(existsSync(tempPromptPath)).toBe(true);
 			expect(args).toContain(tempPromptPath);
@@ -239,7 +239,7 @@ describe('agent-rooms manager', () => {
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 			writeFileSync(join(tailorDir, 'working_protocol.md'), 'Shared protocol body.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain(join(tailorDir, 'working_protocol.md'));
 			expect(args).not.toContain(join(roomPromptDir, 'working_protocol.prompt'));
 		});
@@ -248,7 +248,7 @@ describe('agent-rooms manager', () => {
 			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
 			writeFileSync(join(tailorDir, 'working_protocol.md'), 'Work hard.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
 				'--append-system-prompt', bodyPromptPath,
@@ -263,7 +263,7 @@ describe('agent-rooms manager', () => {
 		it('warns when both agent prompt and working_protocol are missing', () => {
 			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
 				'--append-system-prompt', bodyPromptPath,
@@ -274,6 +274,55 @@ describe('agent-rooms manager', () => {
 			);
 		});
 
+		it('defaults executionMode to session when no execution field in agent file', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
+
+			const { executionMode } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('session');
+		});
+
+		it('resolves executionMode to session from explicit front matter', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), '---\nexecution: session\n---\n\nYou are alpha.', 'utf-8');
+
+			const { executionMode } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('session');
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('resolves executionMode to single-shot from front matter', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), '---\nexecution: single-shot\n---\n\nYou are alpha.', 'utf-8');
+
+			const { executionMode } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('single-shot');
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('warns for unknown execution value and falls back to session', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), '---\nexecution: turbo\n---\n\nYou are alpha.', 'utf-8');
+
+			const { executionMode } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('session');
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('"turbo"'));
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('alpha'));
+		});
+
+		it('defaults executionMode to session when no tailorShop is provided', () => {
+			const { executionMode } = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('session');
+		});
+
 		it('resolves relative tailorShop against workingDir when provided', () => {
 			const baseDir = mkdtempSync(join(tmpdir(), 'base-test-'));
 			tailorDir = join(baseDir, 'prompts');
@@ -281,9 +330,41 @@ describe('agent-rooms manager', () => {
 			mkdirSync(agentsDir, { recursive: true });
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', './prompts', bodyPromptPath, roomPromptDir, baseDir);
+			const { args } = buildPiArgs('alpha', 'Lead', './prompts', bodyPromptPath, roomPromptDir, baseDir);
 			expect(args).toContain(join(tailorDir, 'agents', 'alpha.md'));
 		});
+	});
+
+	it('creates single-shot agents as dormant and session agents as spawned at room creation', async () => {
+		const tailorDir = mkdtempSync(join(tmpdir(), 'tailor-exec-'));
+		const agentsDir = join(tailorDir, 'agents');
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, 'alpha.md'),
+			'---\nexecution: session\n---\n\nYou are alpha.',
+			'utf-8',
+		);
+		writeFileSync(
+			join(agentsDir, 'beta.md'),
+			'---\nexecution: single-shot\n---\n\nYou are beta.',
+			'utf-8',
+		);
+
+		const markdown = `---\nteam:\n  alpha: Lead\n  beta: Reviewer\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
+		const result = await createRoomFromMarkdown(markdown);
+		const room = getRoom(result.roomId)!;
+
+		const alpha = room.agents.get('alpha')!;
+		const beta = room.agents.get('beta')!;
+
+		expect(alpha.executionMode).toBe('session');
+		expect(alpha.proc).not.toBeNull();
+
+		expect(beta.executionMode).toBe('single-shot');
+		expect(beta.proc).toBeNull();
+
+		destroyRoom(result.roomId);
+		rmSync(tailorDir, { recursive: true, force: true });
 	});
 
 	describe('instructions front-matter', () => {
