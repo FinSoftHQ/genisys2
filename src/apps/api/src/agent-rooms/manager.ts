@@ -374,7 +374,16 @@ export function buildPiArgs(
 	const args = ["--mode", "rpc", "--no-session"];
 	let executionMode: ExecutionMode = "session";
 
-	// 1. Protocol body as system prompt
+	// 1. Agent identity notification as first system prompt
+	const identityPromptPath = join(roomPromptDir, `${agentName}.identity.prompt`);
+	writeFileSync(
+		identityPromptPath,
+		`[SYSTEM IDENTITY NOTIFICATION] You are ${agentName}, the ${role}.\n\n`,
+		"utf-8",
+	);
+	args.push("--append-system-prompt", identityPromptPath);
+
+	// 2. Protocol body as system prompt
 	args.push("--append-system-prompt", bodyPromptPath);
 
 	if (tailorShop) {
@@ -383,7 +392,7 @@ export function buildPiArgs(
 			? tailorShop
 			: resolve(workingDir ?? process.cwd(), tailorShop);
 
-		// 2. Agent-specific prompt file: name first, then role fallback
+		// 3. Agent-specific prompt file: name first, then role fallback
 		const namePath = join(resolvedTailorShop, "agents", `${agentName}.md`);
 		const rolePath = join(resolvedTailorShop, "agents", `${role}.md`);
 
@@ -426,7 +435,7 @@ export function buildPiArgs(
 			console.warn("[agent-rooms] tailor_shop agent prompt not found:", namePath);
 		}
 
-		// 3. Optional shared working protocol
+		// 4. Optional shared working protocol
 		const workingPath = join(resolvedTailorShop, "working_protocol.md");
 		if (existsSync(workingPath)) {
 			const workingContent = readFileSync(workingPath, "utf-8");

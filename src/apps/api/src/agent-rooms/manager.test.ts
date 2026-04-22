@@ -138,15 +138,16 @@ describe('agent-rooms manager', () => {
 			}
 		});
 
-		it('always appends body prompt', () => {
+		it('always appends identity and body prompts', () => {
 			const { args } = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 			]);
 		});
 
-		it('appends agent role prompt and working_protocol when both exist', () => {
+		it('appends identity, agent role prompt, and working_protocol when both exist', () => {
 			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
 			const agentsDir = join(tailorDir, 'agents');
 			mkdirSync(agentsDir, { recursive: true });
@@ -156,6 +157,7 @@ describe('agent-rooms manager', () => {
 			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 				'--append-system-prompt', join(tailorDir, 'agents', 'alpha.md'),
 				'--append-system-prompt', join(tailorDir, 'working_protocol.md'),
@@ -251,6 +253,7 @@ describe('agent-rooms manager', () => {
 			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 				'--append-system-prompt', join(tailorDir, 'working_protocol.md'),
 			]);
@@ -266,6 +269,7 @@ describe('agent-rooms manager', () => {
 			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 			]);
 			expect(warnSpy).toHaveBeenCalledWith(
