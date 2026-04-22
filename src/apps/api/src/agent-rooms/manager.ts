@@ -467,8 +467,12 @@ function attachAgentEventHandlers(room: Room, agent: AgentState): void {
 	const name = agent.name;
 
 	proc.on("exit", (code) => {
-		if (agent.executionMode === "single-shot" && code === null) {
-			agent.proc = null;
+		// agent.proc !== proc means terminateSingleShotAgent already set agent.proc = null
+		// (or a re-spawn replaced it) before calling kill(). The old process exiting is
+		// expected — do NOT treat it as an error regardless of exit code.
+		// NOTE: pi's RPC SIGTERM handler calls process.exit(143), so code is 143 (not null).
+		// Checking code === null would always miss and fall through to the error branch.
+		if (agent.executionMode === "single-shot" && agent.proc !== proc) {
 			return;
 		}
 
@@ -718,17 +722,22 @@ async function spawnAndSendToSingleShot(
 
 function terminateSingleShotAgent(agent: AgentState): void {
 	if (!agent.proc) return;
-	try {
-		sendToAgent(agent, { type: "abort" });
-		agent.proc.stdin!.end();
-		agent.proc.kill("SIGTERM");
-	} catch {
-		// ignore — process may have already exited
-	}
+	// Capture and null agent.proc BEFORE calling kill().
+	// The exit handler uses `agent.proc !== proc` to detect deliberate termination.
+	// Setting agent.proc = null first ensures the check works whether the exit event
+	// fires synchronously (in tests) or asynchronously (in production with a real proc).
+	const procToKill = agent.proc;
 	agent.proc = null;
 	agent.isStreaming = false;
 	agent.status = "idle";
 	agent.ready = false;
+	try {
+		procToKill.stdin!.write(`${JSON.stringify({ type: "abort" })}\n`);
+		procToKill.stdin!.end();
+		procToKill.kill("SIGTERM");
+	} catch {
+		// ignore — process may have already exited
+	}
 }
 
 export async function createRoom(protocol: Protocol): Promise<{ roomId: string }> {

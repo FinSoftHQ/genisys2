@@ -37,7 +37,12 @@ class FakeProc extends EventEmitter {
 	}
 
 	kill(_signal?: string): boolean {
-		this.emit('exit', null);
+		// Mirrors pi's real RPC behaviour: pi registers its own SIGTERM handler and calls
+		// process.exit(143), so the parent sees code=143, signal=null — NOT code=null.
+		// Using queueMicrotask also mirrors the async nature of a real process exit.
+		queueMicrotask(() => {
+			this.emit('exit', 143, null);
+		});
 		return true;
 	}
 }
@@ -118,7 +123,14 @@ describe('single-shot lifecycle', () => {
 			message: { role: 'assistant' },
 		});
 
+		// terminateSingleShotAgent should have fired: proc nulled, status idle.
+		// CRITICAL: room must NOT be put into error state — this was the bug where
+		// pi's process.exit(143) (from its SIGTERM handler) caused code=143 to fall
+		// through the old `code === null` guard and erroneously mark room.status = 'error'.
+		await waitFor(() => room.agents.get('beta')!.proc === null);
 		expect(room.agents.get('beta')!.proc).toBeNull();
+		expect(room.status).not.toBe('error');
+		expect(room.agents.get('beta')!.status).toBe('idle');
 
 		routeMessageToAgents(room, 'alpha', 'Second review task');
 		await waitFor(() => room.agents.get('beta')!.proc !== null);
