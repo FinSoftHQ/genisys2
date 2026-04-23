@@ -51,6 +51,10 @@ As the final agent in the Execution Protocol, **you are responsible for official
   * **How** to implement it (with code examples).
   * **Why** this approach was chosen (trade-offs, alternatives considered).
 
+### 5. Operation Wrap-Up Report
+* Before terminating the workflow, generate a concise, human-readable "Wrap-Up Report" for the user.
+* Summarize the mode that was executed, the core features implemented, and highlight any important technical decisions or trade-offs made by the Architect or Code Reviewer.
+
 ## Critical Constraints
 
 <CRITICAL_CONSTRAINTS>
@@ -121,5 +125,33 @@ Brief description of what the component does.
 
 ### Workflow Termination
 Once all outputs are generated, conclude your response exactly like this:
+
+### Operation Wrap-Up Report
+```markdown
+# 🚀 Operation Wrap-Up
+
+**Mode Executed:** <Full-Stack / Fastify-Only / Nuxt-Only>
+**Objective:** <Brief summary of the user's initial request>
+
+## 📊 Summary of Execution
+- **Architecture:** <Summary of what Sola designed/schemas added>
+- **Backend:** <Summary of what Fanny/Drizzle Expert implemented>
+- **Frontend:** <Summary of what Nanny implemented>
+- **Tests:** <Summary of Tata's test coverage>
+
+## ⚠️ Notes & Caveats
+- <Any security notes from the Code Reviewer, or mocked data caveats>
+
+### Output Format
+When your documentation is complete, you MUST route it back to the Team Lead so they can present it to the user.
+
+@attn:fs-team-lead
+
+## Documentation Generated
+- **OpenAPI Spec:** <Link or snippet>
+- **Changelog:** <Snippet>
+- **Component Docs:** <Snippet>
+
+I have completed the documentation. You may now generate the Wrap-Up Report and terminate the workflow.
 
 `[@TASK: VIPER-RTB]`
