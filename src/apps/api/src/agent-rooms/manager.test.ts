@@ -92,7 +92,13 @@ describe('agent-rooms manager', () => {
 		const room = getRoom(roomId);
 		expect(room).toBeDefined();
 		expect(room!.status).toBe('completed');
-		expect(getRoomEvents(room!).events.length).toBeGreaterThanOrEqual(0);
+		const events = getRoomEvents(room!).events;
+		expect(events.length).toBeGreaterThanOrEqual(1);
+		expect(events[events.length - 1]).toMatchObject({
+			type: 'room_closed',
+			from: 'system',
+			reason: 'completed',
+		});
 		destroyRoom(roomId);
 		expect(getRoom(roomId)).toBeUndefined();
 	});
@@ -105,6 +111,62 @@ describe('agent-rooms manager', () => {
 		expect(existsSync(promptDir)).toBe(false);
 		expect(getRoom(roomId)).toBeDefined();
 		destroyRoom(roomId);
+	});
+
+	it('sends callback with x-signature when room completes', async () => {
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response(null, { status: 204 }));
+
+		const markdown = `---\nteam:\n  alpha: Lead\n---\n\nComplete this task.\n`;
+		const result = await createRoomFromMarkdown(markdown, {
+			callbackUrl: 'https://example.com/room-hook',
+			callbackSecret: 'top-secret',
+		});
+
+		completeRoom(result.roomId);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe('https://example.com/room-hook');
+		const payload = JSON.parse(String(init.body)) as Record<string, string>;
+		expect(payload.type).toBe('room_closed');
+		expect(payload.roomId).toBe(result.roomId);
+		expect(payload.reason).toBe('completed');
+		const headers = init.headers as Record<string, string>;
+		expect(headers['x-signature']).toBeTypeOf('string');
+		expect(headers['x-signature'].length).toBeGreaterThan(0);
+
+		destroyRoom(result.roomId);
+		fetchSpy.mockRestore();
+	});
+
+	it('sends callback for manual and expired destroys', async () => {
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response(null, { status: 204 }));
+		const markdown = `---\nteam:\n  alpha: Lead\n---\n\nDo work.\n`;
+
+		const manual = await createRoomFromMarkdown(markdown, {
+			callbackUrl: 'https://example.com/room-hook',
+		});
+		destroyRoom(manual.roomId, 'manual');
+
+		const expired = await createRoomFromMarkdown(markdown, {
+			callbackUrl: 'https://example.com/room-hook',
+		});
+		destroyRoom(expired.roomId, 'expired');
+
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		const reasons = fetchSpy.mock.calls.map(([, init]) => {
+			const payload = JSON.parse(String((init as RequestInit).body)) as Record<string, string>;
+			return payload.reason;
+		});
+		expect(reasons).toEqual(expect.arrayContaining(['manual', 'expired']));
+		fetchSpy.mockRestore();
 	});
 
 	describe('buildPiArgs', () => {

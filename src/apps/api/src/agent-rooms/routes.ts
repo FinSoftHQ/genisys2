@@ -17,6 +17,13 @@ const InstructionsBodySchema = z.object({
 	followUp: z.array(z.string().min(1)).min(1),
 });
 
+function normalizeHeader(value: string | string[] | undefined): string | undefined {
+	if (Array.isArray(value)) {
+		return value[0]?.trim() || undefined;
+	}
+	return value?.trim() || undefined;
+}
+
 export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> {
 	instance.addContentTypeParser(
 		"text/markdown",
@@ -52,7 +59,24 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		}
 
 		const markdown = request.body as string;
-		const result = await createRoomFromMarkdown(markdown);
+		const callbackUrl = normalizeHeader(request.headers["x-room-callback-url"]);
+		const callbackSecret = normalizeHeader(request.headers["x-room-callback-secret"]);
+
+		if (callbackSecret && !callbackUrl) {
+			return reply.status(400).send({ error: "x-room-callback-secret requires x-room-callback-url" });
+		}
+		if (callbackUrl) {
+			try {
+				const parsed = new URL(callbackUrl);
+				if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+					return reply.status(400).send({ error: "x-room-callback-url must be http or https" });
+				}
+			} catch {
+				return reply.status(400).send({ error: "Invalid x-room-callback-url" });
+			}
+		}
+
+		const result = await createRoomFromMarkdown(markdown, { callbackUrl, callbackSecret });
 		return reply.status(201).send({ roomId: result.roomId, status: "initialized" });
 	});
 

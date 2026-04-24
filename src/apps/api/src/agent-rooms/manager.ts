@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from "child_process";
+import { createHmac } from "crypto";
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve, isAbsolute } from "path";
@@ -34,13 +35,20 @@ export type StoredEvent =
 	| (StoredEventBase & { type: "retry_end"; success: boolean; attempt: number; finalError?: string })
 	| (StoredEventBase & { type: "agent_start" })
 	| (StoredEventBase & { type: "agent_end" })
-	| (StoredEventBase & { type: "room_error"; reason: string });
+	| (StoredEventBase & { type: "room_error"; reason: string })
+	| (StoredEventBase & { type: "room_closed"; reason: "completed" });
 
 // Distributive Omit so pushEvent accepts each union member without the id field.
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type StoredEventInput = DistributiveOmit<StoredEvent, "id">;
 
 type ExecutionMode = "session" | "single-shot";
+type RoomCloseReason = "completed" | "manual" | "expired";
+
+export interface RoomCreateOptions {
+	callbackUrl?: string;
+	callbackSecret?: string;
+}
 
 interface AgentState {
 	proc: ChildProcess | null;
@@ -85,6 +93,8 @@ export interface Room {
 	promptDir: string;
 	workingDir?: string;
 	idleCompletionTimeout?: ReturnType<typeof setTimeout>;
+	callbackUrl?: string;
+	callbackSecret?: string;
 }
 
 const rooms = new Map<string, Room>();
@@ -134,6 +144,50 @@ function sendToAgent(agent: AgentState, cmd: object): void {
 		return;
 	}
 	agent.proc.stdin!.write(`${JSON.stringify(cmd)}\n`);
+}
+
+function computeCallbackSignature(payload: string, secret: string): string {
+	return createHmac("sha256", secret).update(payload).digest("hex");
+}
+
+async function notifyRoomClosedCallback(
+	room: Room,
+	reason: RoomCloseReason,
+	at: string,
+): Promise<void> {
+	if (!room.callbackUrl) return;
+
+	const payload = JSON.stringify({
+		type: "room_closed",
+		roomId: room.id,
+		reason,
+		at,
+	});
+	const headers: Record<string, string> = {
+		"content-type": "application/json",
+	};
+	if (room.callbackSecret) {
+		headers["x-signature"] = computeCallbackSignature(payload, room.callbackSecret);
+	}
+
+	try {
+		const response = await fetch(room.callbackUrl, {
+			method: "POST",
+			headers,
+			body: payload,
+			signal: AbortSignal.timeout(5000),
+		});
+		if (!response.ok) {
+			console.warn(
+				`[agent-rooms] callback failed for room ${room.id}: ${response.status} ${response.statusText}`,
+			);
+			return;
+		}
+		console.info(`[agent-rooms] callback delivered for room ${room.id} (${reason})`);
+	} catch (err: unknown) {
+		const message = err instanceof Error ? err.message : String(err);
+		console.warn(`[agent-rooms] callback failed for room ${room.id}: ${message}`);
+	}
 }
 
 export function determineRecipients(room: Room, fromAgent: string, text: string): string[] {
@@ -314,7 +368,10 @@ export function routeMessageToAgents(room: Room, fromAgent: string, text: string
 	});
 }
 
-export async function createRoomFromMarkdown(markdown: string): Promise<{ roomId: string }> {
+export async function createRoomFromMarkdown(
+	markdown: string,
+	options?: RoomCreateOptions,
+): Promise<{ roomId: string }> {
 	const dir = mkdtempSync(join(tmpdir(), "piroom-"));
 	const filePath = join(dir, "protocol.md");
 	writeFileSync(filePath, markdown, "utf-8");
@@ -353,7 +410,7 @@ export async function createRoomFromMarkdown(markdown: string): Promise<{ roomId
 			throw new Error("No team members found in front matter or working_protocol.md defaults");
 		}
 
-		return await createRoom(protocol);
+		return await createRoom(protocol, options);
 	} finally {
 		try {
 			rmSync(dir, { recursive: true, force: true });
@@ -749,7 +806,10 @@ function terminateSingleShotAgent(agent: AgentState): void {
 	}
 }
 
-export async function createRoom(protocol: Protocol): Promise<{ roomId: string }> {
+export async function createRoom(
+	protocol: Protocol,
+	options?: RoomCreateOptions,
+): Promise<{ roomId: string }> {
 	const id = generateId();
 	const promptDir = mkdtempSync(join(tmpdir(), `piroom-${id}-`));
 	const bodyPromptPath = join(promptDir, "body.prompt");
@@ -776,6 +836,8 @@ export async function createRoom(protocol: Protocol): Promise<{ roomId: string }
 		promptDir,
 		workingDir,
 		idleCompletionTimeout: undefined,
+		callbackUrl: options?.callbackUrl,
+		callbackSecret: options?.callbackSecret,
 	};
 
 	for (const [name, role] of Object.entries(protocol.team)) {
@@ -977,7 +1039,7 @@ export async function sendInstructions(
 	return { queuedItems: followUp.length };
 }
 
-export function destroyRoom(id: string, reason = "manual"): void {
+export function destroyRoom(id: string, reason: Exclude<RoomCloseReason, "completed"> = "manual"): void {
 	const room = rooms.get(id);
 	if (!room) return;
 
@@ -989,6 +1051,9 @@ export function destroyRoom(id: string, reason = "manual"): void {
 
 	if (room.expireTimeout) clearTimeout(room.expireTimeout);
 	clearIdleCompletionTimeout(room);
+
+	const closedAt = new Date().toISOString();
+	void notifyRoomClosedCallback(room, reason, closedAt);
 
 	for (const agent of room.agents.values()) {
 		if (!agent.proc) continue;
@@ -1012,6 +1077,7 @@ export function destroyRoom(id: string, reason = "manual"): void {
 		}
 	}
 
+	console.info(`[agent-rooms] room closed: ${room.id} (${reason})`);
 	room.sseClients.clear();
 	room.agents.clear();
 	rooms.delete(id);
@@ -1028,6 +1094,15 @@ export function completeRoom(id: string): void {
 	if (!room) return;
 	if (room.status === "completed" || room.status === "error") return;
 	clearIdleCompletionTimeout(room);
+
+	const closedAt = new Date().toISOString();
+	pushEvent(room, {
+		type: "room_closed",
+		from: "system",
+		at: closedAt,
+		reason: "completed",
+	});
+	void notifyRoomClosedCallback(room, "completed", closedAt);
 
 	for (const agent of room.agents.values()) {
 		if (!agent.proc) continue;
@@ -1051,6 +1126,7 @@ export function completeRoom(id: string): void {
 		}
 	}
 
+	console.info(`[agent-rooms] room completed: ${room.id}`);
 	room.sseClients.clear();
 	room.agents.clear();
 	room.status = "completed";
