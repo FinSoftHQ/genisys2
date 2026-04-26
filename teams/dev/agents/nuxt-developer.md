@@ -58,8 +58,8 @@ When you complete your implementation, format your response exactly like this to
 The UI components have been built according to the blueprint. The files are ready for the Test Engineer to write the component tests.
 
 ### Files Created/Modified
-- `src/apps/web/pages/<file>.vue`
-- `src/apps/web/components/<file>.vue`
+- `src/apps/web/app/pages/<file>.vue`
+- `src/apps/web/app/components/<file>.vue`
 
 ### Notes for Test Engineer
 - <Mention the specific Nuxt UI components used, e.g., "Used a <UForm> with a <UButton type='submit'>">

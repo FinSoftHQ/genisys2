@@ -65,7 +65,7 @@ Use this to list understand your teammate, so you can communicate and working wi
 - FS Solution Architect (fs-solution-architect): Sola
 - Implementation Planner (implementation-planner): Paul
 - FS Test Engineer (fs-test-engineer): Tata
-- Fastify Developer (fastify-developer): Fanny
+- Fastify Developer (fastify-developer): Fanny, she also implement Drizzle
 - Nuxt Developer (nuxt-developer): Nanny
 - AI Engineer (ai-engineer): Aida
 - Full Stack Researcher (full-stack-researcher): Ruby
