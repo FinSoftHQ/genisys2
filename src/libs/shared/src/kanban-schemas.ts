@@ -253,6 +253,12 @@ export const MoveCardResponseSchema = z
   })
   .strict();
 
+export const CreateBoardResponseSchema = z
+  .object({
+    data: z.object({ board: BoardEntitySchema }).strict(),
+  })
+  .strict();
+
 export type BoardPathParams = z.infer<typeof BoardPathParamsSchema>;
 export type CardPathParams = z.infer<typeof CardPathParamsSchema>;
 export type BoardEntity = z.infer<typeof BoardEntitySchema>;
@@ -268,4 +274,5 @@ export type UpdateCardRequest = z.infer<typeof UpdateCardRequestSchema>;
 export type UpdateCardResponse = z.infer<typeof UpdateCardResponseSchema>;
 export type MoveCardRequest = z.infer<typeof MoveCardRequestSchema>;
 export type MoveCardResponse = z.infer<typeof MoveCardResponseSchema>;
+export type CreateBoardResponse = z.infer<typeof CreateBoardResponseSchema>;
 export type ApiError = z.infer<typeof ApiErrorSchema>;
