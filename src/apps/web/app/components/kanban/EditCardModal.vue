@@ -2,6 +2,8 @@
 import { reactive, computed, watch, ref } from 'vue';
 import { z } from 'zod';
 import type { CardEntity, UpdateCardRequest, UpdateCardResponse } from '@repo/shared';
+import { useBoardStore } from '~/composables/useBoardStore';
+import { parseApiError, parseConflictError } from '~/utils/api-error';
 
 const props = defineProps<{
   open: boolean;
@@ -13,6 +15,8 @@ const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'updated'): void;
 }>();
+
+const { updateCard } = useBoardStore();
 
 const schema = z.object({
   title: z.string().min(1, 'Title is required').max(200, 'Max 200 characters'),
@@ -33,6 +37,7 @@ const isOpen = computed({
 
 const isSaving = ref(false);
 const errorMsg = ref('');
+const conflictServerCard = ref<CardEntity | null>(null);
 
 watch(
   () => props.card,
@@ -53,21 +58,37 @@ async function onSubmit() {
     await $fetch<UpdateCardResponse>(`/api/boards/${props.boardUid}/cards/${props.card.uid}`, {
       method: 'PATCH',
       body: {
+        version: props.card.version,
         title: state.title,
         description: state.description || null,
       } satisfies UpdateCardRequest,
     });
+    conflictServerCard.value = null;
     emit('updated');
     isOpen.value = false;
-  } catch (err: any) {
-    errorMsg.value = err?.data?.error?.message || 'Failed to update card';
+  } catch (err: unknown) {
+    const conflict = parseConflictError(err);
+    if (conflict) {
+      conflictServerCard.value = conflict.error.details.card;
+    } else {
+      const apiErr = parseApiError(err);
+      errorMsg.value = apiErr?.error.message || 'Failed to update card';
+    }
   } finally {
     isSaving.value = false;
   }
 }
 
+function onRefreshConflict() {
+  if (conflictServerCard.value) {
+    updateCard(conflictServerCard.value);
+  }
+  conflictServerCard.value = null;
+}
+
 function onClose() {
   errorMsg.value = '';
+  conflictServerCard.value = null;
   isOpen.value = false;
 }
 </script>
@@ -93,9 +114,22 @@ function onClose() {
           :title="errorMsg"
         />
 
+        <UAlert
+          v-if="conflictServerCard"
+          icon="i-lucide-alert-triangle"
+          color="error"
+          variant="soft"
+          class="mb-4"
+          title="Someone else edited this — refresh and retry"
+        >
+          <template #actions>
+            <UButton variant="outline" size="xs" @click="onRefreshConflict">Refresh</UButton>
+          </template>
+        </UAlert>
+
         <div class="flex justify-end gap-2">
           <UButton variant="ghost" @click="onClose">Cancel</UButton>
-          <UButton type="submit" :loading="isSaving">Save</UButton>
+          <UButton type="submit" :loading="isSaving" :disabled="!!conflictServerCard">Save</UButton>
         </div>
       </UForm>
     </template>

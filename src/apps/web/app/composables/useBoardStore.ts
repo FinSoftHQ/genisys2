@@ -119,6 +119,10 @@ export function useBoardStore() {
     store.value.ui.draggedCardId = cardId;
   }
 
+  function getCardById(cardId: string): CardEntity | undefined {
+    return store.value.cardsById.get(cardId);
+  }
+
   function getCardsForColumn(columnUid: string): CardEntity[] {
     const ids = store.value.columnCardIds.get(columnUid) ?? [];
     return ids.map((id) => store.value.cardsById.get(id)).filter(Boolean) as CardEntity[];
@@ -136,6 +140,7 @@ export function useBoardStore() {
     updateCard,
     moveCardLocal,
     setDraggedCardId,
+    getCardById,
     getCardsForColumn,
   };
 }

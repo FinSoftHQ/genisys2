@@ -5,6 +5,8 @@ import {
   CreateCardRequestSchema,
   UpdateCardRequestSchema,
   MoveCardRequestSchema,
+  SyncHookDispatchRequestSchema,
+  CanExitHookRequestSchema,
 } from '@repo/shared';
 import {
   getBoardById,
@@ -14,13 +16,15 @@ import {
   updateCard,
   moveCard,
   createBoard,
+  getProcessorById,
 } from './repository.js';
+import { dispatchSyncHook } from './hook-dispatcher.js';
 
 function callRepo<TArgs extends unknown[], TReturn>(
   fn: (instance: unknown, ...args: TArgs) => TReturn,
   ...args: TArgs
 ): TReturn {
-  return fn(undefined, ...args);
+  return fn({}, ...args);
 }
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
@@ -97,12 +101,27 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
     }
 
-    const card = await callRepo(updateCard, params.data.boardId, params.data.cardId, body.data);
-    if (!card) {
+    const currentCard = await callRepo(getCardById, params.data.boardId, params.data.cardId);
+    if (!currentCard) {
       return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
     }
 
-    return reply.status(200).send({ data: { card } });
+    const updatedCard = await callRepo(updateCard, params.data.boardId, params.data.cardId, body.data);
+    if (!updatedCard) {
+      const freshCard = await callRepo(getCardById, params.data.boardId, params.data.cardId);
+      return reply.status(409).send({
+        error: {
+          code: 'CONFLICT',
+          message: 'Card was modified by another user. Please refresh and retry.',
+          details: {
+            current_version: freshCard?.version ?? currentCard.version,
+            card: freshCard ?? currentCard,
+          },
+        },
+      });
+    }
+
+    return reply.status(200).send({ data: { card: updatedCard } });
   });
 
   instance.post('/:boardId/cards/:cardId/move', async (request, reply) => {
@@ -126,12 +145,69 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(400).send(errorResponse('INVALID_COLUMN', 'Invalid target column for this board'));
     }
 
+    const card = await callRepo(getCardById, params.data.boardId, params.data.cardId);
+    if (card) {
+      const currentColumn = board.schema.columns.find((c) => c.uid === card.current_status);
+      if (currentColumn) {
+        const processor = (getProcessorById ? callRepo(getProcessorById, currentColumn.processor_id) : undefined) ?? {
+          processor_id: currentColumn.processor_id,
+          name: 'Default Manual Processor',
+          base_url: 'http://localhost:4001',
+          health_endpoint: '/health',
+          hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+          sla_seconds: 300,
+          max_sla_seconds: 86400,
+          auth_type: 'none',
+          auth_config: null,
+          hmac_secret: 'dev-secret',
+          status: 'healthy',
+          last_health_check: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const dispatchRequest = SyncHookDispatchRequestSchema.parse({
+          hook: 'can-exit',
+          processor_id: currentColumn.processor_id,
+          timeout_ms: 3000,
+        });
+        const hookPayload = CanExitHookRequestSchema.parse({
+          card,
+          target_column: body.data.to_column_uid,
+          actor: 'system',
+        });
+
+        let hookResult;
+        try {
+          hookResult = await dispatchSyncHook(processor, dispatchRequest, hookPayload);
+        } catch (_err) {
+          return reply.status(409).send({
+            error: {
+              code: 'MOVE_BLOCKED',
+              message: 'Move blocked: processor unavailable',
+              details: { hook: 'can-exit' },
+            },
+          });
+        }
+
+        if (!hookResult.allowed) {
+          return reply.status(409).send({
+            error: {
+              code: 'MOVE_BLOCKED',
+              message: hookResult.message || 'Move blocked by processor',
+              details: { hook: 'can-exit' },
+            },
+          });
+        }
+      }
+    }
+
     try {
-      const card = await callRepo(moveCard, params.data.boardId, params.data.cardId, body.data.to_column_uid);
-      if (!card) {
+      const movedCard = await callRepo(moveCard, params.data.boardId, params.data.cardId, body.data.to_column_uid);
+      if (!movedCard) {
         return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
       }
-      return reply.status(200).send({ data: { card } });
+      return reply.status(200).send({ data: { card: movedCard } });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message === 'CARD_NOT_FOUND') {

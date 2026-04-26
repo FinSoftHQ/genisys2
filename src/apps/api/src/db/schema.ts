@@ -29,3 +29,20 @@ export const cards = sqliteTable('cards', {
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
 });
+
+export const processorRegistry = sqliteTable('processor_registry', {
+  processor_id: text('processor_id').primaryKey(),
+  name: text('name').notNull(),
+  base_url: text('base_url').notNull(),
+  health_endpoint: text('health_endpoint').notNull(),
+  hooks: text('hooks', { mode: 'json' }).notNull(),
+  sla_seconds: integer('sla_seconds').notNull(),
+  max_sla_seconds: integer('max_sla_seconds').notNull(),
+  auth_type: text('auth_type', { enum: ['bearer', 'oauth2', 'none'] }).notNull(),
+  auth_config: text('auth_config', { mode: 'json' }),
+  hmac_secret: text('hmac_secret').notNull(),
+  status: text('status', { enum: ['healthy', 'degraded', 'unhealthy', 'unknown'] }).notNull(),
+  last_health_check: text('last_health_check'),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});

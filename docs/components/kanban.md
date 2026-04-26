@@ -1,6 +1,6 @@
-# Kanban Components — Slice 1
+# Kanban Components — Slice 1 & 2
 
-> **Scope:** Slice 1 MVP — Board page, columns, cards, modals, drag-and-drop, and store.
+> **Scope:** Slice 1 MVP + Slice 2 "Safe Moves" — Board page, columns, cards, modals, drag-and-drop, optimistic locking, conflict banners, blocked-move toasts, and store.
 > **Status:** Implemented.
 
 ---
@@ -84,6 +84,7 @@ interface BoardStore {
 | `updateCard`          | `(card: CardEntity) => void`                                       | Updates `cardsById`; if `current_status` changed, moves between columns |
 | `moveCardLocal`       | `(cardId: string, toColumnUid: string) => void`                    | Optimistically moves a card to another column without API call         |
 | `setDraggedCardId`    | `(cardId: string \| null) => void`                                | Tracks the currently dragged card                                      |
+| `getCardById`         | `(cardId: string) => CardEntity \| undefined`                     | Returns a single card entity by UUID                                   |
 | `getCardsForColumn`   | `(columnUid: string) => CardEntity[]`                              | Returns card entities for a given column uid                           |
 
 ### Notes
@@ -113,13 +114,14 @@ Root layout component that renders the full board with all columns horizontally.
   4. On failure, calls `moveCardLocal(cardId, originalStatus)` to revert and sets `ui.error`.
 - Hosts `CreateCardModal` and `EditCardModal`.
 - After card creation or edit, calls `refreshSnapshot()` to reload the full board state.
+- **Blocked-move toast:** If the server rejects a move with `MOVE_BLOCKED`, a toast is shown via `useToast()` (color `error`, icon `i-lucide-ban`) and the optimistic local move is reverted so the card snaps back.
 
 ### Events (internal)
 | Handler          | Triggered by     | Action                                      |
 |------------------|------------------|---------------------------------------------|
 | `onCreateCard`   | BoardColumn      | Opens `CreateCardModal` for the column      |
 | `onEditCard`     | KanbanCard       | Opens `EditCardModal` with the card         |
-| `onDropCard`     | BoardColumn      | Orchestrates optimistic move + API + revert |
+| `onDropCard`     | BoardColumn      | Orchestrates optimistic move + API + revert; shows toast on `MOVE_BLOCKED` |
 
 ### API Calls
 | Method | Endpoint                                       | Purpose            |
@@ -255,14 +257,23 @@ Modal form for editing an existing card's title and description.
 - Uses `UModal` with title "Edit Card" and description showing the card's `display_id`.
 - Form fields pre-populated from `card` prop via `watch` with `{ immediate: true }`.
 - Client-side validation via Zod (same rules as CreateCardModal).
-- On submit, PATCHes to `/api/boards/{boardUid}/cards/{card.uid}` with `title` and `description`.
+- On submit, PATCHes to `/api/boards/{boardUid}/cards/{card.uid}` with `title`, `description`, and `version` (optimistic locking).
 - Emits `updated` and closes on success.
-- Shows error alert inline on failure.
+- Shows error alert inline on generic failures.
+- **Conflict banner:** On `409 CONFLICT`, displays a red `UAlert` with title "Someone else edited this — refresh and retry" and a **Refresh** button. Clicking Refresh pushes the server card into the store and clears the banner.
+- **Save button** is disabled while a conflict is active (`:disabled="!!conflictServerCard"`), preventing repeated overwrites.
 
 ### API Calls
 | Method | Endpoint                                       | Purpose       |
 |--------|------------------------------------------------|---------------|
 | PATCH  | `/api/boards/{boardUid}/cards/{cardId}`        | Update card   |
+
+### State (local)
+| Name                  | Type                  | Description                                      |
+|-----------------------|-----------------------|--------------------------------------------------|
+| `isSaving`            | `Ref<boolean>`        | Loading state during PATCH                       |
+| `errorMsg`            | `Ref<string>`         | Generic error message text                       |
+| `conflictServerCard`  | `Ref<CardEntity \| null>` | Authoritative card returned in a 409 conflict |
 
 ### Dependencies
 - `@repo/shared` — `UpdateCardRequest`, `UpdateCardResponse`, `CardEntity`

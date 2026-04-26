@@ -26,6 +26,8 @@ export type BoardId = z.infer<typeof BoardIdSchema>;
 export const CardIdSchema = z.string().uuid({ message: 'cardId must be a valid UUID' }).brand('CardId');
 export type CardId = z.infer<typeof CardIdSchema>;
 
+export const CardVersionSchema = z.number().int().min(1, { message: 'version must be a positive integer' });
+
 export const BoardPrefixSchema = z
   .string()
   .regex(/^[A-Z][A-Z0-9]{0,9}$/, {
@@ -50,6 +52,16 @@ export const ProcessorIdSchema = z
   .string()
   .min(1, { message: 'processor_id is required' })
   .max(120, { message: 'processor_id must be at most 120 characters' });
+
+export const ProcessorHookSchema = z.enum(['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit']);
+
+export const SyncHookSchema = z.enum(['on-update', 'can-exit']);
+
+export const SyncHookTimeoutMsSchema = z.literal(3000);
+
+export const ProcessorRegistryStatusSchema = z.enum(['healthy', 'degraded', 'unhealthy', 'unknown']);
+
+export const ProcessorRegistryAuthTypeSchema = z.enum(['bearer', 'oauth2', 'none']);
 
 export const BoardColumnTypeSchema = z.enum(['Normal', 'Processing']);
 
@@ -118,6 +130,30 @@ export const BoardPermissionsSchema = z
 
 export const IsoDateTimeSchema = z.string().datetime({ offset: true });
 
+export const ProcessorRegistryEntitySchema = z
+  .object({
+    processor_id: ProcessorIdSchema,
+    name: z.string().min(1).max(200),
+    base_url: z.string().url(),
+    health_endpoint: z.string().min(1).max(200).default('/health'),
+    hooks: z.array(ProcessorHookSchema).min(1),
+    sla_seconds: z.number().int().min(1).max(86400),
+    max_sla_seconds: z.number().int().min(1).max(86400),
+    auth_type: ProcessorRegistryAuthTypeSchema,
+    auth_config: z.record(z.string(), JsonValueSchema).nullable().optional(),
+    hmac_secret: z.string().min(1),
+    status: ProcessorRegistryStatusSchema,
+    last_health_check: IsoDateTimeSchema.nullable().optional(),
+    created_at: IsoDateTimeSchema,
+    updated_at: IsoDateTimeSchema,
+  })
+  .strict();
+
+export const DefaultAlwaysAllowProcessorSchema = ProcessorRegistryEntitySchema.extend({
+  processor_id: z.literal('default-manual'),
+  hooks: z.array(ProcessorHookSchema).default(['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit']),
+}).strict();
+
 export const BoardEntitySchema = z
   .object({
     uid: BoardIdSchema,
@@ -146,7 +182,7 @@ export const CardEntitySchema = z
     display_id: DisplayIdSchema,
     title: z.string().min(1).max(200),
     description: z.string().max(5000).nullable(),
-    version: z.number().int().min(1),
+    version: CardVersionSchema,
     processing_state: CardProcessingStateSchema,
     is_editable: z.boolean(),
     payload: CardPayloadSchema,
@@ -226,6 +262,7 @@ export const GetCardResponseSchema = z
 
 export const UpdateCardRequestSchema = z
   .object({
+    version: CardVersionSchema,
     title: CardTitleSchema.optional(),
     description: CardDescriptionSchema.optional(),
   })
@@ -238,6 +275,72 @@ export const UpdateCardRequestSchema = z
 export const UpdateCardResponseSchema = z
   .object({
     data: CardResponseDataSchema,
+  })
+  .strict();
+
+export const CardConflictResponseSchema = z
+  .object({
+    error: z
+      .object({
+        code: z.literal('CONFLICT'),
+        message: z.string().min(1),
+        details: z
+          .object({
+            current_version: CardVersionSchema,
+            card: CardEntitySchema,
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const CanExitHookRequestSchema = z
+  .object({
+    card: CardEntitySchema,
+    target_column: ColumnUidSchema,
+    actor: z.string().min(1).max(200),
+  })
+  .strict();
+
+export const CanExitHookResponseSchema = z
+  .object({
+    allowed: z.boolean(),
+    message: z.string().min(1).nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.allowed && !value.message) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['message'],
+        message: 'message is required when allowed is false',
+      });
+    }
+  });
+
+export const SyncHookDispatchRequestSchema = z
+  .object({
+    hook: SyncHookSchema,
+    processor_id: ProcessorIdSchema,
+    timeout_ms: SyncHookTimeoutMsSchema.default(3000),
+  })
+  .strict();
+
+export const MoveCardBlockedResponseSchema = z
+  .object({
+    error: z
+      .object({
+        code: z.literal('MOVE_BLOCKED'),
+        message: z.string().min(1),
+        details: z
+          .object({
+            hook: z.literal('can-exit'),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict(),
   })
   .strict();
 
@@ -264,6 +367,8 @@ export type CardPathParams = z.infer<typeof CardPathParamsSchema>;
 export type BoardEntity = z.infer<typeof BoardEntitySchema>;
 export type BoardSequenceEntity = z.infer<typeof BoardSequenceEntitySchema>;
 export type CardEntity = z.infer<typeof CardEntitySchema>;
+export type ProcessorRegistryEntity = z.infer<typeof ProcessorRegistryEntitySchema>;
+export type DefaultAlwaysAllowProcessor = z.infer<typeof DefaultAlwaysAllowProcessorSchema>;
 export type SnapshotData = z.infer<typeof SnapshotDataSchema>;
 export type SnapshotResponse = z.infer<typeof SnapshotResponseSchema>;
 export type CardResponseData = z.infer<typeof CardResponseDataSchema>;
@@ -272,6 +377,11 @@ export type CreateCardResponse = z.infer<typeof CreateCardResponseSchema>;
 export type GetCardResponse = z.infer<typeof GetCardResponseSchema>;
 export type UpdateCardRequest = z.infer<typeof UpdateCardRequestSchema>;
 export type UpdateCardResponse = z.infer<typeof UpdateCardResponseSchema>;
+export type CardConflictResponse = z.infer<typeof CardConflictResponseSchema>;
+export type CanExitHookRequest = z.infer<typeof CanExitHookRequestSchema>;
+export type CanExitHookResponse = z.infer<typeof CanExitHookResponseSchema>;
+export type SyncHookDispatchRequest = z.infer<typeof SyncHookDispatchRequestSchema>;
+export type MoveCardBlockedResponse = z.infer<typeof MoveCardBlockedResponseSchema>;
 export type MoveCardRequest = z.infer<typeof MoveCardRequestSchema>;
 export type MoveCardResponse = z.infer<typeof MoveCardResponseSchema>;
 export type CreateBoardResponse = z.infer<typeof CreateBoardResponseSchema>;

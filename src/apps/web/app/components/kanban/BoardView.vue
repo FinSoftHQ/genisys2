@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import type { CardEntity, SnapshotResponse, MoveCardRequest, MoveCardResponse } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
+import { parseApiError, parseMoveBlockedError } from '~/utils/api-error';
 import BoardColumn from './BoardColumn.vue';
 import CreateCardModal from './CreateCardModal.vue';
 import EditCardModal from './EditCardModal.vue';
@@ -18,14 +19,21 @@ const {
   updateCard,
   moveCardLocal,
   getCardsForColumn,
+  getCardById,
   hydrate,
 } = useBoardStore();
+
+const toast = useToast();
 
 const createModalOpen = ref(false);
 const createColumnUid = ref('');
 
 const editModalOpen = ref(false);
-const editingCard = ref<CardEntity | null>(null);
+const editingCardId = ref<string | null>(null);
+const editingCard = computed<CardEntity | null>(() => {
+  if (!editingCardId.value) return null;
+  return getCardById(editingCardId.value) ?? null;
+});
 
 function onCreateCard(columnUid: string) {
   createColumnUid.value = columnUid;
@@ -33,7 +41,7 @@ function onCreateCard(columnUid: string) {
 }
 
 function onEditCard(card: CardEntity) {
-  editingCard.value = card;
+  editingCardId.value = card.uid;
   editModalOpen.value = true;
 }
 
@@ -52,8 +60,20 @@ async function onDropCard({ cardId, toColumnUid }: { cardId: string; toColumnUid
       body: { to_column_uid: toColumnUid } satisfies MoveCardRequest,
     });
     updateCard(response.data.card);
-  } catch (err: any) {
-    setError(err?.data?.error?.message || 'Failed to move card');
+  } catch (err: unknown) {
+    const blocked = parseMoveBlockedError(err);
+    if (blocked) {
+      toast.add({
+        title: 'Move blocked',
+        description: blocked.error.message,
+        color: 'error',
+        icon: 'i-lucide-ban',
+      });
+    } else {
+      const apiErr = parseApiError(err);
+      setError(apiErr?.error.message || 'Failed to move card');
+    }
+
     // Revert on failure
     if (originalCard) {
       moveCardLocal(cardId, originalCard.current_status);
@@ -68,8 +88,9 @@ async function refreshSnapshot() {
   try {
     const response = await $fetch<SnapshotResponse>(`/api/boards/${props.boardUid}/snapshot`);
     hydrate(response.data);
-  } catch (err: any) {
-    setError(err?.data?.error?.message || 'Failed to refresh board');
+  } catch (err: unknown) {
+    const apiErr = parseApiError(err);
+    setError(apiErr?.error.message || 'Failed to refresh board');
   } finally {
     setSaving(false);
   }

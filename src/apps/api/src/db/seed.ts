@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { BoardEntitySchema } from '@repo/shared';
+import { eq } from 'drizzle-orm';
 import type { DbInstance } from './client.js';
-import { boards, boardSequences } from './schema.js';
+import { boards, boardSequences, processorRegistry } from './schema.js';
 import type { BoardEntity } from '@repo/shared';
 
 let seedCounter = 0;
@@ -58,4 +59,28 @@ export function seedBoard(instance: DbInstance): BoardEntity {
   db.insert(boardSequences).values({ prefix, seq_value: 0 }).run();
 
   return parsed.data;
+}
+
+export function bootstrapDefaultProcessor(instance: DbInstance): void {
+  const { db } = instance;
+  const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'default-manual')).get();
+  if (existing) return;
+
+  const now = new Date().toISOString();
+  db.insert(processorRegistry).values({
+    processor_id: 'default-manual',
+    name: 'Default Manual Processor',
+    base_url: 'http://localhost:4001',
+    health_endpoint: '/health',
+    hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+    sla_seconds: 300,
+    max_sla_seconds: 86400,
+    auth_type: 'none',
+    auth_config: null,
+    hmac_secret: 'dev-secret',
+    status: 'healthy',
+    last_health_check: now,
+    created_at: now,
+    updated_at: now,
+  }).run();
 }

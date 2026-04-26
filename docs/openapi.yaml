@@ -10,7 +10,7 @@ info:
     ## Deterministic Demo Board
     The API seeds a deterministic demo board on startup via `seedBoard`. The demo board
     has three columns: **Backlog**, **In Progress**, and **Done**.
-  version: "1.0.0"
+  version: "1.1.0"
   contact:
     name: Genisys2 Team
 servers:
@@ -104,7 +104,9 @@ paths:
       summary: Update card title or description
       description: |
         Partially updates a card. At least one of `title` or `description` must be
-        provided. The card `version` is incremented automatically on every update.
+        provided. The request must include the current `version` for optimistic locking.
+        If the server's version has advanced, a `409 Conflict` is returned with the
+        authoritative card state so the client can refresh and retry.
       tags:
         - Cards
       parameters:
@@ -127,14 +129,23 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: Optimistic locking conflict — card was modified by another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CardConflictResponse"
 
   /boards/{boardId}/cards/{cardId}/move:
     post:
       operationId: moveCard
       summary: Move a card to another column
       description: |
-        Changes a card's `current_status` to the target column uid. The target column
-        must exist in the board schema. The card `version` is incremented automatically.
+        Changes a card's `current_status` to the target column uid. Before the move,
+        a synchronous `can-exit` hook is dispatched to the column's processor with a
+        strict 3-second timeout. If the processor returns `allowed: false`, the move
+        is rejected with `409 Conflict`. The target column must exist in the board
+        schema. The card `version` is incremented automatically on a successful move.
       tags:
         - Cards
       parameters:
@@ -157,6 +168,12 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: Move blocked by processor `can-exit` hook or optimistic locking conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoveCardBlockedResponse"
         "500":
           description: Internal move failure
           content:
@@ -425,8 +442,13 @@ components:
 
     UpdateCardRequest:
       type: object
-      minProperties: 1
+      required:
+        - version
       properties:
+        version:
+          type: integer
+          minimum: 1
+          description: Current optimistic-lock version from the card entity
         title:
           type: string
           minLength: 1
@@ -475,6 +497,63 @@ components:
           properties:
             card:
               $ref: "#/components/schemas/CardEntity"
+
+    CardConflictResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - details
+          properties:
+            code:
+              type: string
+              enum:
+                - CONFLICT
+            message:
+              type: string
+              description: Human-readable conflict explanation
+            details:
+              type: object
+              required:
+                - current_version
+                - card
+              properties:
+                current_version:
+                  type: integer
+                  minimum: 1
+                card:
+                  $ref: "#/components/schemas/CardEntity"
+
+    MoveCardBlockedResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              enum:
+                - MOVE_BLOCKED
+            message:
+              type: string
+              description: Processor-provided reason for blocking the move
+            details:
+              type: object
+              properties:
+                hook:
+                  type: string
+                  enum:
+                    - can-exit
 
     ApiError:
       type: object

@@ -365,4 +365,95 @@ describe('kanban repository', () => {
       expect(snapshot!.cards).toEqual([]);
     });
   });
+
+  describe('updateCard — Slice 2 optimistic locking', () => {
+    let board: BoardEntity;
+
+    beforeAll(() => {
+      board = seedBoard(db);
+    });
+
+    it('rejects update when version does not match and leaves card unchanged', () => {
+      const firstColumn = board.schema.columns[0].uid;
+      const created = createCard(db, board.uid, {
+        title: 'Original Title',
+        current_status: firstColumn,
+      });
+
+      const result = updateCard(db, board.uid, created.uid, {
+        version: 999,
+        title: 'Hacked Title',
+      });
+
+      expect(result).toBeNull();
+
+      const untouched = getCardById(db, board.uid, created.uid);
+      expect(untouched).toBeDefined();
+      expect(untouched!.title).toBe('Original Title');
+      expect(untouched!.version).toBe(created.version);
+    });
+
+    it('accepts update when version matches and increments version', () => {
+      const firstColumn = board.schema.columns[0].uid;
+      const created = createCard(db, board.uid, {
+        title: 'Original Title',
+        current_status: firstColumn,
+      });
+
+      const result = updateCard(db, board.uid, created.uid, {
+        version: created.version,
+        title: 'Updated Title',
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.title).toBe('Updated Title');
+      expect(result!.version).toBe(created.version + 1);
+    });
+
+    it('accepts update with version and description only', () => {
+      const firstColumn = board.schema.columns[0].uid;
+      const created = createCard(db, board.uid, {
+        title: 'Original Title',
+        current_status: firstColumn,
+      });
+
+      const result = updateCard(db, board.uid, created.uid, {
+        version: created.version,
+        description: 'New description',
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.description).toBe('New description');
+      expect(result!.version).toBe(created.version + 1);
+    });
+
+    it('returns null when card does not exist with version provided', () => {
+      const result = updateCard(db, board.uid, '00000000-0000-0000-0000-000000000000', {
+        version: 1,
+        title: 'Ghost',
+      });
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('moveCard — Slice 2 version increment', () => {
+    let board: BoardEntity;
+
+    beforeAll(() => {
+      board = seedBoard(db);
+    });
+
+    it('increments version on successful move', () => {
+      const fromColumn = board.schema.columns[0].uid;
+      const toColumn = board.schema.columns[1].uid;
+      const created = createCard(db, board.uid, {
+        title: 'Movable Card',
+        current_status: fromColumn,
+      });
+
+      const moved = moveCard(db, board.uid, created.uid, toColumn);
+      expect(moved.current_status).toBe(toColumn);
+      expect(moved.version).toBe(created.version + 1);
+    });
+  });
 });

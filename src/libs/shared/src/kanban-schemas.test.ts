@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   BoardSchemaDocumentSchema,
   BoardSequenceEntitySchema,
+  CanExitHookResponseSchema,
+  CardConflictResponseSchema,
   CreateCardRequestSchema,
   MoveCardRequestSchema,
+  ProcessorRegistryEntitySchema,
   SnapshotResponseSchema,
   SqlitePragmasSchema,
   UpdateCardRequestSchema,
@@ -68,7 +71,16 @@ describe('kanban contracts', () => {
 
   it('rejects whitespace-only title for update card request', () => {
     const result = UpdateCardRequestSchema.safeParse({
+      version: 1,
       title: '   ',
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('requires version for update card request optimistic locking', () => {
+    const result = UpdateCardRequestSchema.safeParse({
+      title: 'Updated title',
     });
 
     expect(result.success).toBe(false);
@@ -84,6 +96,64 @@ describe('kanban contracts', () => {
     const result = BoardSequenceEntitySchema.safeParse({
       prefix: 'MKT',
       seq_value: 0,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('validates conflict response payload with current card state', () => {
+    const result = CardConflictResponseSchema.safeParse({
+      error: {
+        code: 'CONFLICT',
+        message: 'Version conflict',
+        details: {
+          current_version: 2,
+          card: {
+            uid: 'a601f5b3-f91b-4ce0-b562-f4a11fcb45f9',
+            board_uid: '550e8400-e29b-41d4-a716-446655440000',
+            display_id: 'MKT-1',
+            title: 'Campaign launch draft',
+            description: null,
+            version: 2,
+            processing_state: 'IDLE',
+            is_editable: true,
+            payload: {},
+            current_status: 'backlog',
+            created_at: '2026-04-26T08:30:00.000Z',
+            updated_at: '2026-04-26T08:31:00.000Z',
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('requires a rejection message when can-exit returns allowed=false', () => {
+    const result = CanExitHookResponseSchema.safeParse({
+      allowed: false,
+      message: null,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('validates processor registry schema for default always-allow processor', () => {
+    const result = ProcessorRegistryEntitySchema.safeParse({
+      processor_id: 'default-manual',
+      name: 'Default Manual Processor',
+      base_url: 'http://localhost:4001',
+      health_endpoint: '/health',
+      hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+      sla_seconds: 300,
+      max_sla_seconds: 86400,
+      auth_type: 'none',
+      auth_config: null,
+      hmac_secret: 'dev-secret',
+      status: 'healthy',
+      last_health_check: '2026-04-26T08:30:00.000Z',
+      created_at: '2026-04-26T08:30:00.000Z',
+      updated_at: '2026-04-26T08:30:00.000Z',
     });
 
     expect(result.success).toBe(true);

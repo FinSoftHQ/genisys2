@@ -29,6 +29,7 @@ function onDragStart(event: DragEvent) {
         <p v-if="card.description" class="text-xs text-muted mt-1 line-clamp-2">{{ card.description }}</p>
       </div>
       <UButton
+        v-if="card.is_editable"
         icon="i-lucide-pencil"
         variant="ghost"
         color="neutral"

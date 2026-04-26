@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { BoardEntitySchema, BoardSequenceEntitySchema } from '@repo/shared';
+import { BoardEntitySchema, BoardSequenceEntitySchema, DefaultAlwaysAllowProcessorSchema } from '@repo/shared';
 import { eq } from 'drizzle-orm';
 import { createClient } from './client.js';
-import { seedBoard } from './seed.js';
-import { boardSequences } from './schema.js';
+import { seedBoard, bootstrapDefaultProcessor } from './seed.js';
+import { boardSequences, processorRegistry } from './schema.js';
 
 describe('db seed', () => {
   let db: ReturnType<typeof createClient>;
@@ -42,5 +42,29 @@ describe('db seed', () => {
       'in-progress',
       'done',
     ]);
+  });
+
+  describe('default-manual processor bootstrap', () => {
+    it('creates a default-manual processor that validates against DefaultAlwaysAllowProcessorSchema', () => {
+      bootstrapDefaultProcessor(db);
+      const processor = db.db
+        .select()
+        .from(processorRegistry)
+        .where(eq(processorRegistry.processor_id, 'default-manual'))
+        .get();
+      expect(processor).toBeDefined();
+      expect(DefaultAlwaysAllowProcessorSchema.safeParse(processor).success).toBe(true);
+    });
+
+    it('is idempotent — second call does not duplicate', () => {
+      bootstrapDefaultProcessor(db);
+      bootstrapDefaultProcessor(db);
+      const rows = db.db
+        .select()
+        .from(processorRegistry)
+        .where(eq(processorRegistry.processor_id, 'default-manual'))
+        .all();
+      expect(rows).toHaveLength(1);
+    });
   });
 });

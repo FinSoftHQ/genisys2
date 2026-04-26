@@ -75,11 +75,64 @@
   - Nuxt UI modal pre-filled with existing card data
   - Zod client-side validation, submits to `PATCH /api/boards/{boardUid}/cards/{cardId}`
 
+## [1.1.0-slice2] — 2026-04-27
+
+### Added
+
+#### Backend — Safe Moves & Optimistic Locking
+
+- **Optimistic locking on card updates** (`src/apps/api/src/kanban/routes.ts`, `src/apps/api/src/kanban/repository.ts`)
+  - `PATCH /api/boards/{boardId}/cards/{cardId}` now requires `version` in the request body.
+  - Repository `updateCard` rejects the update when `input.version` does not match the DB row.
+  - On mismatch, the endpoint returns `409 Conflict` with `error.details.card` containing the authoritative current state.
+
+- **Synchronous `can-exit` hook dispatcher** (`src/apps/api/src/kanban/hook-dispatcher.ts`)
+  - `dispatchSyncHook` POSTs to `{processor.base_url}/{hook}` with a strict 3-second timeout (`AbortController` + `Promise.race`).
+  - Timeout hard-coded to `3000ms`; violation aborts the fetch and throws.
+  - Parses and validates the processor response through `CanExitHookResponseSchema`.
+
+- **`can-exit` gatekeeper on card moves** (`src/apps/api/src/kanban/routes.ts`)
+  - `POST /api/boards/{boardId}/cards/{cardId}/move` resolves the card's current column, looks up its `processor_id`, and dispatches `can-exit`.
+  - If the processor returns `allowed: false`, the API immediately returns `409 Conflict` (`MOVE_BLOCKED`) with the processor's message; the card is **not** moved.
+  - If the hook times out or fails, the error propagates and the move is aborted.
+
+- **Processor registry table & default processor** (`src/apps/api/src/db/migrations/0002_kanban_slice2.sql`, `src/apps/api/src/db/schema.ts`, `src/apps/api/src/db/seed.ts`)
+  - New `processor_registry` table stores processor metadata, supported hooks, SLA, and auth config.
+  - `bootstrapDefaultProcessor()` seeds a `default-manual` processor that registers all five hooks (`on-enter`, `on-update`, `on-action`, `can-exit`, `on-exit`).
+  - The default processor runs at `http://localhost:4001` and currently returns `allowed: true` for all `can-exit` calls.
+
+- **Card state fields** (`src/apps/api/src/db/schema.ts`)
+  - `processing_state` (`IDLE` | `PROCESSING` | `ERROR`) added to `cards` table, default `IDLE`.
+  - `is_editable` (`boolean`) added to `cards` table, default `true`.
+  - Both fields are present in `CardEntitySchema` and returned in all card responses.
+
+#### Frontend — Conflict Banner & Blocked-Move Toast
+
+- **Optimistic-lock conflict handling in `EditCardModal.vue`**
+  - On `409 CONFLICT`, the modal displays a red `UAlert` banner: "Someone else edited this — refresh and retry".
+  - The banner exposes a **Refresh** `UButton` that calls `onRefreshConflict()`, which pushes the server card into the store via `updateCard()` and dismisses the banner.
+  - The **Save** button is disabled (`:disabled="!!conflictServerCard"`) while the conflict is visible, preventing repeated overwrites.
+
+- **Blocked-move toast in `BoardView.vue`**
+  - When a drag-and-drop move receives `409 MOVE_BLOCKED`, the failure handler calls `useToast().add()` with `color: 'error'`, `icon: 'i-lucide-ban'`, and the processor message.
+  - The optimistic local move is reverted immediately so the card snaps back to its original column.
+  - Generic move errors continue to surface through the existing `UAlert` error banner.
+
+- **Store additions** (`composables/useBoardStore.ts`)
+  - Added `getCardById(cardId: string): CardEntity | undefined` helper used by `EditCardModal` and `BoardView`.
+
+### Changed
+
+- **OpenAPI spec** (`docs/openapi.yaml`)
+  - Bumped version to `1.1.0`.
+  - `UpdateCardRequest` now requires `version`.
+  - `PATCH /boards/{boardId}/cards/{cardId}` documents `409 Conflict` (`CardConflictResponse`).
+  - `POST /boards/{boardId}/cards/{cardId}/move` documents `409 Conflict` (`MoveCardBlockedResponse`) and the `can-exit` hook behavior.
+
 ### Intentionally Deferred
 
 - SSE / real-time updates
-- Optimistic locking enforcement (version field exists but is not checked)
+- Async processor hooks and DLQ
 - Idempotency keys
-- Processor hooks and DLQ
 - Pagination on snapshot
 - Event logging and audit trail

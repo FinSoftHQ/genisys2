@@ -1,9 +1,10 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as schema from './schema.js';
+import { bootstrapDefaultProcessor } from './seed.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -21,10 +22,16 @@ export function createClient(path: string): DbInstance {
   sqlite.pragma('synchronous = NORMAL');
   sqlite.pragma('busy_timeout = 5000');
 
-  const migrationPath = resolve(__dirname, './migrations/0001_kanban_slice1.sql');
-  const migrationSql = readFileSync(migrationPath, 'utf-8');
-  sqlite.exec(migrationSql);
+  const migrationDir = resolve(__dirname, './migrations');
+  const migrationFiles = readdirSync(migrationDir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  for (const file of migrationFiles) {
+    const migrationSql = readFileSync(resolve(migrationDir, file), 'utf-8');
+    sqlite.exec(migrationSql);
+  }
 
   const db = drizzle(sqlite, { schema });
+  bootstrapDefaultProcessor({ sqlite, db });
   return { sqlite, db };
 }

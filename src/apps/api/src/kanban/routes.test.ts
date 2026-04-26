@@ -8,9 +8,12 @@ import {
   MoveCardResponseSchema,
   CreateBoardResponseSchema,
   ApiErrorSchema,
+  CardConflictResponseSchema,
+  MoveCardBlockedResponseSchema,
 } from '@repo/shared';
 import { kanbanRoutes } from './routes.js';
 import * as repository from './repository.js';
+import { dispatchSyncHook } from './hook-dispatcher.js';
 
 vi.mock('./repository.js', () => ({
   getBoardById: vi.fn(),
@@ -20,6 +23,11 @@ vi.mock('./repository.js', () => ({
   updateCard: vi.fn(),
   moveCard: vi.fn(),
   createBoard: vi.fn(),
+  getProcessorById: vi.fn(),
+}));
+
+vi.mock('./hook-dispatcher.js', () => ({
+  dispatchSyncHook: vi.fn(),
 }));
 
 const mockBoard = {
@@ -293,13 +301,14 @@ describe('kanban routes', () => {
 
   describe('PATCH /api/boards/:boardId/cards/:cardId', () => {
     it('returns 200 with data envelope when card is updated', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
       const updatedCard = { ...mockCard, title: 'Updated Title', version: 2 };
       vi.mocked(repository.updateCard).mockResolvedValue(updatedCard);
 
       const response = await app.inject({
         method: 'PATCH',
         url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
-        payload: { title: 'Updated Title' },
+        payload: { version: 1, title: 'Updated Title' },
       });
 
       expect(response.statusCode).toBe(200);
@@ -310,12 +319,13 @@ describe('kanban routes', () => {
     });
 
     it('returns 404 for unknown card', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(null);
       vi.mocked(repository.updateCard).mockResolvedValue(null);
 
       const response = await app.inject({
         method: 'PATCH',
         url: `/api/boards/${mockBoard.uid}/cards/00000000-0000-0000-0000-000000000000`,
-        payload: { title: 'Updated Title' },
+        payload: { version: 1, title: 'Updated Title' },
       });
 
       expect(response.statusCode).toBe(404);
@@ -497,19 +507,187 @@ describe('kanban routes', () => {
 
   describe('PATCH /api/boards/:boardId/cards/:cardId — description null', () => {
     it('accepts explicit null description', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
       const updatedCard = { ...mockCard, description: null, version: 2 };
       vi.mocked(repository.updateCard).mockResolvedValue(updatedCard);
 
       const response = await app.inject({
         method: 'PATCH',
         url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
-        payload: { description: null },
+        payload: { version: 1, description: null },
       });
 
       expect(response.statusCode).toBe(200);
       const body = response.json();
       expect(UpdateCardResponseSchema.safeParse(body).success).toBe(true);
       expect(body.data.card.description).toBeNull();
+    });
+  });
+
+  describe('PATCH /api/boards/:boardId/cards/:cardId — Slice 2 optimistic locking', () => {
+    it('returns 400 when version is missing from request body', async () => {
+      vi.mocked(repository.updateCard).mockResolvedValue({ ...mockCard, title: 'Updated' });
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { title: 'Updated Title' },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('returns 409 Conflict with CardConflictResponseSchema when version is stale', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.updateCard).mockResolvedValue(null);
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { version: 1, title: 'Updated Title' },
+      });
+
+      expect(response.statusCode).toBe(409);
+      const body = response.json();
+      expect(CardConflictResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('CONFLICT');
+      expect(body.error.details.current_version).toBe(mockCard.version);
+      expect(body.error.details.card.uid).toBe(mockCard.uid);
+    });
+
+    it('returns 404 when card does not exist', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(null);
+      vi.mocked(repository.updateCard).mockResolvedValue(null);
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/00000000-0000-0000-0000-000000000000`,
+        payload: { version: 1, title: 'Updated Title' },
+      });
+
+      expect(response.statusCode).toBe(404);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('returns 200 when version matches and update succeeds', async () => {
+      const updatedCard = { ...mockCard, title: 'Updated Title', version: 2 };
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.updateCard).mockResolvedValue(updatedCard);
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { version: 1, title: 'Updated Title' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(UpdateCardResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.card.version).toBe(2);
+    });
+
+    it('does not mutate card when version is stale', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      const repoSpy = vi.mocked(repository.updateCard).mockResolvedValue(null);
+
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { version: 1, title: 'Updated Title' },
+      });
+
+      expect(repoSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        mockBoard.uid,
+        mockCard.uid,
+        expect.objectContaining({ version: 1, title: 'Updated Title' }),
+      );
+    });
+  });
+
+  describe('POST /api/boards/:boardId/cards/:cardId/move — Slice 2 can-exit hook', () => {
+    it('dispatches can-exit hook before moving', async () => {
+      const movedCard = { ...mockCard, current_status: 'in-progress', version: 2 };
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(dispatchSyncHook).mockResolvedValue({ allowed: true });
+      vi.mocked(repository.moveCard).mockResolvedValue(movedCard);
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'in-progress' },
+      });
+
+      expect(dispatchSyncHook).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          hook: 'can-exit',
+          processor_id: 'default-manual',
+          timeout_ms: 3000,
+        }),
+        expect.objectContaining({
+          card: expect.objectContaining({ uid: mockCard.uid }),
+          target_column: 'in-progress',
+          actor: expect.any(String),
+        }),
+      );
+    });
+
+    it('returns 409 MoveCardBlockedResponseSchema when can-exit blocks', async () => {
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(dispatchSyncHook).mockResolvedValue({ allowed: false, message: 'Approval pending' });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'in-progress' },
+      });
+
+      expect(response.statusCode).toBe(409);
+      const body = response.json();
+      expect(MoveCardBlockedResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('MOVE_BLOCKED');
+      expect(body.error.message).toBe('Approval pending');
+      expect(body.error.details.hook).toBe('can-exit');
+    });
+
+    it('does not call moveCard when can-exit hook blocks', async () => {
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(dispatchSyncHook).mockResolvedValue({ allowed: false, message: 'Blocked' });
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'in-progress' },
+      });
+
+      expect(repository.moveCard).not.toHaveBeenCalled();
+    });
+
+    it('returns 200 and increments version on successful move', async () => {
+      const movedCard = { ...mockCard, current_status: 'in-progress', version: 2 };
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(dispatchSyncHook).mockResolvedValue({ allowed: true });
+      vi.mocked(repository.moveCard).mockResolvedValue(movedCard);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'in-progress' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(MoveCardResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.card.current_status).toBe('in-progress');
+      expect(body.data.card.version).toBe(2);
     });
   });
 });

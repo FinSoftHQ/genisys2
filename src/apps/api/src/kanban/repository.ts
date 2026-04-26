@@ -1,9 +1,10 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { BoardEntitySchema, CardEntitySchema } from '@repo/shared';
+import { BoardEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema } from '@repo/shared';
 import type { DbInstance } from '../db/client.js';
 import { createClient } from '../db/client.js';
-import { boards, boardSequences, cards } from '../db/schema.js';
+import { boards, boardSequences, cards, processorRegistry } from '../db/schema.js';
+import type { ProcessorRegistryEntity } from '@repo/shared';
 import { seedBoard as seedBoardImpl } from '../db/seed.js';
 import type { BoardEntity, CardEntity } from '@repo/shared';
 
@@ -228,21 +229,14 @@ export function updateCard(
   instance: unknown,
   boardUid: string,
   cardUid: string,
-  input: { title?: string; description?: string | null },
+  input: { version: number; title?: string; description?: string | null },
 ): CardEntity | null {
   const { db } = resolveDb(instance);
-  const existing = db
-    .select()
-    .from(cards)
-    .where(and(eq(cards.board_uid, boardUid), eq(cards.uid, cardUid)))
-    .get();
-
-  if (!existing) return null;
-
   const now = new Date().toISOString();
+
   const updateData: Partial<typeof cards.$inferInsert> = {
     updated_at: now,
-    version: existing.version + 1,
+    version: sql`${cards.version} + 1`,
   };
 
   if (input.title !== undefined) {
@@ -252,16 +246,37 @@ export function updateCard(
     updateData.description = input.description;
   }
 
+  const conditions = [
+    eq(cards.board_uid, boardUid),
+    eq(cards.uid, cardUid),
+  ];
+
+  if (input.version !== undefined) {
+    conditions.push(eq(cards.version, input.version));
+  }
+
   const result = db
     .update(cards)
     .set(updateData)
-    .where(and(eq(cards.board_uid, boardUid), eq(cards.uid, cardUid)))
+    .where(and(...conditions))
     .returning()
     .get();
 
   if (!result) return null;
   const parsed = CardEntitySchema.safeParse(result);
   return parsed.success ? parsed.data : null;
+}
+
+export function getProcessorById(instance: unknown, processorId: string): ProcessorRegistryEntity | undefined {
+  const { db } = resolveDb(instance);
+  const processor = db
+    .select()
+    .from(processorRegistry)
+    .where(eq(processorRegistry.processor_id, processorId))
+    .get();
+  if (!processor) return undefined;
+  const parsed = ProcessorRegistryEntitySchema.safeParse(processor);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function moveCard(instance: unknown, boardUid: string, cardUid: string, toColumn: string): CardEntity {
