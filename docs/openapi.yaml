@@ -1,0 +1,547 @@
+openapi: 3.1.0
+info:
+  title: Genisys2 Kanban API
+  description: |
+    Slice 1 Kanban MVP API surface.
+
+    Provides board snapshot retrieval, card creation, card updates, and card moves
+    between columns. All successful responses are wrapped in a `{ data: { ... } }` envelope.
+
+    ## Deterministic Demo Board
+    The API seeds a deterministic demo board on startup via `seedBoard`. The demo board
+    has three columns: **Backlog**, **In Progress**, and **Done**.
+  version: "1.0.0"
+  contact:
+    name: Genisys2 Team
+servers:
+  - url: http://localhost:8080/api
+    description: Local development
+
+tags:
+  - name: Boards
+    description: Board-level operations and snapshots
+  - name: Cards
+    description: Card CRUD and movement operations
+
+paths:
+  /boards/{boardId}/snapshot:
+    get:
+      operationId: getBoardSnapshot
+      summary: Get full board snapshot
+      description: |
+        Returns the complete board state including board metadata and all visible cards.
+        No pagination is applied in Slice 1.
+      tags:
+        - Boards
+      parameters:
+        - $ref: "#/components/parameters/BoardIdParam"
+      responses:
+        "200":
+          description: Board snapshot retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /boards/{boardId}/cards:
+    post:
+      operationId: createCard
+      summary: Create a new card
+      description: |
+        Creates a card on the specified board. The `current_status` must match a valid
+        column uid defined in the board schema. The `display_id` is generated atomically
+        using the board prefix and sequence counter (e.g. `S0-1`).
+      tags:
+        - Cards
+      parameters:
+        - $ref: "#/components/parameters/BoardIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCardRequest"
+      responses:
+        "201":
+          description: Card created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateCardResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /boards/{boardId}/cards/{cardId}:
+    get:
+      operationId: getCard
+      summary: Get a single card
+      description: Retrieves a card by its UUID within the specified board.
+      tags:
+        - Cards
+      parameters:
+        - $ref: "#/components/parameters/BoardIdParam"
+        - $ref: "#/components/parameters/CardIdParam"
+      responses:
+        "200":
+          description: Card retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetCardResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      operationId: updateCard
+      summary: Update card title or description
+      description: |
+        Partially updates a card. At least one of `title` or `description` must be
+        provided. The card `version` is incremented automatically on every update.
+      tags:
+        - Cards
+      parameters:
+        - $ref: "#/components/parameters/BoardIdParam"
+        - $ref: "#/components/parameters/CardIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCardRequest"
+      responses:
+        "200":
+          description: Card updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateCardResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /boards/{boardId}/cards/{cardId}/move:
+    post:
+      operationId: moveCard
+      summary: Move a card to another column
+      description: |
+        Changes a card's `current_status` to the target column uid. The target column
+        must exist in the board schema. The card `version` is incremented automatically.
+      tags:
+        - Cards
+      parameters:
+        - $ref: "#/components/parameters/BoardIdParam"
+        - $ref: "#/components/parameters/CardIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveCardRequest"
+      responses:
+        "200":
+          description: Card moved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoveCardResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          description: Internal move failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+components:
+  schemas:
+    BoardEntity:
+      type: object
+      required:
+        - uid
+        - title
+        - prefix
+        - schema
+        - permissions
+        - created_at
+        - updated_at
+      properties:
+        uid:
+          type: string
+          format: uuid
+          description: Board unique identifier
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Board display title
+        prefix:
+          type: string
+          pattern: "^[A-Z][A-Z0-9]{0,9}$"
+          description: |
+            Board prefix used for display ID generation.
+            1-10 uppercase alphanumeric characters starting with a letter.
+        schema:
+          $ref: "#/components/schemas/BoardSchemaDocument"
+        permissions:
+          $ref: "#/components/schemas/BoardPermissions"
+        created_at:
+          type: string
+          format: date-time
+          description: ISO 8601 creation timestamp
+        updated_at:
+          type: string
+          format: date-time
+          description: ISO 8601 last update timestamp
+
+    BoardSchemaDocument:
+      type: object
+      required:
+        - columns
+      properties:
+        columns:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/BoardColumn"
+
+    BoardColumn:
+      type: object
+      required:
+        - uid
+        - title
+        - type
+        - processor_id
+        - exit_logic
+        - order
+      properties:
+        uid:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[A-Za-z0-9:_-]+$"
+          description: Column unique uid (letters, numbers, :, _, -)
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Column display title
+        type:
+          type: string
+          enum:
+            - Normal
+            - Processing
+          description: Column type
+        processor_id:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Processor identifier for this column
+        exit_logic:
+          type: object
+          additionalProperties:
+            type: string
+            minLength: 1
+          description: Map of exit keys to target column uids
+        order:
+          type: integer
+          minimum: 0
+          description: Display order within the board
+
+    BoardPermissions:
+      type: object
+      required:
+        - read
+        - write
+      properties:
+        read:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          default: []
+        write:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          default: []
+
+    CardEntity:
+      type: object
+      required:
+        - uid
+        - board_uid
+        - display_id
+        - title
+        - description
+        - version
+        - processing_state
+        - is_editable
+        - payload
+        - current_status
+        - created_at
+        - updated_at
+      properties:
+        uid:
+          type: string
+          format: uuid
+          description: Card unique identifier
+        board_uid:
+          type: string
+          format: uuid
+          description: Parent board UUID
+        display_id:
+          type: string
+          pattern: "^[A-Z][A-Z0-9]{0,9}-[1-9]\\d*$"
+          description: Human-readable display ID (e.g. `S0-1`)
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Card title
+        description:
+          type: string
+          maxLength: 5000
+          nullable: true
+          description: Optional card description
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic concurrency version (auto-incremented)
+        processing_state:
+          type: string
+          enum:
+            - IDLE
+            - PROCESSING
+            - ERROR
+          description: Current processing state
+        is_editable:
+          type: boolean
+          description: Whether the card is currently editable
+        payload:
+          type: object
+          additionalProperties: true
+          description: Arbitrary JSON payload
+        current_status:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[A-Za-z0-9:_-]+$"
+          description: Current column uid
+        created_at:
+          type: string
+          format: date-time
+          description: ISO 8601 creation timestamp
+        updated_at:
+          type: string
+          format: date-time
+          description: ISO 8601 last update timestamp
+
+    SnapshotData:
+      type: object
+      required:
+        - board
+        - cards
+      properties:
+        board:
+          $ref: "#/components/schemas/BoardEntity"
+        cards:
+          type: array
+          items:
+            $ref: "#/components/schemas/CardEntity"
+
+    SnapshotResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/SnapshotData"
+
+    CreateCardRequest:
+      type: object
+      required:
+        - title
+        - current_status
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Card title
+        description:
+          type: string
+          maxLength: 5000
+          nullable: true
+          description: Optional description
+        current_status:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[A-Za-z0-9:_-]+$"
+          description: Target column uid for the new card
+        payload:
+          type: object
+          additionalProperties: true
+          description: Optional JSON payload
+
+    CreateCardResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - card
+          properties:
+            card:
+              $ref: "#/components/schemas/CardEntity"
+
+    GetCardResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - card
+          properties:
+            card:
+              $ref: "#/components/schemas/CardEntity"
+
+    UpdateCardRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: New card title
+        description:
+          type: string
+          maxLength: 5000
+          nullable: true
+          description: New card description
+
+    UpdateCardResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - card
+          properties:
+            card:
+              $ref: "#/components/schemas/CardEntity"
+
+    MoveCardRequest:
+      type: object
+      required:
+        - to_column_uid
+      properties:
+        to_column_uid:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[A-Za-z0-9:_-]+$"
+          description: Destination column uid
+
+    MoveCardResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - card
+          properties:
+            card:
+              $ref: "#/components/schemas/CardEntity"
+
+    ApiError:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              minLength: 1
+              description: Machine-readable error code
+            message:
+              type: string
+              minLength: 1
+              description: Human-readable error message
+            details:
+              type: object
+              additionalProperties: true
+              description: Optional structured error details
+
+  parameters:
+    BoardIdParam:
+      name: boardId
+      in: path
+      required: true
+      description: Board UUID
+      schema:
+        type: string
+        format: uuid
+
+    CardIdParam:
+      name: cardId
+      in: path
+      required: true
+      description: Card UUID
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          example:
+            error:
+              code: INVALID_PARAMS
+              message: Invalid path parameters
+              details:
+                issues:
+                  - path: ["boardId"]
+                    message: Invalid uuid
+
+    NotFound:
+      description: Requested resource was not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          example:
+            error:
+              code: BOARD_NOT_FOUND
+              message: Board not found

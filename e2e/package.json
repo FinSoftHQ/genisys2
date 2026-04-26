@@ -1,0 +1,16 @@
+{
+  "name": "e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:deps": "pnpm --filter @repo/shared build && pnpm --filter @repo/logger build && pnpm --filter api build",
+    "test": "pnpm run build:deps && playwright test",
+    "test:ci": "pnpm run build:deps && playwright test",
+    "test:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:"
+  }
+}

@@ -13,6 +13,7 @@ import { createLogger } from '@repo/logger';
 import { squadRoutes } from './squads/routes.js';
 import { agentRoomRoutes } from './agent-rooms/index.js';
 import { proxyRoomRoutes } from './proxy-room/index.js';
+import { kanbanRoutes } from './kanban/routes.js';
 
 if (process.versions.bun && process.env.NODE_ENV === 'production') {
   throw new Error('Production requires Node.js 22. Bun runtime is not supported in Azure Oryx.');
@@ -21,7 +22,7 @@ if (process.versions.bun && process.env.NODE_ENV === 'production') {
 const port = Number(process.env.PORT) || 8080;
 const host = '0.0.0.0';
 
-const app = fastify({
+export const app = fastify({
   loggerInstance: createLogger({ name: 'api' }),
 }).withTypeProvider<ZodTypeProvider>();
 
@@ -74,6 +75,7 @@ await app.register(
 await app.register(squadRoutes, { prefix: '/api/v1/squads' });
 await app.register(agentRoomRoutes, { prefix: '/api/v1/agent-rooms' });
 await app.register(proxyRoomRoutes, { prefix: '/api/v1/proxy-room' });
+await app.register(kanbanRoutes, { prefix: '/api/boards' });
 
 process.on('SIGTERM', () => {
   (async () => {
@@ -86,10 +88,4 @@ process.on('SIGTERM', () => {
   });
 });
 
-try {
-  await app.listen({ port, host });
-  app.log.info(`API listening on http://${host}:${String(port)}`);
-} catch (err) {
-  app.log.error(err);
-  process.exit(1);
-}
+
