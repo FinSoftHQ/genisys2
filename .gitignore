@@ -432,3 +432,6 @@ src/libs/api/dist/
 src/apps/web/.output/
 src/apps/ai-workflow/src/mastra/public/
 src/apps/the-architect/src/mastra/public/
+
+# SQLite in-memory database spill files (WAL mode writes these to disk)
+file:mem_*
