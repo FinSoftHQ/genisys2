@@ -6,6 +6,7 @@ import {
   GetCardResponseSchema,
   UpdateCardResponseSchema,
   MoveCardResponseSchema,
+  CreateBoardResponseSchema,
   ApiErrorSchema,
 } from '@repo/shared';
 import { kanbanRoutes } from './routes.js';
@@ -18,6 +19,7 @@ vi.mock('./repository.js', () => ({
   createCard: vi.fn(),
   updateCard: vi.fn(),
   moveCard: vi.fn(),
+  createBoard: vi.fn(),
 }));
 
 const mockBoard = {
@@ -83,6 +85,22 @@ describe('kanban routes', () => {
 
   afterEach(async () => {
     await app.close();
+  });
+
+  describe('POST /api/boards', () => {
+    it('returns 201 with data envelope containing the new board', async () => {
+      vi.mocked(repository.createBoard).mockReturnValue(mockBoard);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/boards',
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = response.json();
+      expect(CreateBoardResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.board.uid).toBe(mockBoard.uid);
+    });
   });
 
   describe('GET /api/boards/:boardId/snapshot', () => {

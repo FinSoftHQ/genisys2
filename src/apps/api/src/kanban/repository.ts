@@ -56,6 +56,83 @@ export function getPragmas(instance: unknown) {
   };
 }
 
+function generatePrefix(): string {
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let prefix = letters[Math.floor(Math.random() * letters.length)];
+  for (let i = 0; i < 3; i++) {
+    prefix += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return prefix;
+}
+
+export function createBoard(instance: unknown): BoardEntity {
+  const { db } = resolveDb(instance);
+  const uid = randomUUID();
+  const now = new Date().toISOString();
+
+  let prefix: string;
+  let attempts = 0;
+  do {
+    prefix = generatePrefix();
+    attempts++;
+  } while (
+    db.select().from(boardSequences).where(eq(boardSequences.prefix, prefix)).get() &&
+    attempts < 10
+  );
+
+  if (attempts >= 10) {
+    throw new Error('Failed to generate unique board prefix');
+  }
+
+  const boardData = {
+    uid,
+    title: 'New Board',
+    prefix,
+    schema: {
+      columns: [
+        {
+          uid: 'backlog',
+          title: 'Backlog',
+          type: 'Normal' as const,
+          processor_id: 'default-manual',
+          exit_logic: { default: 'in-progress' },
+          order: 0,
+        },
+        {
+          uid: 'in-progress',
+          title: 'In Progress',
+          type: 'Normal' as const,
+          processor_id: 'default-manual',
+          exit_logic: { default: 'done' },
+          order: 1,
+        },
+        {
+          uid: 'done',
+          title: 'Done',
+          type: 'Normal' as const,
+          processor_id: 'default-manual',
+          exit_logic: {},
+          order: 2,
+        },
+      ],
+    },
+    permissions: { read: [] as string[], write: [] as string[] },
+    created_at: now,
+    updated_at: now,
+  };
+
+  const parsed = BoardEntitySchema.safeParse(boardData);
+  if (!parsed.success) {
+    throw new Error('Invalid board data: ' + JSON.stringify(parsed.error.issues));
+  }
+
+  db.insert(boards).values(boardData).run();
+  db.insert(boardSequences).values({ prefix, seq_value: 0 }).run();
+
+  return parsed.data;
+}
+
 export { seedBoardImpl as seedBoard };
 
 export function getBoardById(instance: unknown, boardUid: string): BoardEntity | null {

@@ -13,6 +13,7 @@ import {
   createCard,
   updateCard,
   moveCard,
+  createBoard,
 } from './repository.js';
 
 function callRepo<TArgs extends unknown[], TReturn>(
@@ -27,6 +28,11 @@ function errorResponse(code: string, message: string, details?: Record<string, u
 }
 
 export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
+  instance.post('/', async (_request, reply) => {
+    const board = await callRepo(createBoard);
+    return reply.status(201).send({ data: { board } });
+  });
+
   instance.get('/:boardId/snapshot', async (request, reply) => {
     const params = BoardPathParamsSchema.safeParse(request.params);
     if (!params.success) {
