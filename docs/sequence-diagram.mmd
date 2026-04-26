@@ -1,0 +1,110 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2ECC71', 'primaryTextColor': '#2C3E50', 'primaryBorderColor': '#27AE60', 'lineColor': '#7F8C8D', 'secondaryColor': '#F39C12', 'tertiaryColor': '#E74C3C', 'fontFamily': 'Inter, system-ui, sans-serif'}}}%%
+
+sequenceDiagram
+    autonumber
+    participant C as Client (Browser)
+    participant O as Orchestrator
+    participant P as Processor
+    participant DB as Database
+    participant SSE as SSE Stream
+    participant DLQ as DLQ Monitor
+
+    %% ========== HAPPY PATH: on-enter ==========
+    rect rgb(232, 245, 233)
+        Note over C,DLQ: **HAPPY PATH: Card enters Processing column**
+
+        C->>C: Generate X-Idempotency-Key
+        C->>O: POST /cards/{uid}/move<br/>{target_column, version: 4}<br/>X-Idempotency-Key: uuid-123
+
+        O->>DB: Check idempotency cache
+        alt Cache miss
+            O->>O: Generate callback_token
+            O->>DB: Store callback_token (TTL = SLA + 5min)
+            O->>P: POST /on-enter<br/>{card, board, column, callback_url, idempotency_key}
+
+            P-->>O: 202 Accepted<br/>{estimated_duration: "30s"}
+
+            O->>DB: UPDATE card<br/>processing_state = PROCESSING<br/>is_editable = false<br/>version = 5
+            O->>DB: INSERT event_log<br/>action: PROCESSING_STARTED
+            O->>DB: Cache response against<br/>X-Idempotency-Key (24h)
+            O-->>C: 200 OK<br/>{card, status: "accepted"}
+            O->>SSE: Emit CARD_UPDATED<br/>processing_state: PROCESSING
+
+            Note right of P: Processor does work...<br/>(instant to 24 hours)
+
+            P->>O: POST /callbacks/{token}<br/>Authorization: Bearer {token}<br/>{status: "success", payload_updates, move_to_column}
+
+            O->>O: Verify callback_token & HMAC signature
+            O->>DB: Apply payload_updates<br/>processing_state = IDLE<br/>is_editable = true<br/>version = 6
+            O->>DB: INSERT event_log<br/>action: PROCESSING_COMPLETED
+            O->>DB: Atomically hard-delete callback_token
+            O-->>P: 200 OK
+            O->>SSE: Emit CARD_UPDATED<br/>processing_state: IDLE
+
+        else Cache hit
+            O-->>C: 200 OK (cached)<br/>No state mutation
+        end
+    end
+
+    %% ========== SYNC PATH: on-update ==========
+    rect rgb(227, 242, 253)
+        Note over C,DLQ: **SYNC PATH: User edits card payload**
+
+        C->>O: PATCH /cards/{uid}<br/>{version: 6, payload: {...}}<br/>X-Idempotency-Key: uuid-456
+
+        O->>DB: Check version == 6
+        alt Version match
+            O->>P: POST /on-update<br/>{card, proposed_payload, actor}
+
+            alt Success (200)
+                P-->>O: {allowed: true, transformed_payload}
+                O->>DB: UPDATE card<br/>payload = transformed_payload<br/>version = 7
+                O->>DB: INSERT event_log<br/>action: CARD_UPDATED
+                O-->>C: 200 OK {card}
+                O->>SSE: Emit CARD_UPDATED
+            else Rejected (200)
+                P-->>O: {allowed: false, message}
+                O-->>C: 403 Forbidden<br/>{error: "UPDATE_REJECTED", message}
+            end
+
+        else Version mismatch
+            O-->>C: 409 Conflict<br/>{error: "CONFLICT", current_version: 7}
+        end
+    end
+
+    %% ========== FAILURE PATH: SLA Breach ==========
+    rect rgb(255, 235, 238)
+        Note over C,DLQ: **FAILURE PATH: Processor never calls back**
+
+        P--xO: [No callback received]
+
+        DLQ->>DLQ: SLA timer expires<br/>(default: 5 min)
+        DLQ->>DB: UPDATE card<br/>processing_state = ERROR<br/>is_editable = false
+        DLQ->>DB: INSERT dlq entry<br/>reason: SLA_BREACH
+        DLQ->>DB: INSERT event_log<br/>action: PROCESSING_ERROR
+        DLQ->>SSE: Emit PROCESSING_ERROR
+
+        C->>C: UI shows error banner<br/>"Processing Failed — Retry?"
+
+        alt Admin retries
+            C->>O: POST /admin/dlq/{id}/retry
+            O->>P: Re-dispatch /on-enter<br/>Same context
+            P-->>O: 202 Accepted
+            O->>DB: UPDATE card<br/>processing_state = PROCESSING
+            O->>SSE: Emit PROCESSING_STARTED
+        else Admin forces
+            C->>O: POST /admin/dlq/{id}/force<br/>{target_state: IDLE}
+            O->>DB: UPDATE card<br/>processing_state = IDLE<br/>is_editable = true
+            O->>DB: INSERT event_log<br/>action: ADMIN_OVERRIDE
+            O->>SSE: Emit CARD_UPDATED
+        end
+    end
+
+    %% ========== FIRE-AND-FORGET: on-exit ==========
+    rect rgb(245, 245, 245)
+        Note over C,DLQ: **FIRE-AND-FORGET: Card exits column**
+
+        O->>P: POST /on-exit<br/>{card, next_column, actor}
+        Note right of O: Orchestrator does NOT wait<br/>for response. No retry.
+        P--xO: [Response ignored]
+    end

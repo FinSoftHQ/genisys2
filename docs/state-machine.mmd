@@ -1,0 +1,116 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2ECC71', 'primaryTextColor': '#2C3E50', 'primaryBorderColor': '#27AE60', 'lineColor': '#7F8C8D', 'secondaryColor': '#F39C12', 'tertiaryColor': '#E74C3C', 'fontFamily': 'Inter, system-ui, sans-serif'}}}%%
+
+stateDiagram-v2
+    direction TB
+
+    [*] --> IDLE : Card Created
+
+    %% ========== IDLE STATE ==========
+    state IDLE {
+        [*] --> idle_editable : is_editable = true
+        [*] --> idle_locked : is_editable = false
+        idle_editable : is_editable = true
+        idle_locked : is_editable = false
+
+        idle_editable --> idle_editable : User edits payload (on-update, sync, 3s)
+        idle_editable --> idle_locked : Processor sets is_editable = false
+        idle_locked --> idle_editable : Processor sets is_editable = true
+    }
+
+    %% ========== SYNC HOOKS (around IDLE) ==========
+    note right of IDLE
+        **Sync Hooks (Blocking, 3s timeout)**
+        • on-update: Validates & transforms user edits
+        • can-exit: Guards column exit permission
+
+        **Retry Policy:**
+        • 4xx → Fail fast (no retry)
+        • 5xx/408/429 → Max 1 retry, exponential backoff
+    end note
+
+    %% ========== ASYNC TRANSITIONS ==========
+    IDLE --> PROCESSING : Card enters Processing column (on-enter POST, 202 Accepted)
+
+    IDLE --> PROCESSING : User clicks action button (on-action POST, 202 Accepted)
+
+    %% ========== PROCESSING STATE ==========
+    state PROCESSING {
+        [*] --> processing_active : Spinner shown (UI locked)
+
+        processing_active : processing_state = PROCESSING
+        processing_active : is_editable = false (forced)
+
+        processing_active --> processing_active : SLA timer running (max 24h)
+    }
+
+    note right of PROCESSING
+        **Async Hook (ACK + Callback)**
+        1. Orchestrator POSTs to Processor
+        2. Processor returns 202 Accepted
+        3. Processor does work (instant → 24h)
+        4. Processor POSTs callback with token
+        5. Orchestrator verifies & applies
+    end note
+
+    %% ========== CALLBACK OUTCOMES ==========
+    PROCESSING --> IDLE : Callback Success (POST /callbacks/{token}, payload_updates applied)
+
+    PROCESSING --> ERROR : SLA Breach (DLQ entry created, SLA expired)
+
+    PROCESSING --> ERROR : Invalid Callback (security event logged)
+
+    %% ========== ERROR STATE ==========
+    state ERROR {
+        [*] --> error_pending : Admin review required
+
+        error_pending : processing_state = ERROR
+        error_pending : is_editable = false (forced)
+        error_pending : UI shows retry/override
+
+        error_pending --> error_pending : Admin reviews DLQ
+    }
+
+    note right of ERROR
+        **Dead Letter Queue (DLQ)**
+        • Admin can RETRY (re-dispatch)
+        • Admin can FORCE (override to IDLE)
+        • Admin can CANCEL (move to error column)
+
+        All admin actions logged as
+        ACTION: ADMIN_OVERRIDE
+    end note
+
+    %% ========== ERROR RECOVERY ==========
+    ERROR --> PROCESSING : Admin Retry
+
+    ERROR --> PROCESSING : Admin Retry (Re-dispatch same context)
+
+    ERROR --> IDLE : Admin Force Complete
+
+    ERROR --> IDLE : Admin Force Complete (override to IDLE)
+
+    %% ========== EXIT GUARD ==========
+    IDLE --> IDLE : Move rejected (POST /can-exit, allowed = false)
+
+    IDLE --> [*] : Card archived (can-exit = allowed, on-exit POST, fire-and-forget)
+
+    %% ========== on-exit NOTE ==========
+    note left of IDLE
+        **on-exit (Fire-and-Forget)**
+        Triggered AFTER successful exit.
+        Orchestrator does NOT wait.
+
+        ✅ Use for: cleanup, metrics, logs
+        ❌ NEVER for: billing, compliance,
+           mission-critical side effects
+    end note
+
+    %% ========== can-exit GUARD NOTE ==========
+    note left of IDLE
+        **can-exit (Sync Guard)**
+        Called BEFORE every move.
+        Default on timeout: allowed = false
+
+        Archive Block Policy:
+        Rejects if children are active
+    end note
