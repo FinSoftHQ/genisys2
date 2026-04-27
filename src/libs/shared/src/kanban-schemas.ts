@@ -494,6 +494,84 @@ export const OnEnterDispatchAcceptedResponseSchema = z
   })
   .strict();
 
+export const ProcessorContextSchema = z
+  .object({
+    card: CardEntitySchema,
+    board: BoardEntitySchema,
+    column: BoardColumnSchema,
+    actor: z.string().min(1).max(200),
+    callback_url: z.string().url(),
+    idempotency_key: IdempotencyKeySchema,
+  })
+  .strict();
+
+export const OnUpdateRequestSchema = z
+  .object({
+    card: CardEntitySchema,
+    proposed_payload: CardPayloadSchema,
+    actor: z.string().min(1).max(200),
+  })
+  .strict();
+
+export const OnUpdateResponseSchema = z
+  .object({
+    allowed: z.boolean(),
+    message: z.string().min(1).nullable().optional(),
+    transformed_payload: CardPayloadSchema.nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.allowed && !value.message) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['message'],
+        message: 'message is required when allowed is false',
+      });
+    }
+  });
+
+export const OnActionRequestSchema = ProcessorContextSchema.extend({
+  action: z.string().min(1).max(200),
+}).strict();
+
+export const OnExitRequestSchema = z
+  .object({
+    card: CardEntitySchema,
+    next_column: BoardColumnSchema,
+    actor: z.string().min(1).max(200),
+  })
+  .strict();
+
+export const HealthCheckResponseSchema = z
+  .object({
+    status: z.literal('healthy'),
+  })
+  .strict();
+
+export const TriggerActionRequestSchema = z
+  .object({
+    action: z.string().min(1).max(200),
+    version: CardVersionSchema,
+  })
+  .strict();
+
+export const TriggerActionResponseSchema = z
+  .object({
+    data: z.object({
+      card: CardEntitySchema,
+      status: z.enum(['completed', 'accepted']),
+    }).strict(),
+  })
+  .strict();
+
+export const ListBoardsResponseSchema = z
+  .object({
+    data: z.object({
+      boards: z.array(BoardEntitySchema),
+    }).strict(),
+  })
+  .strict();
+
 export const ProcessorCallbackPathParamsSchema = z
   .object({
     token: CallbackTokenSchema,
@@ -595,3 +673,12 @@ export type ProcessorCallbackResponse = z.infer<typeof ProcessorCallbackResponse
 export type CallbackTokenRejectedResponse = z.infer<typeof CallbackTokenRejectedResponseSchema>;
 export type CreateBoardResponse = z.infer<typeof CreateBoardResponseSchema>;
 export type ApiError = z.infer<typeof ApiErrorSchema>;
+export type ProcessorContext = z.infer<typeof ProcessorContextSchema>;
+export type OnUpdateRequest = z.infer<typeof OnUpdateRequestSchema>;
+export type OnUpdateResponse = z.infer<typeof OnUpdateResponseSchema>;
+export type OnActionRequest = z.infer<typeof OnActionRequestSchema>;
+export type OnExitRequest = z.infer<typeof OnExitRequestSchema>;
+export type HealthCheckResponse = z.infer<typeof HealthCheckResponseSchema>;
+export type TriggerActionRequest = z.infer<typeof TriggerActionRequestSchema>;
+export type TriggerActionResponse = z.infer<typeof TriggerActionResponseSchema>;
+export type ListBoardsResponse = z.infer<typeof ListBoardsResponseSchema>;

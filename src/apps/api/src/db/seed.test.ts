@@ -13,7 +13,7 @@ describe('db seed', () => {
   });
 
   afterAll(() => {
-    db.sqlite.close();
+    db?.sqlite.close();
   });
 
   it('creates a board that validates against BoardEntitySchema', () => {

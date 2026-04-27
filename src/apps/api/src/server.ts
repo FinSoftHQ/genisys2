@@ -14,6 +14,7 @@ import { squadRoutes } from './squads/routes.js';
 import { agentRoomRoutes } from './agent-rooms/index.js';
 import { proxyRoomRoutes } from './proxy-room/index.js';
 import { kanbanRoutes } from './kanban/routes.js';
+import { processorRoutes } from './kanban/processor-routes.js';
 
 if (process.versions.bun && process.env.NODE_ENV === 'production') {
   throw new Error('Production requires Node.js 22. Bun runtime is not supported in Azure Oryx.');
@@ -76,6 +77,7 @@ await app.register(squadRoutes, { prefix: '/api/v1/squads' });
 await app.register(agentRoomRoutes, { prefix: '/api/v1/agent-rooms' });
 await app.register(proxyRoomRoutes, { prefix: '/api/v1/proxy-room' });
 await app.register(kanbanRoutes, { prefix: '/api/boards' });
+await app.register(processorRoutes, { prefix: '/api/processor' });
 
 process.on('SIGTERM', () => {
   (async () => {

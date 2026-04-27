@@ -5,6 +5,7 @@ import {
   CreateCardRequestSchema,
   UpdateCardRequestSchema,
   MoveCardRequestSchema,
+  TriggerActionRequestSchema,
   SyncHookDispatchRequestSchema,
   CanExitHookRequestSchema,
   ProcessorCallbackPathParamsSchema,
@@ -20,6 +21,7 @@ import {
   moveCard,
   createBoard,
   getProcessorById,
+  listBoards,
 } from './repository.js';
 import { dispatchSyncHook } from './hook-dispatcher.js';
 import { consumeCallback, startProcessing } from './processing-orchestrator.js';
@@ -35,7 +37,14 @@ function errorResponse(code: string, message: string, details?: Record<string, u
   return { error: { code, message, ...(details ? { details } : {}) } };
 }
 
+const DEFAULT_PROCESSOR_BASE_URL = process.env.KANBAN_API_BASE_URL ?? 'http://localhost:8080/api/processor';
+
 export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
+  instance.get('/', async (_request, reply) => {
+    const boards = await callRepo(listBoards);
+    return reply.status(200).send({ data: { boards } });
+  });
+
   instance.post('/', async (_request, reply) => {
     const board = await callRepo(createBoard);
     return reply.status(201).send({ data: { board } });
@@ -165,7 +174,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
         const processor = (getProcessorById ? callRepo(getProcessorById, currentColumn.processor_id) : undefined) ?? {
           processor_id: currentColumn.processor_id,
           name: 'Default Manual Processor',
-          base_url: 'http://localhost:4001',
+          base_url: DEFAULT_PROCESSOR_BASE_URL,
           health_endpoint: '/health',
           hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
           sla_seconds: 300,
@@ -256,6 +265,38 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       }
       return reply.status(500).send(errorResponse('MOVE_FAILED', 'Move operation failed'));
     }
+  });
+
+  instance.post('/:boardId/cards/:cardId/action', async (request, reply) => {
+    const params = CardPathParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const body = TriggerActionRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
+    }
+
+    const card = await callRepo(getCardById, params.data.boardId, params.data.cardId);
+    if (!card) {
+      return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
+    }
+
+    if (card.version !== body.data.version) {
+      return reply.status(409).send({
+        error: {
+          code: 'CONFLICT',
+          message: 'Card was modified by another user. Please refresh and retry.',
+          details: {
+            current_version: card.version,
+            card,
+          },
+        },
+      });
+    }
+
+    return reply.status(200).send({ data: { card, status: 'completed' } });
   });
 }
 

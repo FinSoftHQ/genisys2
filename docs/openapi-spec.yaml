@@ -1,0 +1,1015 @@
+openapi: 3.0.3
+info:
+  title: Kanban Engine API
+  description: |
+    Modular Logic-Driven Kanban Engine — Orchestrator & Processor Contract.
+    This spec covers all Orchestrator REST endpoints and the 5-Hook Processor contract.
+
+    **Engineering Notes:**
+    - Event Log uses `category` + `lifecycle_event` separation for clean querying
+    - Roll-up broadcasts are debounced 500ms per parent to prevent SSE storms
+    - Idempotency cache requires `allkeys-lru` eviction policy at scale
+  version: 4.1.0
+  contact:
+    name: Architecture Team
+
+servers:
+  - url: https://api.kanban.com/v1
+    description: Production Orchestrator
+
+# ============================================================
+# TAGS
+# ============================================================
+tags:
+  - name: Boards
+    description: Board management and state hydration
+  - name: Cards
+    description: Card CRUD and lifecycle operations
+  - name: Real-Time
+    description: SSE streams for live updates
+  - name: Processor Contract
+    description: 5-Hook API that all Processors must implement
+  - name: Callbacks
+    description: Orchestrator callback receiver for async hooks
+  - name: Admin
+    description: Administrative operations (DLQ, overrides)
+
+# ============================================================
+# COMPONENTS
+# ============================================================
+components:
+  schemas:
+    # ─── Core Entities ───
+    Card:
+      type: object
+      required:
+        - uid
+        - display_id
+        - title
+        - version
+        - processing_state
+        - is_editable
+        - current_status
+      properties:
+        uid:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        display_id:
+          type: string
+          example: "MKT-501"
+        title:
+          type: string
+          example: "Campaign Launch"
+        version:
+          type: integer
+          minimum: 1
+          example: 4
+        processing_state:
+          type: string
+          enum: [IDLE, PROCESSING, ERROR]
+          example: "IDLE"
+        is_editable:
+          type: boolean
+          example: true
+        parents:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParentMetadata'
+        payload:
+          type: object
+          additionalProperties: true
+          example:
+            custom_data: "value"
+            available_actions: ["Complete", "Force Close"]
+            assignee: "alice@corp.com"
+        current_status:
+          type: string
+          description: Column UID
+          example: "col-123"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ParentMetadata:
+      type: object
+      required: [uid, display_id, status, title]
+      properties:
+        uid:
+          type: string
+          example: "p-1"
+        display_id:
+          type: string
+          example: "PRJ-01"
+        status:
+          type: string
+          description: Column UID
+          example: "col-88"
+        title:
+          type: string
+          example: "Q3 Marketing Push"
+
+    Board:
+      type: object
+      required: [uid, title, prefix, schema]
+      properties:
+        uid:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: "Marketing Sprint Q2"
+        prefix:
+          type: string
+          example: "MKT"
+        schema:
+          type: object
+          properties:
+            columns:
+              type: array
+              items:
+                $ref: '#/components/schemas/Column'
+        permissions:
+          type: object
+          properties:
+            read:
+              type: array
+              items:
+                type: string
+            write:
+              type: array
+              items:
+                type: string
+
+    Column:
+      type: object
+      required: [uid, title, type, processor_id]
+      properties:
+        uid:
+          type: string
+          example: "col-1"
+        title:
+          type: string
+          example: "Backlog"
+        type:
+          type: string
+          enum: [Normal, Processing]
+        processor_id:
+          type: string
+          example: "default-manual"
+        exit_logic:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            default: "col-2"
+            approved: "col-3"
+            rejected: "col-1"
+        order:
+          type: integer
+
+    EventLog:
+      type: object
+      required: [event_id, card_uid, timestamp, actor, action, category]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        card_uid:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          example: "user:alice@corp.com"
+        action:
+          type: string
+          enum: [CARD_CREATED, CARD_UPDATED, CARD_MOVED, PROCESSING_STARTED, PROCESSING_COMPLETED, PROCESSING_ERROR, ACTION_TRIGGERED, ROLLUP_CHANGED, ADMIN_OVERRIDE]
+        category:
+          type: string
+          enum: [routing, lifecycle, user_action, system]
+          description: |
+            Semantic category for clean querying:
+            - `routing`: Column transitions (MOVED)
+            - `lifecycle`: Async hook state changes (PROCESSING_*)
+            - `user_action`: Direct user mutations (CARD_CREATED, CARD_UPDATED)
+            - `system`: Automated events (ROLLUP_CHANGED, ADMIN_OVERRIDE)
+        lifecycle_event:
+          type: string
+          nullable: true
+          description: |
+            Optional lifecycle qualifier when action spans multiple categories.
+            e.g., action="MOVED" + lifecycle_event="PROCESSING_STARTED"
+        from_column:
+          type: string
+        to_column:
+          type: string
+        idempotency_key:
+          type: string
+        payload_delta:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              old: {}
+              new: {}
+        metadata:
+          type: object
+
+    # ─── Request/Response Bodies ───
+    CreateCardRequest:
+      type: object
+      required: [title, board_uid, column_uid]
+      properties:
+        title:
+          type: string
+          example: "New Campaign"
+        board_uid:
+          type: string
+          format: uuid
+        column_uid:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        parent_uids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    UpdateCardRequest:
+      type: object
+      required: [version, payload]
+      properties:
+        version:
+          type: integer
+          description: Current version from client state
+          example: 4
+        payload:
+          type: object
+          additionalProperties: true
+
+    MoveCardRequest:
+      type: object
+      required: [target_column_uid, version]
+      properties:
+        target_column_uid:
+          type: string
+        version:
+          type: integer
+
+    TriggerActionRequest:
+      type: object
+      required: [action, version]
+      properties:
+        action:
+          type: string
+          example: "Approve"
+        version:
+          type: integer
+
+    # ─── Processor Contract ───
+    ProcessorContext:
+      type: object
+      required: [card, board, column]
+      properties:
+        card:
+          $ref: '#/components/schemas/Card'
+        board:
+          $ref: '#/components/schemas/Board'
+        column:
+          $ref: '#/components/schemas/Column'
+        actor:
+          type: string
+          example: "user:alice@corp.com"
+        callback_url:
+          type: string
+          format: uri
+          description: Required for async hooks
+        idempotency_key:
+          type: string
+          description: Orchestrator-generated key for idempotency
+
+    OnUpdateRequest:
+      type: object
+      required: [card, proposed_payload, actor]
+      properties:
+        card:
+          $ref: '#/components/schemas/Card'
+        proposed_payload:
+          type: object
+          additionalProperties: true
+        actor:
+          type: string
+
+    OnUpdateResponse:
+      type: object
+      required: [allowed]
+      properties:
+        allowed:
+          type: boolean
+        message:
+          type: string
+          nullable: true
+        transformed_payload:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    CanExitRequest:
+      type: object
+      required: [card, target_column, actor]
+      properties:
+        card:
+          $ref: '#/components/schemas/Card'
+        target_column:
+          $ref: '#/components/schemas/Column'
+        actor:
+          type: string
+
+    CanExitResponse:
+      type: object
+      required: [allowed]
+      properties:
+        allowed:
+          type: boolean
+        message:
+          type: string
+          nullable: true
+
+    OnActionRequest:
+      type: object
+      required: [card, action, actor]
+      properties:
+        card:
+          $ref: '#/components/schemas/Card'
+        action:
+          type: string
+        actor:
+          type: string
+        callback_url:
+          type: string
+          format: uri
+        idempotency_key:
+          type: string
+
+    OnEnterResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+        estimated_duration:
+          type: string
+          example: "30s"
+
+    ProcessorCallbackPayload:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+        message:
+          type: string
+          nullable: true
+        payload_updates:
+          type: object
+          additionalProperties: true
+          nullable: true
+        move_to_column:
+          type: string
+          description: Column UID to move card to
+          nullable: true
+
+    # ─── Errors ───
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          nullable: true
+
+  parameters:
+    BoardUidParam:
+      name: board_uid
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CardUidParam:
+      name: card_uid
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  headers:
+    XIdempotencyKey:
+      name: X-Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: |
+        Client-generated idempotency key. Cached for 24 hours.
+        Configure cache with `allkeys-lru` eviction to prevent OOM at scale.
+    XCallbackToken:
+      name: X-Callback-Token
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Orchestrator-generated callback token for async hooks
+
+  responses:
+    ConflictError:
+      description: Optimistic locking conflict — version mismatch
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "CONFLICT"
+            message: "Card version mismatch. Expected 4, found 5."
+            details:
+              current_version: 5
+              current_state:
+                processing_state: "IDLE"
+                is_editable: true
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "NOT_FOUND"
+            message: "Card not found"
+    ValidationError:
+      description: Invalid request payload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "VALIDATION_ERROR"
+            message: "Missing required field: version"
+    ProcessorUnavailableError:
+      description: Target processor is unhealthy
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "PROCESSOR_UNAVAILABLE"
+            message: "Processor 'auto-qa-tester' is currently unhealthy"
+
+# ============================================================
+# PATHS — ORCHESTRATOR ENDPOINTS
+# ============================================================
+paths:
+  # ─── Boards ───
+  /boards:
+    get:
+      tags: [Boards]
+      summary: List accessible boards
+      operationId: listBoards
+      responses:
+        '200':
+          description: List of boards
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  boards:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Board'
+
+  /boards/{board_uid}:
+    get:
+      tags: [Boards]
+      summary: Get board metadata
+      operationId: getBoard
+      parameters:
+        - $ref: '#/components/parameters/BoardUidParam'
+      responses:
+        '200':
+          description: Board details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Board'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /boards/{board_uid}/snapshot:
+    get:
+      tags: [Boards]
+      summary: Get full board state for hydration
+      description: |
+        Returns the complete current state of a board including all cards.
+        Clients should call this before subscribing to SSE.
+      operationId: getBoardSnapshot
+      parameters:
+        - $ref: '#/components/parameters/BoardUidParam'
+      responses:
+        '200':
+          description: Full board snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  board:
+                    $ref: '#/components/schemas/Board'
+                  cards:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Card'
+                  generated_at:
+                    type: string
+                    format: date-time
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  # ─── Cards ───
+  /cards:
+    post:
+      tags: [Cards]
+      summary: Create a new card
+      operationId: createCard
+      parameters:
+        - $ref: '#/components/headers/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCardRequest'
+      responses:
+        '201':
+          description: Card created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Card'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /cards/{card_uid}:
+    get:
+      tags: [Cards]
+      summary: Get card by UID
+      operationId: getCard
+      parameters:
+        - $ref: '#/components/parameters/CardUidParam'
+      responses:
+        '200':
+          description: Card details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Card'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+    patch:
+      tags: [Cards]
+      summary: Update card payload
+      description: |
+        Updates card payload through the on-update hook.
+        Requires current version for optimistic locking.
+      operationId: updateCard
+      parameters:
+        - $ref: '#/components/parameters/CardUidParam'
+        - $ref: '#/components/headers/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCardRequest'
+      responses:
+        '200':
+          description: Card updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Card'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /cards/{card_uid}/move:
+    post:
+      tags: [Cards]
+      summary: Move card to another column
+      description: |
+        Validates via can-exit hook, then executes on-exit/on-enter hooks.
+        For Processing columns, this triggers the async on-enter flow.
+
+        **Note:** If target column is Processing and its Processor is unhealthy,
+        returns 503 immediately rather than leaving card in limbo.
+      operationId: moveCard
+      parameters:
+        - $ref: '#/components/parameters/CardUidParam'
+        - $ref: '#/components/headers/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveCardRequest'
+      responses:
+        '200':
+          description: Move completed (Normal column) or accepted (Processing column)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card:
+                    $ref: '#/components/schemas/Card'
+                  status:
+                    type: string
+                    enum: [completed, accepted]
+        '403':
+          description: can-exit rejected the move
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "MOVE_REJECTED"
+                message: "Cannot archive: 3 child cards are still active"
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ProcessorUnavailableError'
+
+  /cards/{card_uid}/action:
+    post:
+      tags: [Cards]
+      summary: Trigger a custom action
+      description: |
+        Triggers the on-action hook on the card's current column processor.
+        For Processing columns, this is an async operation.
+      operationId: triggerAction
+      parameters:
+        - $ref: '#/components/parameters/CardUidParam'
+        - $ref: '#/components/headers/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriggerActionRequest'
+      responses:
+        '200':
+          description: Action completed (Normal) or accepted (Processing)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card:
+                    $ref: '#/components/schemas/Card'
+                  status:
+                    type: string
+                    enum: [completed, accepted]
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ProcessorUnavailableError'
+
+  # ─── Real-Time ───
+  /boards/{board_uid}/stream:
+    get:
+      tags: [Real-Time]
+      summary: SSE stream for board updates
+      description: |
+        Server-Sent Events stream for real-time card updates.
+        Clients should reconnect with Last-Event-ID header on disconnect.
+
+        **Note:** ROLLUP_CHANGED events are debounced 500ms per parent
+to prevent event storms from bulk processor updates.
+      operationId: subscribeToBoard
+      parameters:
+        - $ref: '#/components/parameters/BoardUidParam'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream established
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                id: evt-123
+event: CARD_UPDATED
+data: {"card_uid":"MKT-501","changes":{"processing_state":"PROCESSING"}}
+
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  # ─── Callbacks ───
+  /callbacks/v1/processor/{callback_token}:
+    post:
+      tags: [Callbacks]
+      summary: Processor async callback endpoint
+      description: |
+        Receives callbacks from Processors after async operations.
+        Token is single-use and verified against pending action registry.
+      operationId: processorCallback
+      parameters:
+        - name: callback_token
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Secure one-time token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessorCallbackPayload'
+      responses:
+        '200':
+          description: Callback processed
+        '401':
+          description: Invalid or expired callback token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "INVALID_CALLBACK_TOKEN"
+                message: "Callback token is invalid or expired"
+        '409':
+          description: Duplicate callback (idempotency)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "DUPLICATE_CALLBACK"
+                message: "This callback has already been processed"
+
+  # ─── Admin ───
+  /admin/dlq:
+    get:
+      tags: [Admin]
+      summary: List DLQ entries
+      operationId: listDLQ
+      responses:
+        '200':
+          description: DLQ entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        dlq_id:
+                          type: string
+                        card_uid:
+                          type: string
+                        processor_id:
+                          type: string
+                        hook:
+                          type: string
+                        reason:
+                          type: string
+                        status:
+                          type: string
+                          enum: [pending_admin, retried, cancelled, forced]
+
+  /admin/dlq/{dlq_id}/retry:
+    post:
+      tags: [Admin]
+      summary: Retry a failed async operation
+      operationId: retryDLQ
+      parameters:
+        - name: dlq_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Retry dispatched
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /admin/dlq/{dlq_id}/force:
+    post:
+      tags: [Admin]
+      summary: Force-complete a failed operation
+      description: |
+        Admin override to force a card out of ERROR state.
+        Logs ACTION: ADMIN_OVERRIDE to Event Log.
+      operationId: forceDLQ
+      parameters:
+        - name: dlq_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_state:
+                  type: string
+                  enum: [IDLE, ERROR]
+                target_column:
+                  type: string
+      responses:
+        '200':
+          description: Force completed
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+# ============================================================
+# PATHS — PROCESSOR CONTRACT (External Microservices)
+# ============================================================
+  /on-enter:
+    post:
+      tags: [Processor Contract]
+      summary: Initialize card in Processing column (Async)
+      description: |
+        Triggered when a card enters a Processing-type column.
+        Processor must return 202 Accepted immediately, then callback when done.
+      operationId: processorOnEnter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ProcessorContext'
+      responses:
+        '202':
+          description: Accepted — processing started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnEnterResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+  /on-update:
+    post:
+      tags: [Processor Contract]
+      summary: Validate and transform user edits (Sync)
+      description: |
+        Triggered when user attempts to edit card payload.
+        Must respond within 3 seconds. Orchestrator retries on 5xx only.
+      operationId: processorOnUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnUpdateRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnUpdateResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+  /can-exit:
+    post:
+      tags: [Processor Contract]
+      summary: Validate if card can leave column (Sync)
+      description: |
+        Triggered before card move. Must respond within 3 seconds.
+        Orchestrator defaults to rejected on timeout.
+      operationId: processorCanExit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CanExitRequest'
+      responses:
+        '200':
+          description: Exit permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CanExitResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+  /on-action:
+    post:
+      tags: [Processor Contract]
+      summary: Execute custom action (Async)
+      description: |
+        Triggered when user clicks a custom action button.
+        Processor must return 202 Accepted, then callback with result.
+      operationId: processorOnAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ProcessorContext'
+                - type: object
+                  properties:
+                    action:
+                      type: string
+      responses:
+        '202':
+          description: Accepted — action executing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnEnterResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+  /on-exit:
+    post:
+      tags: [Processor Contract]
+      summary: Post-exit side effects (Fire-and-Forget)
+      description: |
+        Triggered after card successfully exits column.
+        Orchestrator does not wait for or retry this call.
+      operationId: processorOnExit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                card:
+                  $ref: '#/components/schemas/Card'
+                next_column:
+                  $ref: '#/components/schemas/Column'
+                actor:
+                  type: string
+      responses:
+        '200':
+          description: Acknowledged
+
+  /health:
+    get:
+      tags: [Processor Contract]
+      summary: Health check endpoint
+      description: |
+        Must return 200 OK when service is healthy.
+        Called by Orchestrator every 30 seconds.
+      operationId: processorHealth
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+                  timestamp:
+                    type: string
+                    format: date-time

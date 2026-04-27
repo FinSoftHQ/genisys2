@@ -218,6 +218,17 @@ export function seedBoard(instance: unknown): BoardEntity {
   return parsed.data;
 }
 
+export function listBoards(instance: unknown): BoardEntity[] {
+  const { db } = resolveDb(instance);
+  const rows = db.select().from(boards).all();
+  const parsed: BoardEntity[] = [];
+  for (const row of rows) {
+    const result = BoardEntitySchema.safeParse(row);
+    if (result.success) parsed.push(result.data);
+  }
+  return parsed;
+}
+
 export function getBoardById(instance: unknown, boardUid: string): BoardEntity | null {
   const { db } = resolveDb(instance);
   const board = db.select().from(boards).where(eq(boards.uid, boardUid)).get();

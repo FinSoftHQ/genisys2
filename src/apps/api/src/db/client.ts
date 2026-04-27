@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import * as schema from './schema.js';
 import { bootstrapDefaultProcessor } from './seed.js';
 
@@ -16,7 +17,7 @@ export type DbInstance = {
 let memCounter = 0;
 
 export function createClient(path: string): DbInstance {
-  const dbPath = path === ':memory:' ? `file:mem_${Date.now()}_${memCounter++}?mode=memory` : path;
+  const dbPath = path === ':memory:' ? `file:mem_${randomUUID().replace(/-/g, '')}_${memCounter++}?mode=memory` : path;
   const sqlite = new Database(dbPath);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('synchronous = NORMAL');

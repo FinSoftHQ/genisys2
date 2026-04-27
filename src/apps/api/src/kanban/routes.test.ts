@@ -12,6 +12,8 @@ import {
   MoveCardBlockedResponseSchema,
   ProcessorCallbackResponseSchema,
   CallbackTokenRejectedResponseSchema,
+  TriggerActionResponseSchema,
+  ListBoardsResponseSchema,
 } from '@repo/shared';
 import { kanbanRoutes, callbackRoutes } from './routes.js';
 import * as repository from './repository.js';
@@ -27,6 +29,7 @@ vi.mock('./repository.js', () => ({
   moveCard: vi.fn(),
   createBoard: vi.fn(),
   getProcessorById: vi.fn(),
+  listBoards: vi.fn(),
 }));
 
 vi.mock('./hook-dispatcher.js', () => ({
@@ -101,6 +104,37 @@ describe('kanban routes', () => {
 
   afterEach(async () => {
     await app.close();
+  });
+
+  describe('GET /api/boards', () => {
+    it('returns 200 with data envelope containing list of boards', async () => {
+      vi.mocked(repository.listBoards).mockReturnValue([mockBoard]);
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/boards',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(ListBoardsResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.boards).toHaveLength(1);
+      expect(body.data.boards[0].uid).toBe(mockBoard.uid);
+    });
+
+    it('returns empty array when no boards exist', async () => {
+      vi.mocked(repository.listBoards).mockReturnValue([]);
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/boards',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(ListBoardsResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.boards).toHaveLength(0);
+    });
   });
 
   describe('POST /api/boards', () => {
@@ -768,6 +802,77 @@ describe('kanban routes', () => {
       const body = response.json();
       expect(ApiErrorSchema.safeParse(body).success).toBe(true);
       expect(body.error.code).toBe('MOVE_BLOCKED');
+    });
+  });
+
+  describe('POST /api/boards/:boardId/cards/:cardId/action', () => {
+    it('returns 200 with card and status completed for Normal columns', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/action`,
+        payload: { action: 'Approve', version: 1 },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(TriggerActionResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.card.uid).toBe(mockCard.uid);
+      expect(body.data.status).toBe('completed');
+    });
+
+    it('returns 404 for unknown card', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(null);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/00000000-0000-0000-0000-000000000000/action`,
+        payload: { action: 'Approve', version: 1 },
+      });
+
+      expect(response.statusCode).toBe(404);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('returns 409 when version is stale', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/action`,
+        payload: { action: 'Approve', version: 99 },
+      });
+
+      expect(response.statusCode).toBe(409);
+      const body = response.json();
+      expect(CardConflictResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('CONFLICT');
+    });
+
+    it('returns 400 for invalid params', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/not-a-uuid/action`,
+        payload: { action: 'Approve', version: 1 },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('returns 400 when action is missing', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/action`,
+        payload: { version: 1 },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
     });
   });
 
