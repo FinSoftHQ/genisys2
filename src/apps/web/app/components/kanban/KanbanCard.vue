@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { CardEntity } from '@repo/shared';
 
 const props = defineProps<{
@@ -9,7 +10,26 @@ const emit = defineEmits<{
   (e: 'edit', card: CardEntity): void;
 }>();
 
+const isLocked = computed(() =>
+  props.card.processing_state === 'PROCESSING' || props.card.processing_state === 'ERROR'
+);
+
+const cardRootUi = computed(() => {
+  const base = 'relative overflow-hidden';
+  const cursor = isLocked.value
+    ? 'cursor-not-allowed opacity-80'
+    : 'cursor-grab active:cursor-grabbing';
+  return {
+    root: `${base} ${cursor} bg-white dark:bg-gray-900`,
+    body: 'p-3',
+  };
+});
+
 function onDragStart(event: DragEvent) {
+  if (isLocked.value) {
+    event.preventDefault();
+    return;
+  }
   if (event.dataTransfer) {
     event.dataTransfer.setData('text/plain', props.card.uid);
     event.dataTransfer.effectAllowed = 'move';
@@ -19,17 +39,25 @@ function onDragStart(event: DragEvent) {
 
 <template>
   <UCard
-    :ui="{ root: 'cursor-grab active:cursor-grabbing bg-white dark:bg-gray-900', body: 'p-3' }"
-    draggable="true"
+    :ui="cardRootUi"
+    :draggable="!isLocked"
     @dragstart="onDragStart"
   >
+    <!-- PROCESSING spinner overlay -->
+    <div
+      v-if="card.processing_state === 'PROCESSING'"
+      class="absolute inset-0 z-10 flex items-center justify-center bg-white/60 dark:bg-gray-900/60 backdrop-blur-[1px]"
+    >
+      <UIcon name="i-lucide-loader-2" class="size-6 animate-spin text-info" />
+    </div>
+
     <div class="flex items-start justify-between gap-2">
       <div class="flex-1 min-w-0">
         <p class="font-medium text-sm text-default truncate">{{ card.title }}</p>
         <p v-if="card.description" class="text-xs text-muted mt-1 line-clamp-2">{{ card.description }}</p>
       </div>
       <UButton
-        v-if="card.is_editable"
+        v-if="card.is_editable && !isLocked"
         icon="i-lucide-pencil"
         variant="ghost"
         color="neutral"

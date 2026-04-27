@@ -39,6 +39,11 @@ const isSaving = ref(false);
 const errorMsg = ref('');
 const conflictServerCard = ref<CardEntity | null>(null);
 
+const isLocked = computed(() => {
+  if (!props.card) return false;
+  return props.card.processing_state === 'PROCESSING' || props.card.processing_state === 'ERROR';
+});
+
 watch(
   () => props.card,
   (card) => {
@@ -52,6 +57,10 @@ watch(
 
 async function onSubmit() {
   if (!props.card) return;
+  if (isLocked.value) {
+    errorMsg.value = 'This card is currently locked and cannot be edited.';
+    return;
+  }
   isSaving.value = true;
   errorMsg.value = '';
   try {
@@ -127,9 +136,19 @@ function onClose() {
           </template>
         </UAlert>
 
+        <UAlert
+          v-if="isLocked"
+          icon="i-lucide-lock"
+          color="warning"
+          variant="soft"
+          class="mb-4"
+          title="Card is locked"
+          description="This card is being processed and cannot be edited right now."
+        />
+
         <div class="flex justify-end gap-2">
           <UButton variant="ghost" @click="onClose">Cancel</UButton>
-          <UButton type="submit" :loading="isSaving" :disabled="!!conflictServerCard">Save</UButton>
+          <UButton type="submit" :loading="isSaving" :disabled="!!conflictServerCard || isLocked">Save</UButton>
         </div>
       </UForm>
     </template>

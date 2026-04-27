@@ -129,10 +129,93 @@
   - `PATCH /boards/{boardId}/cards/{cardId}` documents `409 Conflict` (`CardConflictResponse`).
   - `POST /boards/{boardId}/cards/{cardId}/move` documents `409 Conflict` (`MoveCardBlockedResponse`) and the `can-exit` hook behavior.
 
+## [1.2.0-slice3] — 2026-04-27
+
+### Added
+
+#### Backend — Smart Columns & Async Processing
+
+- **Processing column support** (`src/apps/api/src/db/schema.ts`, `src/apps/api/src/db/migrations/0003_kanban_slice3.sql`)
+  - `cards.processing_state` enum (`IDLE` | `PROCESSING` | `ERROR`) with default `IDLE`.
+  - `cards.is_editable` boolean, default `true`. Schema validation enforces `is_editable: false` when state is `PROCESSING` or `ERROR`.
+  - `BoardColumn.type` now supports `Normal` and `Processing`. Processing columns require at least one `exit_logic` route.
+  - New `callback_tokens` table: `token` (UUID PK), `card_uid`, `processor_id`, `hook`, `idempotency_key`, `context`, `expires_at`, `created_at`.
+
+- **Processor registry** (`src/apps/api/src/db/schema.ts`, `src/apps/api/src/kanban/processor-registry.ts`)
+  - `processor_registry` table stores processor metadata: `base_url`, `health_endpoint`, supported `hooks`, `sla_seconds`, `max_sla_seconds`, `auth_type`, `auth_config`, `hmac_secret`, and `status`.
+  - `runHealthCheck(processor)` performs a `GET {base_url}{health_endpoint}` with a 3-second timeout and returns `healthy`, `degraded`, or `unhealthy`.
+  - `getHealthPollConfig()` returns `interval_seconds: 30`, `timeout_ms: 3000`.
+  - `seed.ts` and `repository.ts` seed a `manager-approval` processor for the `in-review` Processing column. `hmac_secret` is seeded as `temp-secret-ignore` (actual HMAC enforcement deferred to Slice 6).
+
+- **Async hook dispatcher** (`src/apps/api/src/kanban/hook-dispatcher.ts`)
+  - `dispatchAsyncHook(processor, hook, payload)` POSTs to `{processor.base_url}/{hook}` without timeout (fire-and-forget style).
+  - `dispatchSyncHook(...)` unchanged from Slice 2 (3-second timeout, used for `can-exit`).
+
+- **Processing orchestrator** (`src/apps/api/src/kanban/processing-orchestrator.ts`)
+  - `startProcessing(db, board, card, processingColumn)` — validates transition from `IDLE`, atomically sets `processing_state = PROCESSING` and `is_editable = false`, generates a UUID `callback_token` with 10-minute expiry, stores it in `callback_tokens`, and dispatches `on-enter` to the processor with `callback_url`, `idempotency_key`, and full context.
+  - `consumeCallback(db, token, authHeader, payload)` — looks up the token (404 if missing, 410 if expired, 409 if replayed), applies `payload_updates` on success, optionally moves the card via `move_to_column`, sets `processing_state = IDLE` and `is_editable = true` on success or `ERROR`/`false` on error, atomically deletes the token row, and adds the token to an in-memory replay-protection set.
+
+- **Callback receiver endpoint** (`src/apps/api/src/kanban/routes.ts`)
+  - `POST /api/callbacks/{token}` — validates path param, `Authorization: Bearer` header, and request body via Zod schemas.
+  - Returns `{ data: { card } }` on success.
+  - Error codes: `CALLBACK_TOKEN_MISSING` (404), `CALLBACK_TOKEN_EXPIRED` (410), `CALLBACK_TOKEN_REPLAYED` (409).
+
+- **Move blocking for locked cards** (`src/apps/api/src/kanban/routes.ts`)
+  - `POST /api/boards/{boardId}/cards/{cardId}/move` rejects cards in `PROCESSING` state with `409 MOVE_BLOCKED` before the `can-exit` hook is even dispatched.
+
+- **Repository additions** (`src/apps/api/src/kanban/repository.ts`)
+  - `updateCardProcessingState` — atomic conditional update using `fromState` / `toState` validation via `ProcessingStateTransitionSchema`.
+  - `createCallbackToken`, `getCallbackToken`, `deleteCallbackToken` — callback token CRUD.
+  - `getProcessorById`, `upsertProcessorRegistry` — processor registry access.
+  - `seedDemoBoardWithProcessingColumn` — creates a demo board with a Processing `in-review` column.
+  - `bootstrapDefaultProcessor` — seeds the `default-manual` processor.
+
+- **Seeding** (`src/apps/api/src/db/seed.ts`)
+  - `seedDemoBoardWithProcessingColumn()` creates a board with `backlog` (Normal), `in-review` (Processing, `manager-approval`), and `done` (Normal).
+  - Ensures `manager-approval` processor row exists in `processor_registry` with placeholder `hmac_secret`.
+
+#### Frontend — Spinner, Lock, and Polling
+
+- **Board store polling** (`src/apps/web/app/composables/useBoardStore.ts`)
+  - New computed: `hasProcessingCards` — true when any card has `processing_state === 'PROCESSING'`.
+  - New state: `ui.pollIntervalId`.
+  - `startPolling(refresh, intervalMs = 2000)` — starts an interval that calls the provided `refresh()` function every 2 seconds.
+  - `stopPolling()` — clears the interval and nulls the id.
+  - `resetStore()` now stops polling before clearing state.
+
+- **Kanban card spinner overlay** (`src/apps/web/app/components/kanban/KanbanCard.vue`)
+  - When `processing_state === 'PROCESSING'`, a full-card overlay renders with a spinning `i-lucide-loader-2` icon and a semi-transparent backdrop (`bg-white/60 dark:bg-gray-900/60 backdrop-blur-[1px]`).
+  - Cards in `PROCESSING` or `ERROR` state are non-draggable (`draggable: false`), non-editable (pencil hidden), and styled with `cursor-not-allowed opacity-80`.
+  - `processing_state` badge shown when not `IDLE` (`ERROR` = error color, `PROCESSING` = info color).
+
+- **Board column Processing badge** (`src/apps/web/app/components/kanban/BoardColumn.vue`)
+  - Columns of `type === 'Processing'` display an `info` colored `UBadge` labeled "Processing" next to the column title.
+
+- **Board view polling orchestration** (`src/apps/web/app/components/kanban/BoardView.vue`)
+  - Watches `hasProcessingCards` and automatically starts/stops snapshot polling.
+  - When a card enters `PROCESSING`, the board refreshes every 2 seconds so the UI can detect when the processor callback unlocks or moves the card.
+  - Polling is cleaned up on component unmount via `onUnmounted`.
+
+- **Edit card modal lock guard** (`src/apps/web/app/components/kanban/EditCardModal.vue`)
+  - New computed `isLocked` — true when `processing_state` is `PROCESSING` or `ERROR`.
+  - Displays a warning `UAlert` with lock icon when the card is locked: "Card is locked — This card is being processed and cannot be edited right now."
+  - The **Save** button is disabled when `isLocked` is true.
+  - Submit handler rejects edits early with `errorMsg = 'This card is currently locked and cannot be edited.'`.
+
+### Changed
+
+- **OpenAPI spec** (`docs/openapi.yaml`)
+  - Bumped version to `1.2.0`.
+  - Added `POST /boards` (create board).
+  - Added `POST /callbacks/{token}` with full request/response schemas and error codes.
+  - `CardEntity` now documents `processing_state` and `is_editable` semantics.
+  - `BoardColumn` documents `Processing` type and `exit_logic` requirements.
+  - `POST /boards/{boardId}/cards/{cardId}/move` documents `MOVE_BLOCKED` for cards in `PROCESSING` state.
+
 ### Intentionally Deferred
 
-- SSE / real-time updates
-- Async processor hooks and DLQ
-- Idempotency keys
+- HMAC signature verification on callbacks (trust the token for now)
+- DLQ for SLA breaches
+- SSE real-time updates
 - Pagination on snapshot
 - Event logging and audit trail

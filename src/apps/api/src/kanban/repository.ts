@@ -1,9 +1,9 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { BoardEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema } from '@repo/shared';
+import { BoardEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema, CallbackTokenEntitySchema, ProcessingStateTransitionSchema } from '@repo/shared';
 import type { DbInstance } from '../db/client.js';
 import { createClient } from '../db/client.js';
-import { boards, boardSequences, cards, processorRegistry } from '../db/schema.js';
+import { boards, boardSequences, cards, processorRegistry, callbackTokens } from '../db/schema.js';
 import type { ProcessorRegistryEntity } from '@repo/shared';
 import { seedBoard as seedBoardImpl } from '../db/seed.js';
 import type { BoardEntity, CardEntity } from '@repo/shared';
@@ -14,7 +14,7 @@ function isDbInstance(value: unknown): value is DbInstance {
   return !!value && typeof value === 'object' && 'sqlite' in value && 'db' in value;
 }
 
-function resolveDb(instance: unknown): DbInstance {
+export function resolveDb(instance: unknown): DbInstance {
   if (isDbInstance(instance)) {
     return instance;
   }
@@ -134,7 +134,89 @@ export function createBoard(instance: unknown): BoardEntity {
   return parsed.data;
 }
 
-export { seedBoardImpl as seedBoard };
+let repoSeedCounter = 0;
+
+export function seedBoard(instance: unknown): BoardEntity {
+  const { db } = resolveDb(instance);
+  const uid = randomUUID();
+  const now = new Date().toISOString();
+  const prefix = `R${repoSeedCounter++}`;
+
+  const boardData = {
+    uid,
+    title: 'Demo Board',
+    prefix,
+    schema: {
+      columns: [
+        {
+          uid: 'backlog',
+          title: 'Backlog',
+          type: 'Normal' as const,
+          processor_id: 'default-manual',
+          exit_logic: { default: 'in-progress' },
+          order: 0,
+        },
+        {
+          uid: 'in-review',
+          title: 'In Review',
+          type: 'Processing' as const,
+          processor_id: 'manager-approval',
+          exit_logic: { approved: 'done', rejected: 'backlog' },
+          order: 1,
+        },
+        {
+          uid: 'in-progress',
+          title: 'In Progress',
+          type: 'Normal' as const,
+          processor_id: 'default-manual',
+          exit_logic: { default: 'done' },
+          order: 2,
+        },
+        {
+          uid: 'done',
+          title: 'Done',
+          type: 'Normal' as const,
+          processor_id: 'default-manual',
+          exit_logic: {},
+          order: 3,
+        },
+      ],
+    },
+    permissions: { read: [] as string[], write: [] as string[] },
+    created_at: now,
+    updated_at: now,
+  };
+
+  const parsed = BoardEntitySchema.safeParse(boardData);
+  if (!parsed.success) {
+    throw new Error('Invalid board data: ' + JSON.stringify(parsed.error.issues));
+  }
+
+  db.insert(boards).values(boardData).run();
+  db.insert(boardSequences).values({ prefix, seq_value: 0 }).run();
+
+  const existingProcessor = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'manager-approval')).get();
+  if (!existingProcessor) {
+    db.insert(processorRegistry).values({
+      processor_id: 'manager-approval',
+      name: 'Manager Approval Gate',
+      base_url: 'http://localhost:4001',
+      health_endpoint: '/health',
+      hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+      sla_seconds: 300,
+      max_sla_seconds: 600,
+      auth_type: 'none',
+      auth_config: null,
+      hmac_secret: 'temp-secret-ignore',
+      status: 'unknown',
+      last_health_check: null,
+      created_at: now,
+      updated_at: now,
+    }).run();
+  }
+
+  return parsed.data;
+}
 
 export function getBoardById(instance: unknown, boardUid: string): BoardEntity | null {
   const { db } = resolveDb(instance);
@@ -321,5 +403,161 @@ export function moveCard(instance: unknown, boardUid: string, cardUid: string, t
   if (!parsed.success) {
     throw new Error('CARD_NOT_FOUND');
   }
+  return parsed.data;
+}
+
+export function createCallbackToken(
+  instance: unknown,
+  input: {
+    token: string;
+    card_uid: string;
+    processor_id: string;
+    hook: string;
+    idempotency_key: string;
+    context: Record<string, unknown>;
+    expires_at: string;
+  },
+) {
+  const { db } = resolveDb(instance);
+  const now = new Date().toISOString();
+  const tokenData = {
+    token: input.token,
+    card_uid: input.card_uid,
+    processor_id: input.processor_id,
+    hook: input.hook,
+    idempotency_key: input.idempotency_key,
+    context: input.context,
+    expires_at: input.expires_at,
+    created_at: now,
+  };
+  db.insert(callbackTokens).values(tokenData).run();
+  return CallbackTokenEntitySchema.parse(tokenData);
+}
+
+export function getCallbackToken(instance: unknown, token: string) {
+  const { db } = resolveDb(instance);
+  const result = db.select().from(callbackTokens).where(eq(callbackTokens.token, token)).get();
+  if (!result) return undefined;
+  const parsed = CallbackTokenEntitySchema.safeParse(result);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function deleteCallbackToken(instance: unknown, token: string) {
+  const { db } = resolveDb(instance);
+  db.delete(callbackTokens).where(eq(callbackTokens.token, token)).run();
+}
+
+export function updateCardProcessingState(
+  instance: unknown,
+  boardUid: string,
+  cardUid: string,
+  fromState: string,
+  toState: string,
+  options: { is_editable: boolean; payload?: Record<string, unknown>; current_status?: string },
+): CardEntity | null {
+  const transition = ProcessingStateTransitionSchema.safeParse({ from: fromState, to: toState });
+  if (!transition.success) {
+    throw new Error('INVALID_STATE_TRANSITION');
+  }
+
+  const { db } = resolveDb(instance);
+  const now = new Date().toISOString();
+
+  const updateData: Partial<typeof cards.$inferInsert> = {
+    processing_state: toState,
+    is_editable: options.is_editable,
+    version: sql`${cards.version} + 1`,
+    updated_at: now,
+  };
+
+  if (options.payload !== undefined) {
+    updateData.payload = options.payload;
+  }
+  if (options.current_status !== undefined) {
+    updateData.current_status = options.current_status;
+  }
+
+  const result = db
+    .update(cards)
+    .set(updateData)
+    .where(and(
+      eq(cards.board_uid, boardUid),
+      eq(cards.uid, cardUid),
+      eq(cards.processing_state, fromState),
+    ))
+    .returning()
+    .get();
+
+  if (!result) return null;
+  const parsed = CardEntitySchema.safeParse(result);
+  return parsed.success ? parsed.data : null;
+}
+
+export function upsertProcessorRegistry(
+  instance: unknown,
+  input: {
+    processor_id: string;
+    name: string;
+    base_url: string;
+    health_endpoint?: string;
+    hooks: string[];
+    sla_seconds: number;
+    max_sla_seconds: number;
+    auth_type: string;
+    auth_config?: Record<string, unknown> | null;
+    hmac_secret: string;
+  },
+): ProcessorRegistryEntity {
+  if (input.sla_seconds > input.max_sla_seconds) {
+    throw new Error('SLA_EXCEEDS_MAX');
+  }
+  if (!input.hmac_secret || input.hmac_secret.length === 0) {
+    throw new Error('EMPTY_HMAC_SECRET');
+  }
+
+  const { db } = resolveDb(instance);
+  const now = new Date().toISOString();
+
+  const data = {
+    processor_id: input.processor_id,
+    name: input.name,
+    base_url: input.base_url,
+    health_endpoint: input.health_endpoint ?? '/health',
+    hooks: input.hooks,
+    sla_seconds: input.sla_seconds,
+    max_sla_seconds: input.max_sla_seconds,
+    auth_type: input.auth_type,
+    auth_config: input.auth_config ?? null,
+    hmac_secret: input.hmac_secret,
+    status: 'unknown' as const,
+    last_health_check: null as string | null,
+    created_at: now,
+    updated_at: now,
+  };
+
+  db.insert(processorRegistry)
+    .values(data)
+    .onConflictDoUpdate({
+      target: processorRegistry.processor_id,
+      set: {
+        name: input.name,
+        base_url: input.base_url,
+        health_endpoint: input.health_endpoint ?? '/health',
+        hooks: input.hooks,
+        sla_seconds: input.sla_seconds,
+        max_sla_seconds: input.max_sla_seconds,
+        auth_type: input.auth_type,
+        auth_config: input.auth_config ?? null,
+        hmac_secret: input.hmac_secret,
+        updated_at: now,
+      },
+    })
+    .run();
+
+  const result = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, input.processor_id)).get();
+  if (!result) throw new Error('UPSERT_FAILED');
+
+  const parsed = ProcessorRegistryEntitySchema.safeParse(result);
+  if (!parsed.success) throw new Error('INVALID_PROCESSOR_DATA');
   return parsed.data;
 }

@@ -46,3 +46,19 @@ export const processorRegistry = sqliteTable('processor_registry', {
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
 });
+
+export const callbackTokens = sqliteTable('callback_tokens', {
+  token: text('token').primaryKey(),
+  card_uid: text('card_uid').notNull(),
+  processor_id: text('processor_id').notNull(),
+  hook: text('hook', { enum: ['on-enter', 'on-action'] }).notNull(),
+  idempotency_key: text('idempotency_key').notNull(),
+  context: text('context', { mode: 'json' }).notNull(),
+  expires_at: text('expires_at').notNull(),
+  created_at: text('created_at').notNull(),
+});
+
+export const consumedCallbackTokens = sqliteTable('consumed_callback_tokens', {
+  token: text('token').primaryKey(),
+  consumed_at: text('consumed_at').notNull(),
+});

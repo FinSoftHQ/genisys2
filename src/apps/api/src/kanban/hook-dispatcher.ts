@@ -1,6 +1,7 @@
 import {
   CanExitHookResponseSchema,
   SyncHookDispatchRequestSchema,
+  OnEnterDispatchAcceptedResponseSchema,
   type ProcessorRegistryEntity,
   type CanExitHookResponse,
 } from '@repo/shared';
@@ -74,4 +75,23 @@ export async function dispatchSyncHook(
   } catch (err) {
     throw err;
   }
+}
+
+export async function dispatchAsyncHook(
+  processor: ProcessorRegistryEntity,
+  hook: string,
+  payload: Record<string, unknown>,
+) {
+  const response = await fetch(`${processor.base_url}/${hook}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Async hook request failed with status ${response.status}`);
+  }
+
+  const data = await response.json();
+  return OnEnterDispatchAcceptedResponseSchema.parse(data);
 }

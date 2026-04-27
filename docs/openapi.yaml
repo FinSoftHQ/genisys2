@@ -2,15 +2,22 @@ openapi: 3.1.0
 info:
   title: Genisys2 Kanban API
   description: |
-    Slice 1 Kanban MVP API surface.
+    Slice 3 "Smart Columns" Kanban API.
 
-    Provides board snapshot retrieval, card creation, card updates, and card moves
-    between columns. All successful responses are wrapped in a `{ data: { ... } }` envelope.
+    Provides board snapshot retrieval, card creation, card updates, card moves
+    between columns, and processor callback handling. All successful responses are
+    wrapped in a `{ data: { ... } }` envelope.
 
     ## Deterministic Demo Board
     The API seeds a deterministic demo board on startup via `seedBoard`. The demo board
-    has three columns: **Backlog**, **In Progress**, and **Done**.
-  version: "1.1.0"
+    includes a **Processing** column (`in-review`) gated by the `manager-approval` processor.
+
+    ## Processing Columns
+    When a card enters a `Processing` column, the card's `processing_state` becomes
+    `PROCESSING`, `is_editable` becomes `false`, and the system dispatches an async
+    `on-enter` hook to the column's processor. The processor must POST back to the
+    provided `callback_url` to unlock the card or move it to another column.
+  version: "1.2.0"
   contact:
     name: Genisys2 Team
 servers:
@@ -22,15 +29,36 @@ tags:
     description: Board-level operations and snapshots
   - name: Cards
     description: Card CRUD and movement operations
+  - name: Callbacks
+    description: Processor callback receiver for async hook completion
 
 paths:
+  /boards:
+    post:
+      operationId: createBoard
+      summary: Create a new board
+      description: |
+        Creates a new kanban board with a generated prefix and default three-column
+        schema (Backlog → In Progress → Done).
+      tags:
+        - Boards
+      responses:
+        "201":
+          description: Board created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateBoardResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /boards/{boardId}/snapshot:
     get:
       operationId: getBoardSnapshot
       summary: Get full board snapshot
       description: |
         Returns the complete board state including board metadata and all visible cards.
-        No pagination is applied in Slice 1.
+        No pagination is applied.
       tags:
         - Boards
       parameters:
@@ -107,6 +135,8 @@ paths:
         provided. The request must include the current `version` for optimistic locking.
         If the server's version has advanced, a `409 Conflict` is returned with the
         authoritative card state so the client can refresh and retry.
+
+        Cards in `PROCESSING` or `ERROR` state (`is_editable: false`) cannot be edited.
       tags:
         - Cards
       parameters:
@@ -141,11 +171,17 @@ paths:
       operationId: moveCard
       summary: Move a card to another column
       description: |
-        Changes a card's `current_status` to the target column uid. Before the move,
-        a synchronous `can-exit` hook is dispatched to the column's processor with a
-        strict 3-second timeout. If the processor returns `allowed: false`, the move
-        is rejected with `409 Conflict`. The target column must exist in the board
-        schema. The card `version` is incremented automatically on a successful move.
+        Changes a card's `current_status` to the target column uid.
+
+        **Blocked moves:** A card in `PROCESSING` state cannot be moved directly;
+        the API returns `409 MOVE_BLOCKED`. The processor must call the callback
+        endpoint with `move_to_column` to transition the card.
+
+        **can-exit hook:** Before the move, a synchronous `can-exit` hook is dispatched
+        to the column's processor with a strict 3-second timeout. If the processor
+        returns `allowed: false`, the move is rejected with `409 Conflict`.
+        The target column must exist in the board schema. The card `version` is
+        incremented automatically on a successful move.
       tags:
         - Cards
       parameters:
@@ -169,13 +205,103 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Move blocked by processor `can-exit` hook or optimistic locking conflict
+          description: |
+            Move blocked by processor `can-exit` hook, card is in `PROCESSING` state,
+            or optimistic locking conflict.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/MoveCardBlockedResponse"
         "500":
           description: Internal move failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /callbacks/{token}:
+    post:
+      operationId: processorCallback
+      summary: Processor callback receiver
+      description: |
+        Receives asynchronous completion callbacks from processors. When a card enters
+        a `Processing` column, the system POSTs an `on-enter` hook to the processor
+        with a unique `callback_url` pointing to this endpoint.
+
+        **Token lifecycle:**
+        - The token is generated as a UUID and stored in `callback_tokens` with a
+          10-minute `expires_at` deadline.
+        - The token is deleted atomically on successful consumption.
+        - A replay-protected in-memory set (`consumedTokens`) rejects reuse of
+          already-deleted tokens with `409 CALLBACK_TOKEN_REPLAYED`.
+
+        **Payload semantics:**
+        - `status: success` — unlocks the card (`processing_state: IDLE`,
+          `is_editable: true`), applies optional `payload_updates`, and optionally
+          moves the card to `move_to_column`.
+        - `status: error` — sets `processing_state: ERROR`, `is_editable: false`.
+
+        **Auth:** Requires `Authorization: Bearer <token>` header. In Slice 3, HMAC
+        signature verification is deferred; bearer token presence is validated but
+        not cryptographically verified.
+      tags:
+        - Callbacks
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: UUID callback token issued during `on-enter` dispatch
+          schema:
+            type: string
+            format: uuid
+        - name: Authorization
+          in: header
+          required: true
+          description: Bearer token header (`Bearer <token>`)
+          schema:
+            type: string
+            pattern: "^Bearer\\s+.+$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProcessorCallbackRequest"
+      responses:
+        "200":
+          description: Callback consumed successfully; card updated and/or moved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProcessorCallbackResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Invalid or missing Authorization header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Callback token not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallbackTokenRejectedResponse"
+        "409":
+          description: Callback token has already been used (replay protection)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallbackTokenRejectedResponse"
+        "410":
+          description: Callback token has expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallbackTokenRejectedResponse"
+        "500":
+          description: Internal callback processing error
           content:
             application/json:
               schema:
@@ -259,7 +385,9 @@ components:
           enum:
             - Normal
             - Processing
-          description: Column type
+          description: |
+            Column type. `Processing` columns lock cards and dispatch async `on-enter`
+            hooks to their configured processor.
         processor_id:
           type: string
           minLength: 1
@@ -270,7 +398,9 @@ components:
           additionalProperties:
             type: string
             minLength: 1
-          description: Map of exit keys to target column uids
+          description: |
+            Map of exit keys to target column uids. Processing columns must define
+            at least one exit route.
         order:
           type: integer
           minimum: 0
@@ -343,10 +473,15 @@ components:
             - IDLE
             - PROCESSING
             - ERROR
-          description: Current processing state
+          description: |
+            Current processing state. `PROCESSING` means an async hook is in flight.
+            `ERROR` means the processor reported failure. Both lock the card
+            (`is_editable: false`).
         is_editable:
           type: boolean
-          description: Whether the card is currently editable
+          description: |
+            Whether the card is currently editable. Automatically `false` when
+            `processing_state` is `PROCESSING` or `ERROR`.
         payload:
           type: object
           additionalProperties: true
@@ -365,6 +500,138 @@ components:
           type: string
           format: date-time
           description: ISO 8601 last update timestamp
+
+    ProcessorRegistryEntity:
+      type: object
+      required:
+        - processor_id
+        - name
+        - base_url
+        - health_endpoint
+        - hooks
+        - sla_seconds
+        - max_sla_seconds
+        - auth_type
+        - hmac_secret
+        - status
+        - created_at
+        - updated_at
+      properties:
+        processor_id:
+          type: string
+          minLength: 1
+          maxLength: 120
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        base_url:
+          type: string
+          format: uri
+          description: Base URL for all processor hooks
+        health_endpoint:
+          type: string
+          minLength: 1
+          maxLength: 200
+          default: "/health"
+        hooks:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum:
+              - on-enter
+              - on-update
+              - on-action
+              - can-exit
+              - on-exit
+        sla_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+          description: Target SLA for hook completion
+        max_sla_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+          description: Hard maximum SLA; must be >= sla_seconds
+        auth_type:
+          type: string
+          enum:
+            - bearer
+            - oauth2
+            - none
+        auth_config:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Processor-specific auth configuration
+        hmac_secret:
+          type: string
+          minLength: 1
+          description: |
+            HMAC secret for callback signature verification. In Slice 3 this is
+            populated with a placeholder (`temp-secret-ignore`) and actual HMAC
+            enforcement is deferred to Slice 6.
+        status:
+          type: string
+          enum:
+            - healthy
+            - degraded
+            - unhealthy
+            - unknown
+          description: Last known health status from polling
+        last_health_check:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO 8601 timestamp of the last health check
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CallbackTokenEntity:
+      type: object
+      required:
+        - token
+        - card_uid
+        - processor_id
+        - hook
+        - idempotency_key
+        - context
+        - expires_at
+        - created_at
+      properties:
+        token:
+          type: string
+          format: uuid
+        card_uid:
+          type: string
+          format: uuid
+        processor_id:
+          type: string
+        hook:
+          type: string
+          enum:
+            - on-enter
+            - on-action
+        idempotency_key:
+          type: string
+          format: uuid
+        context:
+          type: object
+          additionalProperties: true
+          description: Hook-specific context (e.g. previous_status)
+        expires_at:
+          type: string
+          format: date-time
+          description: Token expiration deadline
+        created_at:
+          type: string
+          format: date-time
 
     SnapshotData:
       type: object
@@ -386,6 +653,19 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/SnapshotData"
+
+    CreateBoardResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - board
+          properties:
+            board:
+              $ref: "#/components/schemas/BoardEntity"
 
     CreateCardRequest:
       type: object
@@ -497,6 +777,82 @@ components:
           properties:
             card:
               $ref: "#/components/schemas/CardEntity"
+
+    ProcessorCallbackRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - success
+            - error
+          description: Processor-reported completion status
+        payload_updates:
+          type: object
+          description: Optional partial card updates to apply on success
+          properties:
+            title:
+              type: string
+              minLength: 1
+              maxLength: 200
+            description:
+              type: string
+              maxLength: 5000
+              nullable: true
+            payload:
+              type: object
+              additionalProperties: true
+            is_editable:
+              type: boolean
+        move_to_column:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 64
+          pattern: "^[A-Za-z0-9:_-]+$"
+          description: |
+            If provided on `status: success`, moves the card to this column uid
+            after unlocking.
+        error_message:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Required when `status` is `error`
+
+    ProcessorCallbackResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - card
+          properties:
+            card:
+              $ref: "#/components/schemas/CardEntity"
+
+    CallbackTokenRejectedResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              enum:
+                - CALLBACK_TOKEN_MISSING
+                - CALLBACK_TOKEN_EXPIRED
+                - CALLBACK_TOKEN_REPLAYED
+            message:
+              type: string
 
     CardConflictResponse:
       type: object
@@ -624,3 +980,10 @@ components:
             error:
               code: BOARD_NOT_FOUND
               message: Board not found
+
+    InternalError:
+      description: Unexpected internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"

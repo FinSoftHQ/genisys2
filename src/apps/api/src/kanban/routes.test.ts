@@ -10,10 +10,13 @@ import {
   ApiErrorSchema,
   CardConflictResponseSchema,
   MoveCardBlockedResponseSchema,
+  ProcessorCallbackResponseSchema,
+  CallbackTokenRejectedResponseSchema,
 } from '@repo/shared';
-import { kanbanRoutes } from './routes.js';
+import { kanbanRoutes, callbackRoutes } from './routes.js';
 import * as repository from './repository.js';
 import { dispatchSyncHook } from './hook-dispatcher.js';
+import { consumeCallback, startProcessing } from './processing-orchestrator.js';
 
 vi.mock('./repository.js', () => ({
   getBoardById: vi.fn(),
@@ -28,6 +31,11 @@ vi.mock('./repository.js', () => ({
 
 vi.mock('./hook-dispatcher.js', () => ({
   dispatchSyncHook: vi.fn(),
+}));
+
+vi.mock('./processing-orchestrator.js', () => ({
+  consumeCallback: vi.fn(),
+  startProcessing: vi.fn(),
 }));
 
 const mockBoard = {
@@ -688,6 +696,238 @@ describe('kanban routes', () => {
       expect(MoveCardResponseSchema.safeParse(body).success).toBe(true);
       expect(body.data.card.current_status).toBe('in-progress');
       expect(body.data.card.version).toBe(2);
+    });
+  });
+
+  describe('POST /api/boards/:boardId/cards/:cardId/move — Slice 3 Processing column', () => {
+    const processingBoard = {
+      ...mockBoard,
+      schema: {
+        columns: [
+          {
+            uid: 'backlog',
+            title: 'Backlog',
+            type: 'Normal',
+            processor_id: 'default-manual',
+            exit_logic: { default: 'in-review' },
+            order: 0,
+          },
+          {
+            uid: 'in-review',
+            title: 'In Review',
+            type: 'Processing',
+            processor_id: 'manager-approval',
+            exit_logic: { approved: 'done', rejected: 'backlog' },
+            order: 1,
+          },
+          {
+            uid: 'done',
+            title: 'Done',
+            type: 'Normal',
+            processor_id: 'default-manual',
+            exit_logic: {},
+            order: 2,
+          },
+        ],
+      },
+    };
+
+    it('triggers startProcessing when moving into a Processing column', async () => {
+      const processingCard = { ...mockCard, current_status: 'in-review', processing_state: 'PROCESSING', is_editable: false, version: 2 };
+      vi.mocked(repository.getBoardById).mockResolvedValue(processingBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(dispatchSyncHook).mockResolvedValue({ allowed: true });
+      vi.mocked(repository.moveCard).mockResolvedValue(processingCard);
+      vi.mocked(startProcessing).mockResolvedValue(processingCard);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'in-review' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(MoveCardResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.card.processing_state).toBe('PROCESSING');
+      expect(body.data.card.is_editable).toBe(false);
+    });
+
+    it('does not allow direct move out of PROCESSING state card', async () => {
+      const lockedCard = { ...mockCard, processing_state: 'PROCESSING', is_editable: false };
+      vi.mocked(repository.getBoardById).mockResolvedValue(processingBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(lockedCard);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'done' },
+      });
+
+      expect(response.statusCode).toBe(409);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('MOVE_BLOCKED');
+    });
+  });
+
+  describe('POST /api/callbacks/:token — Slice 3 callback receiver', () => {
+    let callbackApp: FastifyInstance;
+
+    beforeEach(async () => {
+      callbackApp = fastify();
+      await callbackApp.register(callbackRoutes, { prefix: '/api/callbacks' });
+    });
+
+    afterEach(async () => {
+      await callbackApp.close();
+    });
+
+    it('returns 200 with ProcessorCallbackResponseSchema on success', async () => {
+      const updatedCard = {
+        ...mockCard,
+        current_status: 'done',
+        processing_state: 'IDLE',
+        is_editable: true,
+        version: 2,
+      };
+      vi.mocked(consumeCallback).mockResolvedValue(updatedCard);
+
+      const response = await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        headers: { authorization: 'Bearer some-token' },
+        payload: { status: 'success', move_to_column: 'done' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(ProcessorCallbackResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.card.current_status).toBe('done');
+    });
+
+    it('returns 401 when authorization header is missing', async () => {
+      const response = await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        payload: { status: 'success' },
+      });
+
+      expect(response.statusCode).toBe(401);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('returns 401 when authorization is not Bearer', async () => {
+      const response = await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        headers: { authorization: 'Basic token' },
+        payload: { status: 'success' },
+      });
+
+      expect(response.statusCode).toBe(401);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('returns 404 CALLBACK_TOKEN_MISSING for unknown token', async () => {
+      vi.mocked(consumeCallback).mockRejectedValue(new Error('CALLBACK_TOKEN_MISSING'));
+
+      const response = await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        headers: { authorization: 'Bearer token' },
+        payload: { status: 'success' },
+      });
+
+      expect(response.statusCode).toBe(404);
+      const body = response.json();
+      expect(CallbackTokenRejectedResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('CALLBACK_TOKEN_MISSING');
+    });
+
+    it('returns 410 CALLBACK_TOKEN_EXPIRED for expired token', async () => {
+      vi.mocked(consumeCallback).mockRejectedValue(new Error('CALLBACK_TOKEN_EXPIRED'));
+
+      const response = await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        headers: { authorization: 'Bearer token' },
+        payload: { status: 'success' },
+      });
+
+      expect(response.statusCode).toBe(410);
+      const body = response.json();
+      expect(CallbackTokenRejectedResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('CALLBACK_TOKEN_EXPIRED');
+    });
+
+    it('returns 409 CALLBACK_TOKEN_REPLAYED for replayed token', async () => {
+      vi.mocked(consumeCallback).mockRejectedValue(new Error('CALLBACK_TOKEN_REPLAYED'));
+
+      const response = await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        headers: { authorization: 'Bearer token' },
+        payload: { status: 'success' },
+      });
+
+      expect(response.statusCode).toBe(409);
+      const body = response.json();
+      expect(CallbackTokenRejectedResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('CALLBACK_TOKEN_REPLAYED');
+    });
+
+    it('returns 400 for malformed token UUID', async () => {
+      const response = await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/not-a-uuid',
+        headers: { authorization: 'Bearer token' },
+        payload: { status: 'success' },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('returns 400 when status=error without error_message', async () => {
+      const response = await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        headers: { authorization: 'Bearer token' },
+        payload: { status: 'error' },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('passes payload_updates to consumeCallback', async () => {
+      const updatedCard = { ...mockCard, title: 'Updated via callback', version: 2 };
+      vi.mocked(consumeCallback).mockResolvedValue(updatedCard);
+
+      await callbackApp.inject({
+        method: 'POST',
+        url: '/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        headers: { authorization: 'Bearer token' },
+        payload: {
+          status: 'success',
+          payload_updates: { title: 'Updated via callback' },
+        },
+      });
+
+      expect(consumeCallback).toHaveBeenCalledWith(
+        expect.anything(),
+        '550e8400-e29b-41d4-a716-446655440001',
+        'Bearer token',
+        expect.objectContaining({
+          status: 'success',
+          payload_updates: { title: 'Updated via callback' },
+        }),
+      );
     });
   });
 });

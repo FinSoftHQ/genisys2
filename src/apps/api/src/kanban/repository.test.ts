@@ -3,6 +3,8 @@ import {
   SqlitePragmasSchema,
   BoardEntitySchema,
   CardEntitySchema,
+  CallbackTokenEntitySchema,
+  ProcessorRegistryEntitySchema,
   type BoardEntity,
   type CardEntity,
 } from '@repo/shared';
@@ -17,6 +19,11 @@ import {
   createCard,
   updateCard,
   moveCard,
+  createCallbackToken,
+  getCallbackToken,
+  deleteCallbackToken,
+  updateCardProcessingState,
+  upsertProcessorRegistry,
 } from './repository.js';
 
 describe('kanban repository', () => {
@@ -454,6 +461,166 @@ describe('kanban repository', () => {
       const moved = moveCard(db, board.uid, created.uid, toColumn);
       expect(moved.current_status).toBe(toColumn);
       expect(moved.version).toBe(created.version + 1);
+    });
+  });
+
+  describe('callback token lifecycle', () => {
+    let board: BoardEntity;
+
+    beforeAll(() => {
+      board = seedBoard(db);
+    });
+
+    it('creates a callback token that validates against CallbackTokenEntitySchema', () => {
+      const card = createCard(db, board.uid, {
+        title: 'Token Card',
+        current_status: board.schema.columns[0].uid,
+      });
+      const token = createCallbackToken(db, {
+        token: '550e8400-e29b-41d4-a716-446655440001',
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440002',
+        context: { previous_status: 'backlog' },
+        expires_at: '2026-04-26T08:35:00.000Z',
+      });
+
+      expect(CallbackTokenEntitySchema.safeParse(token).success).toBe(true);
+      expect(token.token).toBe('550e8400-e29b-41d4-a716-446655440001');
+    });
+
+    it('retrieves a callback token by its UUID', () => {
+      const card = createCard(db, board.uid, {
+        title: 'Token Card',
+        current_status: board.schema.columns[0].uid,
+      });
+      createCallbackToken(db, {
+        token: '550e8400-e29b-41d4-a716-446655440003',
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440004',
+        context: {},
+        expires_at: '2026-04-26T08:35:00.000Z',
+      });
+
+      const found = getCallbackToken(db, '550e8400-e29b-41d4-a716-446655440003');
+      expect(found).toBeDefined();
+      expect(found!.processor_id).toBe('manager-approval');
+    });
+
+    it('returns undefined for unknown callback token', () => {
+      const found = getCallbackToken(db, '00000000-0000-0000-0000-000000000000');
+      expect(found).toBeUndefined();
+    });
+
+    it('deletes a callback token', () => {
+      const card = createCard(db, board.uid, {
+        title: 'Token Card',
+        current_status: board.schema.columns[0].uid,
+      });
+      createCallbackToken(db, {
+        token: '550e8400-e29b-41d4-a716-446655440005',
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440006',
+        context: {},
+        expires_at: '2026-04-26T08:35:00.000Z',
+      });
+
+      deleteCallbackToken(db, '550e8400-e29b-41d4-a716-446655440005');
+      const found = getCallbackToken(db, '550e8400-e29b-41d4-a716-446655440005');
+      expect(found).toBeUndefined();
+    });
+  });
+
+  describe('updateCardProcessingState', () => {
+    let board: BoardEntity;
+
+    beforeAll(() => {
+      board = seedBoard(db);
+    });
+
+    it('transitions card state and updates is_editable', () => {
+      const firstColumn = board.schema.columns[0].uid;
+      const card = createCard(db, board.uid, {
+        title: 'State Card',
+        current_status: firstColumn,
+      });
+
+      const updated = updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'PROCESSING', {
+        is_editable: false,
+      });
+
+      expect(updated).not.toBeNull();
+      expect(updated!.processing_state).toBe('PROCESSING');
+      expect(updated!.is_editable).toBe(false);
+      expect(updated!.version).toBe(card.version + 1);
+    });
+
+    it('returns null when from state does not match', () => {
+      const firstColumn = board.schema.columns[0].uid;
+      const card = createCard(db, board.uid, {
+        title: 'State Card',
+        current_status: firstColumn,
+      });
+
+      const updated = updateCardProcessingState(db, board.uid, card.uid, 'PROCESSING', 'IDLE', {
+        is_editable: true,
+      });
+
+      expect(updated).toBeNull();
+
+      const untouched = getCardById(db, board.uid, card.uid);
+      expect(untouched!.processing_state).toBe('IDLE');
+    });
+
+    it('rejects invalid transitions by throwing', () => {
+      const firstColumn = board.schema.columns[0].uid;
+      const card = createCard(db, board.uid, {
+        title: 'State Card',
+        current_status: firstColumn,
+      });
+
+      expect(() =>
+        updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'ERROR', { is_editable: false }),
+      ).toThrow();
+    });
+
+    it('applies optional payload updates alongside state change', () => {
+      const firstColumn = board.schema.columns[0].uid;
+      const card = createCard(db, board.uid, {
+        title: 'State Card',
+        current_status: firstColumn,
+      });
+
+      const updated = updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'PROCESSING', {
+        is_editable: false,
+        payload: { processing: true },
+      });
+
+      expect(updated!.payload).toEqual({ processing: true });
+    });
+  });
+
+  describe('upsertProcessorRegistry', () => {
+    it('creates a processor registry entry', () => {
+      const processor = upsertProcessorRegistry(db, {
+        processor_id: 'repo-test',
+        name: 'Repo Test Processor',
+        base_url: 'http://localhost:4001',
+        health_endpoint: '/health',
+        hooks: ['on-enter'],
+        sla_seconds: 300,
+        max_sla_seconds: 600,
+        auth_type: 'none',
+        hmac_secret: 'temp-secret-ignore',
+      });
+
+      expect(ProcessorRegistryEntitySchema.safeParse(processor).success).toBe(true);
+      expect(processor.status).toBe('unknown');
     });
   });
 });

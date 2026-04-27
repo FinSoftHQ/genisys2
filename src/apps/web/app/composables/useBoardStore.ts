@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue';
-import type { BoardEntity, CardEntity, ColumnUidSchema } from '@repo/shared';
+import { ColumnUidSchema } from '@repo/shared';
+import type { BoardEntity, CardEntity } from '@repo/shared';
 import type { z } from 'zod';
 
 type ColumnUid = z.infer<typeof ColumnUidSchema>;
@@ -13,6 +14,7 @@ interface BoardStore {
     isSaving: boolean;
     error: string | null;
     draggedCardId: string | null;
+    pollIntervalId: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -25,6 +27,7 @@ const store = ref<BoardStore>({
     isSaving: false,
     error: null,
     draggedCardId: null,
+    pollIntervalId: null,
   },
 });
 
@@ -34,7 +37,17 @@ export function useBoardStore() {
     return [...store.value.board.schema.columns].sort((a, b) => a.order - b.order);
   });
 
+  const hasProcessingCards = computed(() => {
+    if (!store.value.cardsById.size) return false;
+    return Array.from(store.value.cardsById.values()).some(
+      (c) => c.processing_state === 'PROCESSING'
+    );
+  });
+
   function resetStore() {
+    if (store.value.ui.pollIntervalId) {
+      clearInterval(store.value.ui.pollIntervalId);
+    }
     store.value = {
       board: null,
       cardsById: new Map(),
@@ -44,6 +57,7 @@ export function useBoardStore() {
         isSaving: false,
         error: null,
         draggedCardId: null,
+        pollIntervalId: null,
       },
     };
   }
@@ -78,24 +92,34 @@ export function useBoardStore() {
   }
 
   function addCard(card: CardEntity) {
-    store.value.cardsById.set(card.uid, card);
-    const list = store.value.columnCardIds.get(card.current_status) ?? [];
+    const nextCards = new Map(store.value.cardsById);
+    nextCards.set(card.uid, card);
+    store.value.cardsById = nextCards;
+
+    const nextColumns = new Map(store.value.columnCardIds);
+    const list = nextColumns.get(card.current_status) ?? [];
     list.push(card.uid);
-    store.value.columnCardIds.set(card.current_status, list);
+    nextColumns.set(card.current_status, list);
+    store.value.columnCardIds = nextColumns;
   }
 
   function updateCard(card: CardEntity) {
     const existing = store.value.cardsById.get(card.uid);
-    store.value.cardsById.set(card.uid, card);
+    const nextCards = new Map(store.value.cardsById);
+    nextCards.set(card.uid, card);
+    store.value.cardsById = nextCards;
 
     if (existing && existing.current_status !== card.current_status) {
-      const oldList = store.value.columnCardIds.get(existing.current_status) ?? [];
-      const newOldList = oldList.filter((id) => id !== card.uid);
-      store.value.columnCardIds.set(existing.current_status, newOldList);
+      const nextColumns = new Map(store.value.columnCardIds);
 
-      const newList = store.value.columnCardIds.get(card.current_status) ?? [];
+      const oldList = nextColumns.get(existing.current_status) ?? [];
+      nextColumns.set(existing.current_status, oldList.filter((id) => id !== card.uid));
+
+      const newList = nextColumns.get(card.current_status) ?? [];
       newList.push(card.uid);
-      store.value.columnCardIds.set(card.current_status, newList);
+      nextColumns.set(card.current_status, newList);
+
+      store.value.columnCardIds = nextColumns;
     }
   }
 
@@ -104,19 +128,36 @@ export function useBoardStore() {
     if (!card) return;
     if (card.current_status === toColumnUid) return;
 
-    const oldList = store.value.columnCardIds.get(card.current_status) ?? [];
-    const newOldList = oldList.filter((id) => id !== cardId);
-    store.value.columnCardIds.set(card.current_status, newOldList);
+    const nextColumns = new Map(store.value.columnCardIds);
+    const oldList = nextColumns.get(card.current_status) ?? [];
+    nextColumns.set(card.current_status, oldList.filter((id) => id !== cardId));
 
-    const newList = store.value.columnCardIds.get(toColumnUid) ?? [];
+    const newList = nextColumns.get(toColumnUid) ?? [];
     newList.push(cardId);
-    store.value.columnCardIds.set(toColumnUid, newList);
+    nextColumns.set(toColumnUid, newList);
+    store.value.columnCardIds = nextColumns;
 
-    store.value.cardsById.set(cardId, { ...card, current_status: toColumnUid as ColumnUid });
+    const nextCards = new Map(store.value.cardsById);
+    nextCards.set(cardId, { ...card, current_status: toColumnUid as ColumnUid });
+    store.value.cardsById = nextCards;
   }
 
   function setDraggedCardId(cardId: string | null) {
     store.value.ui.draggedCardId = cardId;
+  }
+
+  function startPolling(refresh: () => Promise<void>, intervalMs = 2000) {
+    if (store.value.ui.pollIntervalId) return;
+    store.value.ui.pollIntervalId = setInterval(() => {
+      refresh().catch(() => {});
+    }, intervalMs);
+  }
+
+  function stopPolling() {
+    if (store.value.ui.pollIntervalId) {
+      clearInterval(store.value.ui.pollIntervalId);
+      store.value.ui.pollIntervalId = null;
+    }
   }
 
   function getCardById(cardId: string): CardEntity | undefined {
@@ -131,6 +172,7 @@ export function useBoardStore() {
   return {
     store,
     sortedColumns,
+    hasProcessingCards,
     resetStore,
     setLoading,
     setSaving,
@@ -140,6 +182,8 @@ export function useBoardStore() {
     updateCard,
     moveCardLocal,
     setDraggedCardId,
+    startPolling,
+    stopPolling,
     getCardById,
     getCardsForColumn,
   };

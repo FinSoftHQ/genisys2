@@ -37,7 +37,17 @@ function onDrop(event: DragEvent) {
     @drop="onDrop"
   >
     <div class="flex items-center justify-between px-1">
-      <h3 class="font-semibold text-sm text-default">{{ column.title }}</h3>
+      <div class="flex items-center gap-2">
+        <h3 class="font-semibold text-sm text-default">{{ column.title }}</h3>
+        <UBadge
+          v-if="column.type === 'Processing'"
+          color="info"
+          variant="soft"
+          size="xs"
+        >
+          Processing
+        </UBadge>
+      </div>
       <UButton
         icon="i-lucide-plus"
         variant="ghost"
@@ -48,12 +58,14 @@ function onDrop(event: DragEvent) {
     </div>
 
     <div class="flex flex-col gap-2 min-h-[120px] rounded-lg p-2 bg-gray-50 dark:bg-gray-800/50">
-      <KanbanCard
-        v-for="card in cards"
-        :key="card.uid"
-        :card="card"
-        @edit="emit('edit', $event)"
-      />
+      <TransitionGroup name="card-move" tag="div" class="flex flex-col gap-2">
+        <KanbanCard
+          v-for="card in cards"
+          :key="card.uid"
+          :card="card"
+          @edit="emit('edit', $event)"
+        />
+      </TransitionGroup>
       <p
         v-if="cards.length === 0"
         class="text-xs text-muted text-center py-8"
@@ -63,3 +75,18 @@ function onDrop(event: DragEvent) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.card-move-move {
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.card-move-enter-active,
+.card-move-leave-active {
+  transition: all 0.3s ease;
+}
+.card-move-enter-from,
+.card-move-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+</style>

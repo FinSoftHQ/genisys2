@@ -1,6 +1,6 @@
-# Kanban Components — Slice 1 & 2
+# Kanban Components — Slice 1, 2 & 3
 
-> **Scope:** Slice 1 MVP + Slice 2 "Safe Moves" — Board page, columns, cards, modals, drag-and-drop, optimistic locking, conflict banners, blocked-move toasts, and store.
+> **Scope:** Slice 1 MVP + Slice 2 "Safe Moves" + Slice 3 "Smart Columns"
 > **Status:** Implemented.
 
 ---
@@ -63,19 +63,21 @@ interface BoardStore {
     isSaving: boolean;
     error: string | null;
     draggedCardId: string | null;
+    pollIntervalId: ReturnType<typeof setInterval> | null;
   };
 }
 ```
 
 ### Computed
-| Name            | Type                | Description                              |
-|-----------------|---------------------|------------------------------------------|
-| `sortedColumns` | `BoardColumn[]`     | Board columns sorted by `order` ascending|
+| Name                | Type                | Description                                            |
+|---------------------|---------------------|--------------------------------------------------------|
+| `sortedColumns`     | `BoardColumn[]`     | Board columns sorted by `order` ascending              |
+| `hasProcessingCards`| `boolean`           | True when any card has `processing_state === 'PROCESSING'` |
 
 ### Methods
 | Method                | Signature                                                          | Description                                                            |
 |-----------------------|--------------------------------------------------------------------|------------------------------------------------------------------------|
-| `resetStore`          | `() => void`                                                       | Clears all state back to initial values                                |
+| `resetStore`          | `() => void`                                                       | Clears all state back to initial values; stops polling if active       |
 | `setLoading`          | `(value: boolean) => void`                                         | Toggles `ui.isLoading`                                                 |
 | `setSaving`           | `(value: boolean) => void`                                         | Toggles `ui.isSaving`                                                  |
 | `setError`            | `(error: string \| null) => void`                                  | Sets `ui.error`                                                        |
@@ -84,6 +86,8 @@ interface BoardStore {
 | `updateCard`          | `(card: CardEntity) => void`                                       | Updates `cardsById`; if `current_status` changed, moves between columns |
 | `moveCardLocal`       | `(cardId: string, toColumnUid: string) => void`                    | Optimistically moves a card to another column without API call         |
 | `setDraggedCardId`    | `(cardId: string \| null) => void`                                | Tracks the currently dragged card                                      |
+| `startPolling`        | `(refresh: () => Promise<void>, intervalMs = 2000) => void`       | Starts interval polling for snapshot refresh                           |
+| `stopPolling`         | `() => void`                                                       | Stops active polling interval                                          |
 | `getCardById`         | `(cardId: string) => CardEntity \| undefined`                     | Returns a single card entity by UUID                                   |
 | `getCardsForColumn`   | `(columnUid: string) => CardEntity[]`                              | Returns card entities for a given column uid                           |
 
@@ -91,6 +95,7 @@ interface BoardStore {
 - The store is a single `ref<BoardStore>` exported as a module-level singleton.
 - `hydrate` is the primary entry point; it reconstructs derived maps from the server snapshot.
 - `moveCardLocal` does not update `version` or `updated_at`; it is meant for optimistic UI only.
+- Polling is started/stopped automatically by `BoardView` based on `hasProcessingCards`.
 
 ---
 
@@ -115,6 +120,7 @@ Root layout component that renders the full board with all columns horizontally.
 - Hosts `CreateCardModal` and `EditCardModal`.
 - After card creation or edit, calls `refreshSnapshot()` to reload the full board state.
 - **Blocked-move toast:** If the server rejects a move with `MOVE_BLOCKED`, a toast is shown via `useToast()` (color `error`, icon `i-lucide-ban`) and the optimistic local move is reverted so the card snaps back.
+- **Auto-polling:** Watches `hasProcessingCards`. When true, starts polling the snapshot endpoint every 2 seconds so the UI reflects processor callback results (unlock/move) without manual refresh. Stops polling when no cards are processing. Cleans up on unmount.
 
 ### Events (internal)
 | Handler          | Triggered by     | Action                                      |
@@ -156,20 +162,22 @@ Renders a single column and the cards within it.
 ### Behavior
 - Fixed width (`280px`) with `shrink-0` for horizontal scroll layout.
 - Column header shows the column title and a small "+" ghost button to create cards.
+- **Processing badge:** When `column.type === 'Processing'`, an `info` `UBadge` labeled "Processing" is rendered next to the title.
 - Drop zone background: `bg-gray-50 dark:bg-gray-800/50`.
 - Renders a `KanbanCard` for each card in the `cards` prop.
 - Shows "Drop cards here" placeholder when empty.
 - Implements `dragover` and `drop` handlers for HTML5 drag-and-drop.
+- Uses `<TransitionGroup name="card-move">` for smooth card movement animations between columns.
 
 ### Dependencies
 - `@repo/shared` — `BoardEntity`, `CardEntity`
-- `@nuxt/ui` — `UButton`
+- `@nuxt/ui` — `UButton`, `UBadge`
 
 ---
 
 ## `components/kanban/KanbanCard.vue`
 
-Displays a single card with title, description, badges, and drag support.
+Displays a single card with title, description, badges, drag support, and processing-state overlays.
 
 ### Props
 | Prop  | Type        | Required | Description      |
@@ -182,21 +190,23 @@ Displays a single card with title, description, badges, and drag support.
 | `edit` | `card: CardEntity` | User clicked the pencil button  |
 
 ### Behavior
-- Entire card is draggable (`draggable="true"`).
-- On `dragstart`, stores the card's `uid` in `dataTransfer` with effect `move`.
+- **Lock state:** `isLocked` is true when `processing_state` is `PROCESSING` or `ERROR`.
+- **Drag:** The card is draggable only when not locked. On `dragstart`, stores the card's `uid` in `dataTransfer` with effect `move`. Locked cards prevent drag via `event.preventDefault()`.
+- **Edit:** The pencil icon button is hidden when `!card.is_editable || isLocked`. Emits `edit` event.
+- **Processing spinner overlay:** When `processing_state === 'PROCESSING'`, a full-card absolute overlay renders with a spinning `i-lucide-loader-2` icon and a semi-transparent blurred backdrop (`bg-white/60 dark:bg-gray-900/60 backdrop-blur-[1px]`).
+- **State badge:** `processing_state` badge is shown only when not `IDLE` (`ERROR` = error color, `PROCESSING` = info color).
 - Title is truncated with `truncate`.
 - Description is clamped to 2 lines (`line-clamp-2`) when present.
 - Displays `display_id` as a subtle badge.
-- Displays `processing_state` badge only when not `IDLE` (`ERROR` = red, `PROCESSING` = info).
-- Pencil icon button emits `edit` event.
 
 ### Styling
-- `UCard` with custom `ui` prop for grab cursor and padding.
-- `cursor-grab active:cursor-grabbing`
+- `UCard` with custom `ui` prop.
+- Normal state: `cursor-grab active:cursor-grabbing`.
+- Locked state: `cursor-not-allowed opacity-80`.
 
 ### Dependencies
 - `@repo/shared` — `CardEntity`
-- `@nuxt/ui` — `UCard`, `UButton`, `UBadge`
+- `@nuxt/ui` — `UCard`, `UButton`, `UBadge`, `UIcon`
 
 ---
 
@@ -261,7 +271,7 @@ Modal form for editing an existing card's title and description.
 - Emits `updated` and closes on success.
 - Shows error alert inline on generic failures.
 - **Conflict banner:** On `409 CONFLICT`, displays a red `UAlert` with title "Someone else edited this — refresh and retry" and a **Refresh** button. Clicking Refresh pushes the server card into the store and clears the banner.
-- **Save button** is disabled while a conflict is active (`:disabled="!!conflictServerCard"`), preventing repeated overwrites.
+- **Lock guard:** Computes `isLocked` when `processing_state` is `PROCESSING` or `ERROR`. Shows a warning `UAlert` (icon `i-lucide-lock`, color `warning`) with title "Card is locked" and description explaining the card cannot be edited. The **Save** button is disabled when locked.
 
 ### API Calls
 | Method | Endpoint                                       | Purpose       |
@@ -274,6 +284,7 @@ Modal form for editing an existing card's title and description.
 | `isSaving`            | `Ref<boolean>`        | Loading state during PATCH                       |
 | `errorMsg`            | `Ref<string>`         | Generic error message text                       |
 | `conflictServerCard`  | `Ref<CardEntity \| null>` | Authoritative card returned in a 409 conflict |
+| `isLocked`            | `ComputedRef<boolean>`| True when card is PROCESSING or ERROR            |
 
 ### Dependencies
 - `@repo/shared` — `UpdateCardRequest`, `UpdateCardResponse`, `CardEntity`

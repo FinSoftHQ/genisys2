@@ -7,6 +7,9 @@ import {
   MoveCardRequestSchema,
   SyncHookDispatchRequestSchema,
   CanExitHookRequestSchema,
+  ProcessorCallbackPathParamsSchema,
+  ProcessorCallbackHeadersSchema,
+  ProcessorCallbackRequestSchema,
 } from '@repo/shared';
 import {
   getBoardById,
@@ -19,6 +22,7 @@ import {
   getProcessorById,
 } from './repository.js';
 import { dispatchSyncHook } from './hook-dispatcher.js';
+import { consumeCallback, startProcessing } from './processing-orchestrator.js';
 
 function callRepo<TArgs extends unknown[], TReturn>(
   fn: (instance: unknown, ...args: TArgs) => TReturn,
@@ -147,6 +151,15 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
 
     const card = await callRepo(getCardById, params.data.boardId, params.data.cardId);
     if (card) {
+      if (card.processing_state === 'PROCESSING') {
+        return reply.status(409).send({
+          error: {
+            code: 'MOVE_BLOCKED',
+            message: 'Card is currently being processed',
+          },
+        });
+      }
+
       const currentColumn = board.schema.columns.find((c) => c.uid === card.current_status);
       if (currentColumn) {
         const processor = (getProcessorById ? callRepo(getProcessorById, currentColumn.processor_id) : undefined) ?? {
@@ -202,7 +215,29 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       }
     }
 
+    const targetColumn = board.schema.columns.find((c) => c.uid === body.data.to_column_uid);
+
     try {
+      if (targetColumn?.type === 'Processing') {
+        if (!card) {
+          return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
+        }
+        const result = await startProcessing(
+          {},
+          board,
+          card,
+          targetColumn as {
+            uid: string;
+            title: string;
+            type: 'Processing';
+            processor_id: string;
+            exit_logic: Record<string, string>;
+            order: number;
+          },
+        );
+        return reply.status(200).send({ data: { card: result } });
+      }
+
       const movedCard = await callRepo(moveCard, params.data.boardId, params.data.cardId, body.data.to_column_uid);
       if (!movedCard) {
         return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
@@ -219,7 +254,43 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       if (message === 'INVALID_COLUMN') {
         return reply.status(400).send(errorResponse('INVALID_COLUMN', 'Invalid target column for this board'));
       }
-      return reply.status(500).send(errorResponse('MOVE_FAILED', message));
+      return reply.status(500).send(errorResponse('MOVE_FAILED', 'Move operation failed'));
+    }
+  });
+}
+
+export async function callbackRoutes(instance: FastifyInstance): Promise<void> {
+  instance.post('/:token', async (request, reply) => {
+    try {
+      const params = ProcessorCallbackPathParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid token format', { issues: params.error.issues }));
+      }
+
+      const headers = ProcessorCallbackHeadersSchema.safeParse({ authorization: request.headers.authorization });
+      if (!headers.success) {
+        return reply.status(401).send(errorResponse('INVALID_AUTH', 'Invalid authorization header', { issues: headers.error.issues }));
+      }
+
+      const body = ProcessorCallbackRequestSchema.safeParse(request.body);
+      if (!body.success) {
+        return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
+      }
+
+      const result = await consumeCallback({}, params.data.token, headers.data.authorization, body.data);
+      return reply.status(200).send({ data: { card: result } });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === 'CALLBACK_TOKEN_MISSING') {
+        return reply.status(404).send({ error: { code: 'CALLBACK_TOKEN_MISSING', message: 'Callback token not found' } });
+      }
+      if (message === 'CALLBACK_TOKEN_EXPIRED') {
+        return reply.status(410).send({ error: { code: 'CALLBACK_TOKEN_EXPIRED', message: 'Callback token has expired' } });
+      }
+      if (message === 'CALLBACK_TOKEN_REPLAYED') {
+        return reply.status(409).send({ error: { code: 'CALLBACK_TOKEN_REPLAYED', message: 'Callback token has already been used' } });
+      }
+      return reply.status(500).send(errorResponse('CALLBACK_ERROR', 'Callback processing failed'));
     }
   });
 }

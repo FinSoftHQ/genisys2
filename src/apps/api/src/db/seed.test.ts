@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { BoardEntitySchema, BoardSequenceEntitySchema, DefaultAlwaysAllowProcessorSchema } from '@repo/shared';
+import { BoardEntitySchema, BoardSequenceEntitySchema, DefaultAlwaysAllowProcessorSchema, ProcessorRegistryEntitySchema } from '@repo/shared';
 import { eq } from 'drizzle-orm';
 import { createClient } from './client.js';
-import { seedBoard, bootstrapDefaultProcessor } from './seed.js';
+import { seedBoard, bootstrapDefaultProcessor, seedDemoBoardWithProcessingColumn } from './seed.js';
 import { boardSequences, processorRegistry } from './schema.js';
 
 describe('db seed', () => {
@@ -63,6 +63,41 @@ describe('db seed', () => {
         .select()
         .from(processorRegistry)
         .where(eq(processorRegistry.processor_id, 'default-manual'))
+        .all();
+      expect(rows).toHaveLength(1);
+    });
+  });
+
+  describe('Slice 3 demo seed — Processing column', () => {
+    it('creates a board with a Processing column in its schema', () => {
+      const board = seedDemoBoardWithProcessingColumn(db);
+      const inReview = board.schema.columns.find((c) => c.uid === 'in-review');
+      expect(inReview).toBeDefined();
+      expect(inReview!.type).toBe('Processing');
+      expect(inReview!.processor_id).toBe('manager-approval');
+      expect(Object.keys(inReview!.exit_logic).length).toBeGreaterThan(0);
+      expect(BoardEntitySchema.safeParse(board).success).toBe(true);
+    });
+
+    it('seeds processor registry with temp-secret-ignore hmac_secret', () => {
+      seedDemoBoardWithProcessingColumn(db);
+      const processor = db.db
+        .select()
+        .from(processorRegistry)
+        .where(eq(processorRegistry.processor_id, 'manager-approval'))
+        .get();
+      expect(processor).toBeDefined();
+      expect(processor!.hmac_secret).toBe('temp-secret-ignore');
+      expect(ProcessorRegistryEntitySchema.safeParse(processor).success).toBe(true);
+    });
+
+    it('does not duplicate manager-approval processor on repeated seeding', () => {
+      seedDemoBoardWithProcessingColumn(db);
+      seedDemoBoardWithProcessingColumn(db);
+      const rows = db.db
+        .select()
+        .from(processorRegistry)
+        .where(eq(processorRegistry.processor_id, 'manager-approval'))
         .all();
       expect(rows).toHaveLength(1);
     });

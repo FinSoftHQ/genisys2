@@ -3,9 +3,11 @@ import {
   CanExitHookRequestSchema,
   CanExitHookResponseSchema,
   SyncHookTimeoutMsSchema,
+  OnEnterDispatchRequestSchema,
+  OnEnterDispatchAcceptedResponseSchema,
   type ProcessorRegistryEntity,
 } from '@repo/shared';
-import { dispatchSyncHook } from './hook-dispatcher.js';
+import { dispatchSyncHook, dispatchAsyncHook } from './hook-dispatcher.js';
 
 const mockProcessor: ProcessorRegistryEntity = {
   processor_id: 'default-manual',
@@ -138,6 +140,120 @@ describe('sync hook dispatcher', () => {
       await expect(promise).rejects.toThrow();
 
       vi.useRealTimers();
+    });
+  });
+
+  describe('async on-enter dispatch', () => {
+    it('exports dispatchAsyncHook function', () => {
+      expect(typeof dispatchAsyncHook).toBe('function');
+    });
+
+    it('POSTs to processor on-enter endpoint with OnEnterDispatchRequestSchema payload', async () => {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ status: 'accepted' }), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const payload = {
+        card: {
+          uid: 'a601f5b3-f91b-4ce0-b562-f4a11fcb45f9',
+          board_uid: '550e8400-e29b-41d4-a716-446655440000',
+          display_id: 'TST-1',
+          title: 'Test Card',
+          description: null,
+          version: 1,
+          processing_state: 'IDLE',
+          is_editable: true,
+          payload: {},
+          current_status: 'in-review',
+          created_at: '2026-04-26T08:30:00.000Z',
+          updated_at: '2026-04-26T08:30:00.000Z',
+        },
+        board: {
+          uid: '550e8400-e29b-41d4-a716-446655440000',
+          title: 'Test Board',
+          prefix: 'TST',
+          schema: {
+            columns: [
+              {
+                uid: 'in-review',
+                title: 'In Review',
+                type: 'Processing',
+                processor_id: 'manager-approval',
+                exit_logic: { approved: 'done', rejected: 'backlog' },
+                order: 0,
+              },
+            ],
+          },
+          permissions: { read: [], write: [] },
+          created_at: '2026-04-26T08:30:00.000Z',
+          updated_at: '2026-04-26T08:30:00.000Z',
+        },
+        column: {
+          uid: 'in-review',
+          title: 'In Review',
+          type: 'Processing',
+          processor_id: 'manager-approval',
+          exit_logic: { approved: 'done', rejected: 'backlog' },
+          order: 0,
+        },
+        callback_url: 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440002',
+      };
+
+      await dispatchAsyncHook(mockProcessor, 'on-enter', payload);
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'http://localhost:4001/on-enter',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+          body: expect.any(String),
+        }),
+      );
+
+      const callBody = JSON.parse(fetchSpy.mock.calls[0][1]!.body as string);
+      expect(OnEnterDispatchRequestSchema.safeParse(callBody).success).toBe(true);
+      expect(callBody.callback_url).toBe(payload.callback_url);
+      expect(callBody.idempotency_key).toBe(payload.idempotency_key);
+    });
+
+    it('parses OnEnterDispatchAcceptedResponse on 202', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ status: 'accepted', estimated_duration: '5s' }), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const result = await dispatchAsyncHook(mockProcessor, 'on-enter', {
+        card: {},
+        board: {},
+        column: {},
+        callback_url: 'http://localhost:3000/api/callbacks/123',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440000',
+      });
+
+      expect(OnEnterDispatchAcceptedResponseSchema.safeParse(result).success).toBe(true);
+      expect(result.status).toBe('accepted');
+    });
+
+    it('does not block on processor non-2xx response', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response('Bad Request', { status: 400 }),
+      );
+
+      await expect(
+        dispatchAsyncHook(mockProcessor, 'on-enter', {
+          card: {},
+          board: {},
+          column: {},
+          callback_url: 'http://localhost:3000/api/callbacks/123',
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440000',
+        }),
+      ).rejects.toThrow();
     });
   });
 });

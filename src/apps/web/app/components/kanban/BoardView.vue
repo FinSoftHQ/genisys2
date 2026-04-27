@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onUnmounted } from 'vue';
 import type { CardEntity, SnapshotResponse, MoveCardRequest, MoveCardResponse } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
 import { parseApiError, parseMoveBlockedError } from '~/utils/api-error';
@@ -21,6 +21,8 @@ const {
   getCardsForColumn,
   getCardById,
   hydrate,
+  startPolling,
+  stopPolling,
 } = useBoardStore();
 
 const toast = useToast();
@@ -95,6 +97,24 @@ async function refreshSnapshot() {
     setSaving(false);
   }
 }
+
+const POLL_INTERVAL_MS = 2000;
+
+watch(
+  () => Array.from(store.value.cardsById.values()).some((c) => c.processing_state === 'PROCESSING'),
+  (hasProcessing) => {
+    if (hasProcessing) {
+      startPolling(refreshSnapshot, POLL_INTERVAL_MS);
+    } else {
+      stopPolling();
+    }
+  },
+  { immediate: true }
+);
+
+onUnmounted(() => {
+  stopPolling();
+});
 </script>
 
 <template>

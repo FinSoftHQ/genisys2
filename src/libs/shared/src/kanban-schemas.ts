@@ -57,6 +57,15 @@ export const ProcessorHookSchema = z.enum(['on-enter', 'on-update', 'on-action',
 
 export const SyncHookSchema = z.enum(['on-update', 'can-exit']);
 
+export const AsyncCallbackHookSchema = z.enum(['on-enter', 'on-action']);
+
+export const IdempotencyKeySchema = z.string().uuid({ message: 'idempotency_key must be a valid UUID' });
+
+export const CallbackTokenSchema = z
+  .string()
+  .uuid({ message: 'callback token must be a valid UUID' })
+  .brand('CallbackToken');
+
 export const SyncHookTimeoutMsSchema = z.literal(3000);
 
 export const ProcessorRegistryStatusSchema = z.enum(['healthy', 'degraded', 'unhealthy', 'unknown']);
@@ -74,7 +83,31 @@ export const BoardColumnSchema = z
     exit_logic: z.record(z.string().min(1), ColumnUidSchema),
     order: z.number().int().min(0),
   })
-  .strict();
+  .strict()
+  .superRefine((column, ctx) => {
+    if (column.type === 'Processing' && Object.keys(column.exit_logic).length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['exit_logic'],
+        message: 'Processing columns must define at least one exit_logic route',
+      });
+    }
+  });
+
+export const ProcessingBoardColumnSchema = z
+  .object({
+    uid: ColumnUidSchema,
+    title: z.string().min(1, { message: 'column title is required' }).max(120),
+    type: z.literal('Processing'),
+    processor_id: ProcessorIdSchema,
+    exit_logic: z.record(z.string().min(1), ColumnUidSchema),
+    order: z.number().int().min(0),
+  })
+  .strict()
+  .refine((column) => Object.keys(column.exit_logic).length > 0, {
+    path: ['exit_logic'],
+    message: 'Processing columns must define at least one exit_logic route',
+  });
 
 export const BoardSchemaDocumentSchema = z
   .object({
@@ -130,7 +163,7 @@ export const BoardPermissionsSchema = z
 
 export const IsoDateTimeSchema = z.string().datetime({ offset: true });
 
-export const ProcessorRegistryEntitySchema = z
+const ProcessorRegistryBaseSchema = z
   .object({
     processor_id: ProcessorIdSchema,
     name: z.string().min(1).max(200),
@@ -141,7 +174,7 @@ export const ProcessorRegistryEntitySchema = z
     max_sla_seconds: z.number().int().min(1).max(86400),
     auth_type: ProcessorRegistryAuthTypeSchema,
     auth_config: z.record(z.string(), JsonValueSchema).nullable().optional(),
-    hmac_secret: z.string().min(1),
+    hmac_secret: z.string().min(1, { message: 'hmac_secret cannot be empty (use placeholder in Slice 3 seed)' }),
     status: ProcessorRegistryStatusSchema,
     last_health_check: IsoDateTimeSchema.nullable().optional(),
     created_at: IsoDateTimeSchema,
@@ -149,7 +182,43 @@ export const ProcessorRegistryEntitySchema = z
   })
   .strict();
 
-export const DefaultAlwaysAllowProcessorSchema = ProcessorRegistryEntitySchema.extend({
+export const ProcessorRegistryEntitySchema = ProcessorRegistryBaseSchema.refine(
+  (value) => value.sla_seconds <= value.max_sla_seconds,
+  {
+    path: ['sla_seconds'],
+    message: 'sla_seconds must be less than or equal to max_sla_seconds',
+  },
+);
+
+export const UpsertProcessorRegistryRequestSchema = ProcessorRegistryBaseSchema.omit({
+  status: true,
+  last_health_check: true,
+  created_at: true,
+  updated_at: true,
+}).refine((value) => value.sla_seconds <= value.max_sla_seconds, {
+  path: ['sla_seconds'],
+  message: 'sla_seconds must be less than or equal to max_sla_seconds',
+});
+
+export const ProcessorHealthPollConfigSchema = z
+  .object({
+    interval_seconds: z.literal(30),
+    timeout_ms: z.number().int().min(250).max(10000).default(3000),
+  })
+  .strict();
+
+export const ProcessorHealthCheckResultSchema = z
+  .object({
+    processor_id: ProcessorIdSchema,
+    status: ProcessorRegistryStatusSchema,
+    checked_at: IsoDateTimeSchema,
+    http_status: z.number().int().min(100).max(599).nullable(),
+    response_time_ms: z.number().int().min(0),
+    error_message: z.string().min(1).max(500).nullable().optional(),
+  })
+  .strict();
+
+export const DefaultAlwaysAllowProcessorSchema = ProcessorRegistryBaseSchema.extend({
   processor_id: z.literal('default-manual'),
   hooks: z.array(ProcessorHookSchema).default(['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit']),
 }).strict();
@@ -190,7 +259,23 @@ export const CardEntitySchema = z
     created_at: IsoDateTimeSchema,
     updated_at: IsoDateTimeSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((card, ctx) => {
+    if (card.processing_state === 'PROCESSING' && card.is_editable) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['is_editable'],
+        message: 'cards in PROCESSING state must be non-editable',
+      });
+    }
+    if (card.processing_state === 'ERROR' && card.is_editable) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['is_editable'],
+        message: 'cards in ERROR state must be non-editable',
+      });
+    }
+  });
 
 export const ApiErrorSchema = z
   .object({
@@ -356,6 +441,117 @@ export const MoveCardResponseSchema = z
   })
   .strict();
 
+export const CallbackTokenEntitySchema = z
+  .object({
+    token: CallbackTokenSchema,
+    card_uid: CardIdSchema,
+    processor_id: ProcessorIdSchema,
+    hook: AsyncCallbackHookSchema,
+    idempotency_key: IdempotencyKeySchema,
+    context: z.record(z.string(), JsonValueSchema),
+    expires_at: IsoDateTimeSchema,
+    created_at: IsoDateTimeSchema,
+  })
+  .strict();
+
+export const ProcessingStateTransitionSchema = z
+  .object({
+    from: CardProcessingStateSchema,
+    to: CardProcessingStateSchema,
+  })
+  .strict()
+  .refine(
+    ({ from, to }) => {
+      const validTransitions = new Set([
+        'IDLE->PROCESSING',
+        'PROCESSING->IDLE',
+        'PROCESSING->ERROR',
+        'ERROR->PROCESSING',
+        'ERROR->IDLE',
+      ]);
+      return validTransitions.has(`${from}->${to}`);
+    },
+    {
+      message: 'invalid processing state transition',
+      path: ['to'],
+    },
+  );
+
+export const OnEnterDispatchRequestSchema = z
+  .object({
+    card: CardEntitySchema,
+    board: BoardEntitySchema,
+    column: ProcessingBoardColumnSchema,
+    callback_url: z.string().url(),
+    idempotency_key: IdempotencyKeySchema,
+  })
+  .strict();
+
+export const OnEnterDispatchAcceptedResponseSchema = z
+  .object({
+    status: z.literal('accepted'),
+    estimated_duration: z.string().min(1).max(60).optional(),
+  })
+  .strict();
+
+export const ProcessorCallbackPathParamsSchema = z
+  .object({
+    token: CallbackTokenSchema,
+  })
+  .strict();
+
+export const ProcessorCallbackHeadersSchema = z
+  .object({
+    authorization: z
+      .string()
+      .regex(/^Bearer\s+.+$/, { message: 'authorization must be a Bearer token' }),
+  })
+  .strict();
+
+export const ProcessorCallbackPayloadUpdatesSchema = z
+  .object({
+    title: CardTitleSchema.optional(),
+    description: CardDescriptionSchema.optional(),
+    payload: CardPayloadSchema.optional(),
+    is_editable: z.boolean().optional(),
+  })
+  .strict();
+
+export const ProcessorCallbackRequestSchema = z
+  .object({
+    status: z.enum(['success', 'error']).default('success'),
+    payload_updates: ProcessorCallbackPayloadUpdatesSchema.optional(),
+    move_to_column: ColumnUidSchema.nullable().optional(),
+    error_message: z.string().min(1).max(500).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.status === 'error' && !value.error_message) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['error_message'],
+        message: 'error_message is required when status is error',
+      });
+    }
+  });
+
+export const ProcessorCallbackResponseSchema = z
+  .object({
+    data: z.object({ card: CardEntitySchema }).strict(),
+  })
+  .strict();
+
+export const CallbackTokenRejectedResponseSchema = z
+  .object({
+    error: z
+      .object({
+        code: z.enum(['CALLBACK_TOKEN_MISSING', 'CALLBACK_TOKEN_EXPIRED', 'CALLBACK_TOKEN_REPLAYED']),
+        message: z.string().min(1),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const CreateBoardResponseSchema = z
   .object({
     data: z.object({ board: BoardEntitySchema }).strict(),
@@ -368,6 +564,9 @@ export type BoardEntity = z.infer<typeof BoardEntitySchema>;
 export type BoardSequenceEntity = z.infer<typeof BoardSequenceEntitySchema>;
 export type CardEntity = z.infer<typeof CardEntitySchema>;
 export type ProcessorRegistryEntity = z.infer<typeof ProcessorRegistryEntitySchema>;
+export type UpsertProcessorRegistryRequest = z.infer<typeof UpsertProcessorRegistryRequestSchema>;
+export type ProcessorHealthPollConfig = z.infer<typeof ProcessorHealthPollConfigSchema>;
+export type ProcessorHealthCheckResult = z.infer<typeof ProcessorHealthCheckResultSchema>;
 export type DefaultAlwaysAllowProcessor = z.infer<typeof DefaultAlwaysAllowProcessorSchema>;
 export type SnapshotData = z.infer<typeof SnapshotDataSchema>;
 export type SnapshotResponse = z.infer<typeof SnapshotResponseSchema>;
@@ -384,5 +583,15 @@ export type SyncHookDispatchRequest = z.infer<typeof SyncHookDispatchRequestSche
 export type MoveCardBlockedResponse = z.infer<typeof MoveCardBlockedResponseSchema>;
 export type MoveCardRequest = z.infer<typeof MoveCardRequestSchema>;
 export type MoveCardResponse = z.infer<typeof MoveCardResponseSchema>;
+export type CallbackTokenEntity = z.infer<typeof CallbackTokenEntitySchema>;
+export type ProcessingStateTransition = z.infer<typeof ProcessingStateTransitionSchema>;
+export type OnEnterDispatchRequest = z.infer<typeof OnEnterDispatchRequestSchema>;
+export type OnEnterDispatchAcceptedResponse = z.infer<typeof OnEnterDispatchAcceptedResponseSchema>;
+export type ProcessorCallbackPathParams = z.infer<typeof ProcessorCallbackPathParamsSchema>;
+export type ProcessorCallbackHeaders = z.infer<typeof ProcessorCallbackHeadersSchema>;
+export type ProcessorCallbackPayloadUpdates = z.infer<typeof ProcessorCallbackPayloadUpdatesSchema>;
+export type ProcessorCallbackRequest = z.infer<typeof ProcessorCallbackRequestSchema>;
+export type ProcessorCallbackResponse = z.infer<typeof ProcessorCallbackResponseSchema>;
+export type CallbackTokenRejectedResponse = z.infer<typeof CallbackTokenRejectedResponseSchema>;
 export type CreateBoardResponse = z.infer<typeof CreateBoardResponseSchema>;
 export type ApiError = z.infer<typeof ApiErrorSchema>;
