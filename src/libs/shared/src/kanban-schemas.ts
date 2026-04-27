@@ -441,6 +441,288 @@ export const MoveCardResponseSchema = z
   })
   .strict();
 
+export const EventIdSchema = z.string().min(1, { message: 'event_id is required' }).brand('EventId');
+
+export const EventLogCategorySchema = z.enum(['routing', 'lifecycle', 'user_action', 'system']);
+
+export const EventLogActionSchema = z.enum([
+  'CARD_CREATED',
+  'CARD_UPDATED',
+  'CARD_MOVED',
+  'MOVED',
+  'ACTION_TRIGGERED',
+  'PROCESSING_STARTED',
+  'PROCESSING_COMPLETED',
+  'PROCESSING_ERROR',
+  'ROLLUP_CHANGED',
+  'ADMIN_OVERRIDE',
+  'BOARD_RELOAD',
+]);
+
+export const EventLogLifecycleEventSchema = z.enum([
+  'PROCESSING_STARTED',
+  'PROCESSING_COMPLETED',
+  'PROCESSING_ERROR',
+]);
+
+export const EventLogRowSchema = z
+  .object({
+    event_id: EventIdSchema,
+    card_uid: CardIdSchema,
+    board_uid: BoardIdSchema.nullable(),
+    timestamp: IsoDateTimeSchema,
+    actor: z.string().min(1).max(200),
+    action: EventLogActionSchema,
+    category: EventLogCategorySchema,
+    lifecycle_event: EventLogLifecycleEventSchema.nullable(),
+    from_column: ColumnUidSchema.nullable(),
+    to_column: ColumnUidSchema.nullable(),
+    idempotency_key: IdempotencyKeySchema.nullable().optional(),
+    payload_delta: z.record(z.string().min(1), JsonValueSchema).nullable().optional(),
+    metadata: z.record(z.string().min(1), JsonValueSchema).nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if ((value.action === 'CARD_MOVED' || value.action === 'MOVED') && (!value.from_column || !value.to_column)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['from_column'],
+        message: 'from_column and to_column are required for move events',
+      });
+    }
+
+    if (value.category === 'lifecycle' && !value.lifecycle_event) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['lifecycle_event'],
+        message: 'lifecycle_event is required when category is lifecycle',
+      });
+    }
+
+    if (value.lifecycle_event && value.category !== 'lifecycle') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['category'],
+        message: 'category must be lifecycle when lifecycle_event is present',
+      });
+    }
+  });
+
+export const CardCreatedEventDataSchema = z
+  .object({
+    event_id: EventIdSchema,
+    board_uid: BoardIdSchema,
+    actor: z.string().min(1).max(200),
+    timestamp: IsoDateTimeSchema,
+    card: CardEntitySchema,
+  })
+  .strict()
+  .refine((value) => value.card.board_uid === value.board_uid, {
+    path: ['card', 'board_uid'],
+    message: 'card.board_uid must match board_uid',
+  });
+
+export const CardUpdatedEventDataSchema = z
+  .object({
+    event_id: EventIdSchema,
+    board_uid: BoardIdSchema,
+    actor: z.string().min(1).max(200),
+    timestamp: IsoDateTimeSchema,
+    card: CardEntitySchema,
+    changed_fields: z
+      .array(
+        z.enum([
+          'title',
+          'description',
+          'payload',
+          'processing_state',
+          'is_editable',
+          'current_status',
+          'version',
+          'updated_at',
+        ]),
+      )
+      .min(1)
+      .max(8),
+  })
+  .strict()
+  .refine((value) => value.card.board_uid === value.board_uid, {
+    path: ['card', 'board_uid'],
+    message: 'card.board_uid must match board_uid',
+  });
+
+export const CardMovedEventDataSchema = z
+  .object({
+    event_id: EventIdSchema,
+    board_uid: BoardIdSchema,
+    actor: z.string().min(1).max(200),
+    timestamp: IsoDateTimeSchema,
+    card: CardEntitySchema,
+    from_column: ColumnUidSchema,
+    to_column: ColumnUidSchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.card.board_uid !== value.board_uid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['card', 'board_uid'],
+        message: 'card.board_uid must match board_uid',
+      });
+    }
+
+    if (value.card.current_status !== value.to_column) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['card', 'current_status'],
+        message: 'card.current_status must match to_column',
+      });
+    }
+
+    if (value.from_column === value.to_column) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['to_column'],
+        message: 'to_column must differ from from_column',
+      });
+    }
+  });
+
+export const BoardReloadEventDataSchema = z
+  .object({
+    event_id: EventIdSchema,
+    board_uid: BoardIdSchema,
+    reason: z.enum(['CURSOR_EXPIRED', 'BUFFER_MISS', 'SERVER_RESET']),
+    timestamp: IsoDateTimeSchema,
+  })
+  .strict();
+
+export const BoardStreamEventTypeSchema = z.enum(['CARD_CREATED', 'CARD_UPDATED', 'CARD_MOVED', 'BOARD_RELOAD']);
+
+export const CardCreatedSseEventSchema = z
+  .object({
+    id: EventIdSchema,
+    event: z.literal('CARD_CREATED'),
+    data: CardCreatedEventDataSchema,
+  })
+  .strict()
+  .refine((value) => value.id === value.data.event_id, {
+    path: ['data', 'event_id'],
+    message: 'data.event_id must match id',
+  });
+
+export const CardUpdatedSseEventSchema = z
+  .object({
+    id: EventIdSchema,
+    event: z.literal('CARD_UPDATED'),
+    data: CardUpdatedEventDataSchema,
+  })
+  .strict()
+  .refine((value) => value.id === value.data.event_id, {
+    path: ['data', 'event_id'],
+    message: 'data.event_id must match id',
+  });
+
+export const CardMovedSseEventSchema = z
+  .object({
+    id: EventIdSchema,
+    event: z.literal('CARD_MOVED'),
+    data: CardMovedEventDataSchema,
+  })
+  .strict()
+  .refine((value) => value.id === value.data.event_id, {
+    path: ['data', 'event_id'],
+    message: 'data.event_id must match id',
+  });
+
+export const BoardReloadSseEventSchema = z
+  .object({
+    id: EventIdSchema,
+    event: z.literal('BOARD_RELOAD'),
+    data: BoardReloadEventDataSchema,
+  })
+  .strict()
+  .refine((value) => value.id === value.data.event_id, {
+    path: ['data', 'event_id'],
+    message: 'data.event_id must match id',
+  });
+
+export const BoardStreamSseEventSchema = z.discriminatedUnion('event', [
+  CardCreatedSseEventSchema,
+  CardUpdatedSseEventSchema,
+  CardMovedSseEventSchema,
+  BoardReloadSseEventSchema,
+]);
+
+export const BoardStreamRequestHeadersSchema = z
+  .object({
+    'last-event-id': EventIdSchema.optional(),
+  })
+  .strict();
+
+export const SseReplayBufferWindowMsSchema = z.literal(300000);
+
+export const BoardStreamReplayCursorSchema = z
+  .object({
+    last_event_id: EventIdSchema.optional(),
+  })
+  .strict();
+
+export const BoardStreamReplayDispositionSchema = z.enum(['LIVE', 'REPLAY', 'RESET_REQUIRED']);
+
+export const AuditLogQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    cursor: z.string().min(1).max(200).optional(),
+    from: IsoDateTimeSchema.optional(),
+    to: IsoDateTimeSchema.optional(),
+    categories: z.array(EventLogCategorySchema).max(4).optional(),
+    actions: z.array(EventLogActionSchema).max(20).optional(),
+    card_uid: CardIdSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.from && value.to && new Date(value.from).getTime() > new Date(value.to).getTime()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['from'],
+        message: 'from must be less than or equal to to',
+      });
+    }
+  });
+
+export const AuditLogResponseSchema = z
+  .object({
+    data: z
+      .object({
+        events: z.array(EventLogRowSchema),
+        next_cursor: z.string().min(1).max(200).nullable(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const ClientCardStateUpdateSchema = z.discriminatedUnion('event', [
+  z
+    .object({
+      event: z.literal('CARD_CREATED'),
+      data: CardCreatedEventDataSchema,
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal('CARD_UPDATED'),
+      data: CardUpdatedEventDataSchema,
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal('CARD_MOVED'),
+      data: CardMovedEventDataSchema,
+    })
+    .strict(),
+]);
+
 export const CallbackTokenEntitySchema = z
   .object({
     token: CallbackTokenSchema,
@@ -661,6 +943,28 @@ export type SyncHookDispatchRequest = z.infer<typeof SyncHookDispatchRequestSche
 export type MoveCardBlockedResponse = z.infer<typeof MoveCardBlockedResponseSchema>;
 export type MoveCardRequest = z.infer<typeof MoveCardRequestSchema>;
 export type MoveCardResponse = z.infer<typeof MoveCardResponseSchema>;
+export type EventId = z.infer<typeof EventIdSchema>;
+export type EventLogCategory = z.infer<typeof EventLogCategorySchema>;
+export type EventLogAction = z.infer<typeof EventLogActionSchema>;
+export type EventLogLifecycleEvent = z.infer<typeof EventLogLifecycleEventSchema>;
+export type EventLogRow = z.infer<typeof EventLogRowSchema>;
+export type CardCreatedEventData = z.infer<typeof CardCreatedEventDataSchema>;
+export type CardUpdatedEventData = z.infer<typeof CardUpdatedEventDataSchema>;
+export type CardMovedEventData = z.infer<typeof CardMovedEventDataSchema>;
+export type BoardReloadEventData = z.infer<typeof BoardReloadEventDataSchema>;
+export type BoardStreamEventType = z.infer<typeof BoardStreamEventTypeSchema>;
+export type CardCreatedSseEvent = z.infer<typeof CardCreatedSseEventSchema>;
+export type CardUpdatedSseEvent = z.infer<typeof CardUpdatedSseEventSchema>;
+export type CardMovedSseEvent = z.infer<typeof CardMovedSseEventSchema>;
+export type BoardReloadSseEvent = z.infer<typeof BoardReloadSseEventSchema>;
+export type BoardStreamSseEvent = z.infer<typeof BoardStreamSseEventSchema>;
+export type BoardStreamRequestHeaders = z.infer<typeof BoardStreamRequestHeadersSchema>;
+export type SseReplayBufferWindowMs = z.infer<typeof SseReplayBufferWindowMsSchema>;
+export type BoardStreamReplayCursor = z.infer<typeof BoardStreamReplayCursorSchema>;
+export type BoardStreamReplayDisposition = z.infer<typeof BoardStreamReplayDispositionSchema>;
+export type AuditLogQuery = z.infer<typeof AuditLogQuerySchema>;
+export type AuditLogResponse = z.infer<typeof AuditLogResponseSchema>;
+export type ClientCardStateUpdate = z.infer<typeof ClientCardStateUpdateSchema>;
 export type CallbackTokenEntity = z.infer<typeof CallbackTokenEntitySchema>;
 export type ProcessingStateTransition = z.infer<typeof ProcessingStateTransitionSchema>;
 export type OnEnterDispatchRequest = z.infer<typeof OnEnterDispatchRequestSchema>;

@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AuditLogQuerySchema,
   BoardSchemaDocumentSchema,
   BoardSequenceEntitySchema,
+  BoardStreamRequestHeadersSchema,
+  BoardStreamSseEventSchema,
   CallbackTokenEntitySchema,
   CanExitHookResponseSchema,
   CardConflictResponseSchema,
   CardEntitySchema,
+  ClientCardStateUpdateSchema,
   CreateCardRequestSchema,
+  EventLogRowSchema,
   MoveCardRequestSchema,
   OnEnterDispatchRequestSchema,
   ProcessingStateTransitionSchema,
@@ -340,6 +345,123 @@ describe('kanban contracts', () => {
             updated_at: '2026-04-26T08:30:00.000Z',
           },
         ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('validates immutable event_log row for card move action', () => {
+    const result = EventLogRowSchema.safeParse({
+      event_id: '550e8400-e29b-41d4-a716-4466554400aa',
+      card_uid: 'a601f5b3-f91b-4ce0-b562-f4a11fcb45f9',
+      board_uid: '550e8400-e29b-41d4-a716-446655440000',
+      timestamp: '2026-04-26T08:32:00.000Z',
+      actor: 'user:alice@corp.com',
+      action: 'CARD_MOVED',
+      category: 'routing',
+      lifecycle_event: null,
+      from_column: 'backlog',
+      to_column: 'in-progress',
+      payload_delta: { current_status: { from: 'backlog', to: 'in-progress' } },
+      metadata: { client_ip: '203.0.113.42' },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects move event_log row when from_column is missing', () => {
+    const result = EventLogRowSchema.safeParse({
+      event_id: '550e8400-e29b-41d4-a716-4466554400ab',
+      card_uid: 'a601f5b3-f91b-4ce0-b562-f4a11fcb45f9',
+      board_uid: '550e8400-e29b-41d4-a716-446655440000',
+      timestamp: '2026-04-26T08:32:00.000Z',
+      actor: 'user:alice@corp.com',
+      action: 'CARD_MOVED',
+      category: 'routing',
+      lifecycle_event: null,
+      from_column: null,
+      to_column: 'in-progress',
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('validates CARD_MOVED SSE envelope and payload alignment', () => {
+    const result = BoardStreamSseEventSchema.safeParse({
+      id: '550e8400-e29b-41d4-a716-4466554400ac',
+      event: 'CARD_MOVED',
+      data: {
+        event_id: '550e8400-e29b-41d4-a716-4466554400ac',
+        board_uid: '550e8400-e29b-41d4-a716-446655440000',
+        actor: 'user:alice@corp.com',
+        timestamp: '2026-04-26T08:33:00.000Z',
+        from_column: 'backlog',
+        to_column: 'in-progress',
+        card: {
+          uid: 'a601f5b3-f91b-4ce0-b562-f4a11fcb45f9',
+          board_uid: '550e8400-e29b-41d4-a716-446655440000',
+          display_id: 'MKT-1',
+          title: 'Campaign launch draft',
+          description: null,
+          version: 2,
+          processing_state: 'IDLE',
+          is_editable: true,
+          payload: {},
+          current_status: 'in-progress',
+          created_at: '2026-04-26T08:30:00.000Z',
+          updated_at: '2026-04-26T08:33:00.000Z',
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('validates board stream reconnect headers with Last-Event-ID', () => {
+    const result = BoardStreamRequestHeadersSchema.safeParse({
+      'last-event-id': '550e8400-e29b-41d4-a716-4466554400ad',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('validates audit log query window constraints', () => {
+    const result = AuditLogQuerySchema.safeParse({
+      limit: 25,
+      from: '2026-04-26T08:00:00.000Z',
+      to: '2026-04-26T09:00:00.000Z',
+      categories: ['routing', 'user_action'],
+      actions: ['CARD_CREATED', 'CARD_MOVED'],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('validates client state update contract for streamed move', () => {
+    const result = ClientCardStateUpdateSchema.safeParse({
+      event: 'CARD_MOVED',
+      data: {
+        event_id: '550e8400-e29b-41d4-a716-4466554400ae',
+        board_uid: '550e8400-e29b-41d4-a716-446655440000',
+        actor: 'user:alice@corp.com',
+        timestamp: '2026-04-26T08:33:00.000Z',
+        from_column: 'backlog',
+        to_column: 'in-progress',
+        card: {
+          uid: 'a601f5b3-f91b-4ce0-b562-f4a11fcb45f9',
+          board_uid: '550e8400-e29b-41d4-a716-446655440000',
+          display_id: 'MKT-1',
+          title: 'Campaign launch draft',
+          description: null,
+          version: 2,
+          processing_state: 'IDLE',
+          is_editable: true,
+          payload: {},
+          current_status: 'in-progress',
+          created_at: '2026-04-26T08:30:00.000Z',
+          updated_at: '2026-04-26T08:33:00.000Z',
+        },
       },
     });
 

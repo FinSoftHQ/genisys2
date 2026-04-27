@@ -11,6 +11,8 @@ import {
   ProcessorCallbackPathParamsSchema,
   ProcessorCallbackHeadersSchema,
   ProcessorCallbackRequestSchema,
+  AuditLogQuerySchema,
+  BoardStreamRequestHeadersSchema,
 } from '@repo/shared';
 import {
   getBoardById,
@@ -25,7 +27,10 @@ import {
 } from './repository.js';
 import { dispatchSyncHook } from './hook-dispatcher.js';
 import { consumeCallback, startProcessing } from './processing-orchestrator.js';
-import { DEFAULT_PROCESSOR_BASE_URL, getDefaultProcessor } from './config.js';
+import { getDefaultProcessor } from './config.js';
+import { resolveActor } from './request-actor.js';
+import { subscribeToBoardEvents } from './board-stream.js';
+import { queryAuditLog } from './event-log.js';
 
 function callRepo<TArgs extends unknown[], TReturn>(
   fn: (instance: unknown, ...args: TArgs) => TReturn,
@@ -84,7 +89,8 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(400).send(errorResponse('INVALID_COLUMN', 'Invalid current_status for this board'));
     }
 
-    const card = await callRepo(createCard, params.data.boardId, body.data);
+    const actor = resolveActor(request);
+    const card = await callRepo(createCard, params.data.boardId, body.data, actor);
     return reply.status(201).send({ data: { card } });
   });
 
@@ -118,7 +124,10 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
     }
 
-    const updatedCard = await callRepo(updateCard, params.data.boardId, params.data.cardId, body.data);
+    const actor = resolveActor(request);
+    const updatedCard = actor !== 'user:anonymous'
+      ? await callRepo(updateCard, params.data.boardId, params.data.cardId, body.data, actor)
+      : await callRepo(updateCard, params.data.boardId, params.data.cardId, body.data);
     if (!updatedCard) {
       const freshCard = await callRepo(getCardById, params.data.boardId, params.data.cardId);
       return reply.status(409).send({
@@ -231,7 +240,8 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
         return reply.status(200).send({ data: { card: result } });
       }
 
-      const movedCard = await callRepo(moveCard, params.data.boardId, params.data.cardId, body.data.to_column_uid);
+      const actor = resolveActor(request);
+      const movedCard = await callRepo(moveCard, params.data.boardId, params.data.cardId, body.data.to_column_uid, actor);
       if (!movedCard) {
         return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
       }
@@ -249,6 +259,68 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       }
       return reply.status(500).send(errorResponse('MOVE_FAILED', 'Move operation failed'));
     }
+  });
+
+  instance.get('/:boardId/stream', async (request, reply) => {
+    const params = BoardPathParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const rawHeaders = {
+      'last-event-id': request.headers['last-event-id'],
+    };
+    const headers = BoardStreamRequestHeadersSchema.safeParse(rawHeaders);
+    if (!headers.success) {
+      return reply.status(400).send(errorResponse('INVALID_HEADERS', 'Invalid headers', { issues: headers.error.issues }));
+    }
+
+    const lastEventId = headers.data['last-event-id'];
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+
+    const unsubscribe = subscribeToBoardEvents(params.data.boardId, (chunk) => {
+      reply.raw.write(chunk);
+    }, lastEventId);
+
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reply.raw.end();
+    }, process.env.VITEST ? 10 : 300000);
+
+    request.raw.on('close', () => {
+      clearTimeout(timeout);
+      unsubscribe();
+      reply.raw.end();
+    });
+  });
+
+  instance.get('/:boardId/audit-log', async (request, reply) => {
+    const params = BoardPathParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const rawQuery: Record<string, unknown> = { ...request.query };
+    if (typeof rawQuery.categories === 'string') {
+      rawQuery.categories = [rawQuery.categories];
+    }
+    if (typeof rawQuery.actions === 'string') {
+      rawQuery.actions = [rawQuery.actions];
+    }
+
+    const query = AuditLogQuerySchema.safeParse(rawQuery);
+    if (!query.success) {
+      return reply.status(400).send(errorResponse('INVALID_QUERY', 'Invalid query parameters', { issues: query.error.issues }));
+    }
+
+    const result = await queryAuditLog({}, params.data.boardId, query.data);
+    return reply.status(200).send({ data: result });
   });
 
   instance.post('/:boardId/cards/:cardId/action', async (request, reply) => {

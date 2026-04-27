@@ -1,5 +1,114 @@
 # Changelog
 
+## [1.3.0-slice4] — 2026-04-27
+
+### Added
+
+#### Backend — Live Board & Audit Trail
+
+- **Immutable `event_log` table** (`src/apps/api/src/db/schema.ts`, `src/apps/api/src/db/migrations/0004_kanban_slice4.sql`)
+  - Columns: `event_id` (UUID PK), `card_uid`, `board_uid`, `timestamp`, `actor`, `action`, `category`, `lifecycle_event`, `from_column`, `to_column`, `idempotency_key`, `payload_delta`, `metadata`.
+  - SQLite triggers `event_log_prevent_update` and `event_log_prevent_delete` enforce append-only semantics at the database layer.
+  - Composite indexes: `(card_uid, timestamp)`, `(board_uid, timestamp)`, `(category, timestamp)`.
+
+- **Event log appender** (`src/apps/api/src/kanban/event-log.ts`)
+  - `appendEventLog(instance, event)` — validates rows via `EventLogRowSchema`, inserts into `event_log`, and returns the parsed row.
+  - `queryAuditLog(instance, boardUid, query)` — cursor-based pagination with `limit` (default 50, max 200), `cursor` (`{timestamp}|{event_id}`), date range (`from`/`to`), category/action filters, and per-card filtering.
+
+- **Request actor resolution** (`src/apps/api/src/kanban/request-actor.ts`)
+  - `resolveActor(request)` reads the `X-Actor` header; falls back to `user:anonymous` when missing or invalid.
+  - Actor is threaded through `createCard`, `updateCard`, and `moveCard` in the repository so every mutation is attributed.
+
+- **SSE board stream** (`src/apps/api/src/kanban/board-stream.ts`)
+  - `BoardStreamManager` maintains per-board in-memory buffers and subscriber lists.
+  - `broadcast(boardUid, event)` appends events to a 5-minute ring buffer (`bufferWindowMs = 300000`) and fans out formatted SSE chunks to all active subscribers.
+  - `subscribe(boardUid, handler, lastEventId?)` supports replay:
+    - If `lastEventId` is missing and the buffer is empty → emits `BOARD_RELOAD` (`SERVER_RESET`).
+    - If `lastEventId` is not found in the buffer → emits `BOARD_RELOAD` (`BUFFER_MISS`).
+    - If the event is older than the buffer window → emits `BOARD_RELOAD` (`CURSOR_EXPIRED`).
+    - Otherwise replays all missed events chronologically.
+  - Route `GET /api/boards/{boardId}/stream` hijacks the Fastify reply, writes `text/event-stream` headers, and keeps the connection open for up to 5 minutes.
+
+- **Repository SSE integration** (`src/apps/api/src/kanban/repository.ts`)
+  - `createCard`, `updateCard`, and `moveCard` now call `appendEventLog` and `broadcastEvent` inside the same SQLite transaction.
+  - Every card mutation emits a strongly-typed SSE event (`CARD_CREATED`, `CARD_UPDATED`, `CARD_MOVED`) with the authoritative card entity and actor metadata.
+  - Processing orchestrator emits `CARD_UPDATED` via SSE when a card enters or exits `PROCESSING` state.
+
+- **Audit log query endpoint** (`src/apps/api/src/kanban/routes.ts`)
+  - `GET /api/boards/{boardId}/audit-log` — validates query params via `AuditLogQuerySchema`, calls `queryAuditLog`, and returns `{ data: { events, next_cursor } }`.
+
+- **Zod schemas** (`@repo/shared` `kanban-schemas.ts`)
+  - `EventLogRowSchema`, `EventLogActionSchema`, `EventLogCategorySchema`, `EventLogLifecycleEventSchema`.
+  - `BoardStreamSseEventSchema` — discriminated union over `CARD_CREATED`, `CARD_UPDATED`, `CARD_MOVED`, `BOARD_RELOAD`.
+  - `AuditLogQuerySchema`, `AuditLogResponseSchema`, `BoardStreamRequestHeadersSchema`.
+  - `BoardReloadEventDataSchema` with reasons `CURSOR_EXPIRED | BUFFER_MISS | SERVER_RESET`.
+
+#### Frontend — Real-Time Sync & Audit Panel
+
+- **Real-time board composable** (`src/apps/web/app/composables/useBoardRealtime.ts`)
+  - `useBoardRealtime(boardId, opts?)` manages a `fetch`-based SSE connection.
+  - Parses `text/event-stream` chunks manually (line-by-line `id:`, `event:`, `data:` parsing) to handle partial chunks across read boundaries.
+  - Validates every inbound message through `BoardStreamSseEventSchema`.
+  - Applies events to the existing `useBoardStore()`:
+    - `CARD_CREATED` → `boardStore.addCard(card)`
+    - `CARD_UPDATED` → `boardStore.updateCard(card)`
+    - `CARD_MOVED` → `boardStore.updateCard(card)` (store handles column migration)
+    - `BOARD_RELOAD` → calls `opts.onReload()` (BoardView fetches a fresh snapshot)
+  - Supports `Last-Event-ID` resumption: stores the last received `id` and sends it on reconnect.
+  - Exponential backoff reconnect: base 1s, doubles each attempt, caps at 30s.
+  - Exposes reactive `status`: `idle | connecting | connected | disconnected`.
+
+- **Board store enhancements** (`src/apps/web/app/composables/useBoardStore.ts`)
+  - `addCard(card)` — idempotent insertion; appends the card UUID to the correct column list.
+  - `updateCard(card)` — optimistic version gate (ignores stale events where `card.version < existing.version`). If `current_status` changed, migrates the card between column lists atomically.
+  - `moveCardLocal(cardId, toColumnUid)` — unchanged from Slice 1; still used for optimistic drag-and-drop.
+
+- **Audit log panel** (`src/apps/web/app/components/kanban/AuditLogPanel.vue`)
+  - `USlideover` drawer from the right with title "Audit Log".
+  - Props: `boardId` (string).
+  - v-model: `open` (boolean).
+  - Fetches `GET /api/boards/{boardId}/audit-log?limit=50` when opened for the first time.
+  - Cursor-based pagination: "Load more" button appends the next page using `next_cursor`.
+  - Each event renders as a `UCard` with:
+    - `UBadge` colored by category (`user_action` = primary, `lifecycle` = info, else neutral).
+    - Human-readable description: actor name + action verb + column transition or card reference.
+    - Localized timestamp.
+  - Loading skeletons shown on initial fetch; empty state shows clipboard icon + "No audit events yet".
+
+- **Board view real-time integration** (`src/apps/web/app/components/kanban/BoardView.vue`)
+  - On mount, calls `connectRealtime()` to open the SSE stream immediately after the component loads.
+  - Real-time status badge in the header:
+    - `connected` → green "Live" badge with `animate-pulse`.
+    - `connecting` → yellow "Connecting..." badge.
+    - `disconnected` → red "Offline" badge.
+  - `Audit Log` button opens the `AuditLogPanel` slideover.
+  - `BOARD_RELOAD` handler calls `refreshSnapshot()` to re-hydrate the store from the server.
+  - Polling for processing cards remains unchanged from Slice 3 (complements SSE as a fallback).
+
+### Changed
+
+- **OpenAPI spec** (`docs/openapi.yaml`)
+  - Bumped version to `1.3.0`.
+  - Added `GET /boards` (list boards).
+  - Added `GET /boards/{boardId}/stream` (SSE) with `Last-Event-ID` header and event type descriptions.
+  - Added `GET /boards/{boardId}/audit-log` with full query parameter documentation.
+  - Added schemas: `EventLogRow`, `AuditLogResponse`, `BoardReloadEventData`, `ListBoardsResponse`.
+
+### Intentionally Deferred
+
+- Parent-child card relationships
+- Roll-up debouncing
+- DLQ for SLA breaches
+- HMAC signature verification on callbacks
+- Rate limiting on SSE connections
+
+### Test Status
+
+- **Backend kanban suite:** 192/192 passing
+- **Frontend kanban suite:** 77/77 passing
+
+---
+
 ## [1.0.0-slice1] — 2026-04-26
 
 ### Added

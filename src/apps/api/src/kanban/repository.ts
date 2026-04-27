@@ -1,42 +1,15 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { BoardEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema, CallbackTokenEntitySchema, ProcessingStateTransitionSchema } from '@repo/shared';
-import type { DbInstance } from '../db/client.js';
-import { createClient } from '../db/client.js';
+import { BoardEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema, CallbackTokenEntitySchema, ProcessingStateTransitionSchema, BoardStreamSseEventSchema } from '@repo/shared';
 import { boards, boardSequences, cards, processorRegistry, callbackTokens } from '../db/schema.js';
 import type { ProcessorRegistryEntity } from '@repo/shared';
-import { seedBoard as seedBoardImpl } from '../db/seed.js';
+import '../db/seed.js';
 import type { BoardEntity, CardEntity } from '@repo/shared';
 import { DEFAULT_PROCESSOR_BASE_URL } from './config.js';
-
-let defaultDb: DbInstance | null = null;
-
-function isDbInstance(value: unknown): value is DbInstance {
-  return !!value && typeof value === 'object' && 'sqlite' in value && 'db' in value;
-}
-
-export function resolveDb(instance: unknown): DbInstance {
-  if (isDbInstance(instance)) {
-    return instance;
-  }
-  if (!defaultDb) {
-    defaultDb = createClient(process.env.KANBAN_DB_PATH ?? ':memory:');
-  }
-  return defaultDb;
-}
-
-export function openDb(path: string): DbInstance {
-  defaultDb = createClient(path);
-  return defaultDb;
-}
-
-export function closeDb(instance: unknown): void {
-  const db = resolveDb(instance);
-  if (db === defaultDb) {
-    defaultDb = null;
-  }
-  db.sqlite.close();
-}
+import { resolveDb, openDb, closeDb } from './db-context.js';
+import { appendEventLog } from './event-log.js';
+import { broadcastEvent } from './board-stream.js';
+export { resolveDb, openDb, closeDb };
 
 export function getPragmas(instance: unknown) {
   const sqlite = resolveDb(instance).sqlite;
@@ -273,6 +246,7 @@ export function createCard(
   instance: unknown,
   boardUid: string,
   input: { title: string; description?: string | null; current_status: string; payload?: Record<string, unknown> },
+  actor: string = 'user:anonymous',
 ): CardEntity {
   const { db } = resolveDb(instance);
   const board = db.select().from(boards).where(eq(boards.uid, boardUid)).get();
@@ -288,7 +262,7 @@ export function createCard(
 
   const now = new Date().toISOString();
 
-  const card = db.transaction(() => {
+  return db.transaction(() => {
     const seq = db
       .update(boardSequences)
       .set({ seq_value: sql`${boardSequences.seq_value} + 1` })
@@ -313,10 +287,36 @@ export function createCard(
     };
 
     db.insert(cards).values(cardData).run();
-    return CardEntitySchema.parse(cardData);
-  });
 
-  return card;
+    const logEvent = appendEventLog(instance, {
+      event_id: randomUUID(),
+      timestamp: now,
+      card_uid: cardData.uid,
+      board_uid: boardUid,
+      actor,
+      action: 'CARD_CREATED',
+      category: 'user_action',
+      lifecycle_event: null,
+      from_column: null,
+      to_column: null,
+    } as Parameters<typeof appendEventLog>[1]);
+
+    const parsedCard = CardEntitySchema.parse(cardData);
+    const createdEvent = BoardStreamSseEventSchema.parse({
+      id: logEvent.event_id,
+      event: 'CARD_CREATED',
+      data: {
+        event_id: logEvent.event_id,
+        board_uid: boardUid,
+        actor,
+        timestamp: logEvent.timestamp,
+        card: parsedCard,
+      },
+    });
+    broadcastEvent(boardUid, createdEvent);
+
+    return parsedCard;
+  });
 }
 
 export function updateCard(
@@ -324,41 +324,81 @@ export function updateCard(
   boardUid: string,
   cardUid: string,
   input: { version: number; title?: string; description?: string | null },
+  actor: string = 'user:anonymous',
 ): CardEntity | null {
   const { db } = resolveDb(instance);
   const now = new Date().toISOString();
 
-  const updateData: Partial<typeof cards.$inferInsert> = {
-    updated_at: now,
-    version: sql`${cards.version} + 1`,
-  };
+  return db.transaction(() => {
+    const updateData: Partial<typeof cards.$inferInsert> = {
+      updated_at: now,
+      version: sql`${cards.version} + 1`,
+    };
 
-  if (input.title !== undefined) {
-    updateData.title = input.title;
-  }
-  if (input.description !== undefined) {
-    updateData.description = input.description;
-  }
+    if (input.title !== undefined) {
+      updateData.title = input.title;
+    }
+    if (input.description !== undefined) {
+      updateData.description = input.description;
+    }
 
-  const conditions = [
-    eq(cards.board_uid, boardUid),
-    eq(cards.uid, cardUid),
-  ];
+    const conditions = [
+      eq(cards.board_uid, boardUid),
+      eq(cards.uid, cardUid),
+    ];
 
-  if (input.version !== undefined) {
-    conditions.push(eq(cards.version, input.version));
-  }
+    if (input.version !== undefined) {
+      conditions.push(eq(cards.version, input.version));
+    }
 
-  const result = db
-    .update(cards)
-    .set(updateData)
-    .where(and(...conditions))
-    .returning()
-    .get();
+    const result = db
+      .update(cards)
+      .set(updateData)
+      .where(and(...conditions))
+      .returning()
+      .get();
 
-  if (!result) return null;
-  const parsed = CardEntitySchema.safeParse(result);
-  return parsed.success ? parsed.data : null;
+    if (!result) return null;
+
+    const payloadDelta: Record<string, unknown> = {};
+    if (input.title !== undefined) payloadDelta.title = input.title;
+    if (input.description !== undefined) payloadDelta.description = input.description;
+
+    const logEvent = appendEventLog(instance, {
+      event_id: randomUUID(),
+      timestamp: now,
+      card_uid: cardUid,
+      board_uid: boardUid,
+      actor,
+      action: 'CARD_UPDATED',
+      category: 'user_action',
+      lifecycle_event: null,
+      from_column: null,
+      to_column: null,
+      payload_delta: Object.keys(payloadDelta).length > 0 ? (payloadDelta as any) : null,
+    } as Parameters<typeof appendEventLog>[1]);
+
+    const parsed = CardEntitySchema.safeParse(result);
+    if (parsed.success) {
+      const changedFields: Array<'title' | 'description' | 'payload' | 'processing_state' | 'is_editable' | 'current_status' | 'version' | 'updated_at'> = ['version', 'updated_at'];
+      if (input.title !== undefined) changedFields.push('title');
+      if (input.description !== undefined) changedFields.push('description');
+      const updatedEvent = BoardStreamSseEventSchema.parse({
+        id: logEvent.event_id,
+        event: 'CARD_UPDATED',
+        data: {
+          event_id: logEvent.event_id,
+          board_uid: boardUid,
+          actor,
+          timestamp: logEvent.timestamp,
+          card: parsed.data,
+          changed_fields: changedFields,
+        },
+      });
+      broadcastEvent(boardUid, updatedEvent);
+    }
+    return parsed.success ? parsed.data : null;
+  });
 }
 
 export function getProcessorById(instance: unknown, processorId: string): ProcessorRegistryEntity | undefined {
@@ -373,7 +413,7 @@ export function getProcessorById(instance: unknown, processorId: string): Proces
   return parsed.success ? parsed.data : undefined;
 }
 
-export function moveCard(instance: unknown, boardUid: string, cardUid: string, toColumn: string): CardEntity {
+export function moveCard(instance: unknown, boardUid: string, cardUid: string, toColumn: string, actor: string = 'user:anonymous'): CardEntity {
   const { db } = resolveDb(instance);
   const board = db.select().from(boards).where(eq(boards.uid, boardUid)).get();
   if (!board) {
@@ -396,26 +436,58 @@ export function moveCard(instance: unknown, boardUid: string, cardUid: string, t
     throw new Error('CARD_NOT_FOUND');
   }
 
+  const fromColumn = existing.current_status as string;
   const now = new Date().toISOString();
-  const result = db
-    .update(cards)
-    .set({
-      current_status: toColumn,
-      version: existing.version + 1,
-      updated_at: now,
-    })
-    .where(and(eq(cards.board_uid, boardUid), eq(cards.uid, cardUid)))
-    .returning()
-    .get();
 
-  if (!result) {
-    throw new Error('CARD_NOT_FOUND');
-  }
-  const parsed = CardEntitySchema.safeParse(result);
-  if (!parsed.success) {
-    throw new Error('CARD_NOT_FOUND');
-  }
-  return parsed.data;
+  return db.transaction(() => {
+    const result = db
+      .update(cards)
+      .set({
+        current_status: toColumn,
+        version: existing.version + 1,
+        updated_at: now,
+      })
+      .where(and(eq(cards.board_uid, boardUid), eq(cards.uid, cardUid)))
+      .returning()
+      .get();
+
+    if (!result) {
+      throw new Error('CARD_NOT_FOUND');
+    }
+
+    const logEvent = appendEventLog(instance, {
+      event_id: randomUUID(),
+      timestamp: now,
+      card_uid: cardUid,
+      board_uid: boardUid,
+      actor,
+      action: 'CARD_MOVED',
+      category: 'user_action',
+      lifecycle_event: null,
+      from_column: fromColumn,
+      to_column: toColumn,
+    } as Parameters<typeof appendEventLog>[1]);
+
+    const parsed = CardEntitySchema.safeParse(result);
+    if (!parsed.success) {
+      throw new Error('CARD_NOT_FOUND');
+    }
+    const movedEvent = BoardStreamSseEventSchema.parse({
+      id: logEvent.event_id,
+      event: 'CARD_MOVED',
+      data: {
+        event_id: logEvent.event_id,
+        board_uid: boardUid,
+        actor,
+        timestamp: logEvent.timestamp,
+        card: parsed.data,
+        from_column: fromColumn,
+        to_column: toColumn,
+      },
+    });
+    broadcastEvent(boardUid, movedEvent);
+    return parsed.data;
+  });
 }
 
 export function createCallbackToken(

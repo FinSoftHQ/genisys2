@@ -1,17 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { CardEntitySchema } from '@repo/shared';
+import { CardEntitySchema, BoardStreamSseEventSchema } from '@repo/shared';
 import type { BoardEntity, CardEntity } from '@repo/shared';
 import {
   resolveDb,
   updateCardProcessingState,
   createCallbackToken,
-  getCallbackToken,
-  deleteCallbackToken,
   getProcessorById,
 } from './repository.js';
 import { dispatchAsyncHook } from './hook-dispatcher.js';
+import { appendEventLog } from './event-log.js';
+import { broadcastEvent } from './board-stream.js';
 import { cards, callbackTokens, boards, processorRegistry, consumedCallbackTokens } from '../db/schema.js';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 export async function startProcessing(
   db: unknown,
@@ -65,6 +65,33 @@ export async function startProcessing(
     callback_url: callbackUrl,
     idempotency_key: idempotencyKey,
   });
+
+  const logEvent = appendEventLog(db, {
+    event_id: randomUUID(),
+    timestamp: new Date().toISOString(),
+    card_uid: card.uid,
+    board_uid: board.uid,
+    actor: 'system:processor',
+    action: 'PROCESSING_STARTED',
+    category: 'lifecycle',
+    lifecycle_event: 'PROCESSING_STARTED',
+    from_column: null,
+    to_column: null,
+  } as Parameters<typeof appendEventLog>[1]);
+
+  const processingEvent = BoardStreamSseEventSchema.parse({
+    id: logEvent.event_id,
+    event: 'CARD_UPDATED',
+    data: {
+      event_id: logEvent.event_id,
+      board_uid: board.uid,
+      actor: 'system:processor',
+      timestamp: logEvent.timestamp,
+      card: updated,
+      changed_fields: ['processing_state', 'is_editable', 'current_status', 'version', 'updated_at'],
+    },
+  });
+  broadcastEvent(board.uid, processingEvent);
 
   return updated;
 }
@@ -180,6 +207,43 @@ export async function consumeCallback(
 
     database.delete(callbackTokens).where(eq(callbackTokens.token, token)).run();
     database.insert(consumedCallbackTokens).values({ token, consumed_at: now }).run();
+
+    const logEvent = appendEventLog(db, {
+      event_id: randomUUID(),
+      timestamp: new Date().toISOString(),
+      card_uid: tokenRow.card_uid,
+      board_uid: card.board_uid,
+      actor: 'system:processor',
+      action: payload.status === 'success' ? 'PROCESSING_COMPLETED' : 'PROCESSING_ERROR',
+      category: 'lifecycle',
+      lifecycle_event: payload.status === 'success' ? 'PROCESSING_COMPLETED' : 'PROCESSING_ERROR',
+      from_column: null,
+      to_column: null,
+    } as Parameters<typeof appendEventLog>[1]);
+
+    const changedFields: Array<'title' | 'description' | 'payload' | 'processing_state' | 'is_editable' | 'current_status' | 'version' | 'updated_at'> = ['processing_state', 'is_editable', 'version', 'updated_at'];
+    if (payload.status === 'success' && payload.move_to_column) {
+      changedFields.push('current_status');
+    }
+    if (payload.payload_updates) {
+      if ('title' in payload.payload_updates) changedFields.push('title');
+      if ('description' in payload.payload_updates) changedFields.push('description');
+      if ('payload' in payload.payload_updates) changedFields.push('payload');
+    }
+
+    const callbackEvent = BoardStreamSseEventSchema.parse({
+      id: logEvent.event_id,
+      event: 'CARD_UPDATED',
+      data: {
+        event_id: logEvent.event_id,
+        board_uid: card.board_uid,
+        actor: 'system:processor',
+        timestamp: logEvent.timestamp,
+        card: result,
+        changed_fields: changedFields,
+      },
+    });
+    broadcastEvent(card.board_uid, callbackEvent);
 
     const parsed = CardEntitySchema.safeParse(result);
     if (!parsed.success) {

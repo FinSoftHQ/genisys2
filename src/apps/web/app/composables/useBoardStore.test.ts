@@ -249,4 +249,30 @@ describe('useBoardStore', () => {
       expect(store.store.value.ui.pollIntervalId).toBeNull();
     });
   });
+
+  describe('addCard — Slice 4 deduplication', () => {
+    it('does not duplicate card in column on replayed CARD_CREATED', () => {
+      store.hydrate({ board: mockBoard, cards: [mockCardIdle] });
+      store.addCard(mockCardIdle);
+      const backlogIds = store.store.value.columnCardIds.get('backlog') ?? [];
+      const occurrences = backlogIds.filter((id) => id === mockCardIdle.uid).length;
+      expect(occurrences).toBe(1);
+    });
+  });
+
+  describe('updateCard — Slice 4 version guard', () => {
+    it('ignores stale streamed events with lower version', () => {
+      store.hydrate({ board: mockBoard, cards: [mockCardIdle] });
+      const staleCard = { ...mockCardIdle, version: 0, title: 'Stale Title' };
+      store.updateCard(staleCard);
+      expect(store.store.value.cardsById.get(mockCardIdle.uid)?.title).toBe('Idle Card');
+    });
+
+    it('accepts update with higher version', () => {
+      store.hydrate({ board: mockBoard, cards: [mockCardIdle] });
+      const updated = { ...mockCardIdle, version: 2, title: 'Updated Title' };
+      store.updateCard(updated);
+      expect(store.store.value.cardsById.get(mockCardIdle.uid)?.title).toBe('Updated Title');
+    });
+  });
 });

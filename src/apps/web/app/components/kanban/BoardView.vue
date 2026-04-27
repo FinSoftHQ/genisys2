@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import type { CardEntity, SnapshotResponse, MoveCardRequest, MoveCardResponse } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
+import { useBoardRealtime } from '~/composables/useBoardRealtime';
 import { parseApiError, parseMoveBlockedError } from '~/utils/api-error';
 import BoardColumn from './BoardColumn.vue';
 import CreateCardModal from './CreateCardModal.vue';
 import EditCardModal from './EditCardModal.vue';
+import AuditLogPanel from './AuditLogPanel.vue';
 
 const props = defineProps<{
   boardUid: string;
@@ -24,6 +26,12 @@ const {
   startPolling,
   stopPolling,
 } = useBoardStore();
+
+const { status: realtimeStatus, connect: connectRealtime } = useBoardRealtime(props.boardUid, {
+  onReload: refreshSnapshot,
+});
+
+const auditPanelOpen = ref(false);
 
 const toast = useToast();
 
@@ -112,6 +120,10 @@ watch(
   { immediate: true }
 );
 
+onMounted(() => {
+  connectRealtime();
+});
+
 onUnmounted(() => {
   stopPolling();
 });
@@ -126,14 +138,50 @@ onUnmounted(() => {
       class="px-4 py-4 shrink-0"
     >
       <template #right>
-        <UBadge
-          v-if="store.ui.isSaving"
-          color="info"
-          variant="soft"
-          class="animate-pulse"
-        >
-          Saving...
-        </UBadge>
+        <div class="flex items-center gap-2">
+          <UBadge
+            v-if="realtimeStatus === 'connected'"
+            color="success"
+            variant="soft"
+            size="sm"
+            class="animate-pulse"
+          >
+            Live
+          </UBadge>
+          <UBadge
+            v-else-if="realtimeStatus === 'connecting'"
+            color="warning"
+            variant="soft"
+            size="sm"
+          >
+            Connecting...
+          </UBadge>
+          <UBadge
+            v-else-if="realtimeStatus === 'disconnected'"
+            color="error"
+            variant="soft"
+            size="sm"
+          >
+            Offline
+          </UBadge>
+          <UBadge
+            v-if="store.ui.isSaving"
+            color="info"
+            variant="soft"
+            class="animate-pulse"
+          >
+            Saving...
+          </UBadge>
+          <UButton
+            icon="i-lucide-scroll-text"
+            variant="soft"
+            color="neutral"
+            size="sm"
+            @click="auditPanelOpen = true"
+          >
+            Audit Log
+          </UButton>
+        </div>
       </template>
     </UPageHeader>
 
@@ -173,6 +221,11 @@ onUnmounted(() => {
       :card="editingCard"
       :board-uid="boardUid"
       @updated="refreshSnapshot"
+    />
+
+    <AuditLogPanel
+      v-model:open="auditPanelOpen"
+      :board-id="boardUid"
     />
   </div>
 </template>

@@ -1,9 +1,5 @@
 import { ref, computed } from 'vue';
-import { ColumnUidSchema } from '@repo/shared';
 import type { BoardEntity, CardEntity } from '@repo/shared';
-import type { z } from 'zod';
-
-type ColumnUid = z.infer<typeof ColumnUidSchema>;
 
 interface BoardStore {
   board: BoardEntity | null;
@@ -98,25 +94,41 @@ export function useBoardStore() {
 
     const nextColumns = new Map(store.value.columnCardIds);
     const list = nextColumns.get(card.current_status) ?? [];
-    list.push(card.uid);
-    nextColumns.set(card.current_status, list);
-    store.value.columnCardIds = nextColumns;
+    if (!list.includes(card.uid)) {
+      list.push(card.uid);
+      nextColumns.set(card.current_status, list);
+      store.value.columnCardIds = nextColumns;
+    }
   }
 
   function updateCard(card: CardEntity) {
     const existing = store.value.cardsById.get(card.uid);
+    if (existing && card.version < existing.version) {
+      return;
+    }
+
     const nextCards = new Map(store.value.cardsById);
     nextCards.set(card.uid, card);
     store.value.cardsById = nextCards;
 
-    if (existing && existing.current_status !== card.current_status) {
+    if (!existing) {
+      const nextColumns = new Map(store.value.columnCardIds);
+      const list = nextColumns.get(card.current_status) ?? [];
+      if (!list.includes(card.uid)) {
+        list.push(card.uid);
+        nextColumns.set(card.current_status, list);
+      }
+      store.value.columnCardIds = nextColumns;
+    } else if (existing.current_status !== card.current_status) {
       const nextColumns = new Map(store.value.columnCardIds);
 
       const oldList = nextColumns.get(existing.current_status) ?? [];
       nextColumns.set(existing.current_status, oldList.filter((id) => id !== card.uid));
 
       const newList = nextColumns.get(card.current_status) ?? [];
-      newList.push(card.uid);
+      if (!newList.includes(card.uid)) {
+        newList.push(card.uid);
+      }
       nextColumns.set(card.current_status, newList);
 
       store.value.columnCardIds = nextColumns;
@@ -138,7 +150,7 @@ export function useBoardStore() {
     store.value.columnCardIds = nextColumns;
 
     const nextCards = new Map(store.value.cardsById);
-    nextCards.set(cardId, { ...card, current_status: toColumnUid as ColumnUid });
+    nextCards.set(cardId, { ...card, current_status: toColumnUid });
     store.value.cardsById = nextCards;
   }
 

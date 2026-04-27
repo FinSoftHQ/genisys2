@@ -1,6 +1,6 @@
-# Kanban Components — Slice 1, 2 & 3
+# Kanban Components — Slice 1, 2, 3 & 4
 
-> **Scope:** Slice 1 MVP + Slice 2 "Safe Moves" + Slice 3 "Smart Columns"
+> **Scope:** Slice 1 MVP + Slice 2 "Safe Moves" + Slice 3 "Smart Columns" + Slice 4 "Live Board"
 > **Status:** Implemented.
 
 ---
@@ -99,6 +99,67 @@ interface BoardStore {
 
 ---
 
+## `composables/useBoardRealtime.ts`
+
+Composable that manages a `fetch`-based Server-Sent Events connection for a single board.
+
+### Signature
+```ts
+function useBoardRealtime(
+  boardId: string,
+  opts?: { onReload?: () => void }
+): {
+  status: Ref<ConnectionStatus>;
+  lastEventId: Ref<string | null>;
+  reconnectAttempt: Ref<number>;
+  connect: () => Promise<void>;
+  disconnect: () => void;
+}
+```
+
+### Types
+| Name                | Type                              | Description                                                |
+|---------------------|-----------------------------------|------------------------------------------------------------|
+| `ConnectionStatus`  | `'idle' \| 'connecting' \| 'connected' \| 'disconnected'` | Current SSE connection state |
+
+### State
+| Name              | Type                  | Description                                           |
+|-------------------|-----------------------|-------------------------------------------------------|
+| `status`          | `Ref<ConnectionStatus>` | Reactive connection status                            |
+| `lastEventId`     | `Ref<string \| null>`  | Last received SSE `id` field, used for resumption     |
+| `reconnectAttempt`| `Ref<number>`         | Number of consecutive reconnect attempts since last success |
+
+### Methods
+| Method      | Signature                              | Description                                                            |
+|-------------|----------------------------------------|------------------------------------------------------------------------|
+| `connect`   | `() => Promise<void>`                  | Opens the SSE stream. Sends `Last-Event-ID` header when resuming.      |
+| `disconnect`| `() => void`                           | Aborts the active fetch, clears reconnect timers, sets status to `idle`|
+
+### Behavior
+- Uses `fetch` with `ReadableStream` reader instead of `EventSource` to gain control over headers (`Last-Event-ID`) and error handling.
+- Manually parses SSE chunks line-by-line (`id:`, `event:`, `data:`) and handles partial messages across chunk boundaries.
+- Every parsed message is validated against `BoardStreamSseEventSchema` (Zod). Invalid messages are logged and dropped.
+- **Event application:**
+  - `CARD_CREATED` → `boardStore.addCard(event.data.card)`
+  - `CARD_UPDATED` → `boardStore.updateCard(event.data.card)`
+  - `CARD_MOVED` → `boardStore.updateCard(event.data.card)` (the store detects the column change)
+  - `BOARD_RELOAD` → calls `opts.onReload()` (typically fetches a fresh snapshot)
+- **Version gating:** `updateCard` in the store ignores events where `incoming.version < existing.version`, preventing stale events from overwriting newer local state.
+- **Reconnect logic:** On unexpected disconnect, schedules exponential backoff (base 1s, cap 30s). `reconnectAttempt` resets to 0 on successful connection.
+- **Cleanup:** `onUnmounted` calls `disconnect()` automatically.
+
+### Constants
+| Name                  | Value   | Description                              |
+|-----------------------|---------|------------------------------------------|
+| `RECONNECT_BASE_MS`   | `1000`  | Initial reconnect delay                  |
+| `RECONNECT_MAX_MS`    | `30000` | Maximum reconnect delay                  |
+
+### Dependencies
+- `@repo/shared` — `BoardStreamSseEventSchema`, `BoardStreamSseEvent`
+- `~/composables/useBoardStore` — `addCard`, `updateCard`
+
+---
+
 ## `components/kanban/BoardView.vue`
 
 Root layout component that renders the full board with all columns horizontally.
@@ -109,7 +170,7 @@ Root layout component that renders the full board with all columns horizontally.
 | `boardUid` | string | yes      | Board UUID (for API calls) |
 
 ### Behavior
-- Renders `UPageHeader` with board title and prefix; shows a "Saving..." badge during mutations.
+- Renders `UPageHeader` with board title and prefix; shows a **real-time status badge** and a "Saving..." badge during mutations.
 - Renders `UAlert` for transient errors.
 - Iterates over `sortedColumns` from `useBoardStore()` and renders a `BoardColumn` for each.
 - Handles drag-and-drop move orchestration:
@@ -117,10 +178,16 @@ Root layout component that renders the full board with all columns horizontally.
   2. POSTs to `/api/boards/{boardUid}/cards/{cardId}/move`.
   3. On success, calls `updateCard(response.data.card)` to reconcile.
   4. On failure, calls `moveCardLocal(cardId, originalStatus)` to revert and sets `ui.error`.
-- Hosts `CreateCardModal` and `EditCardModal`.
+- Hosts `CreateCardModal`, `EditCardModal`, and `AuditLogPanel`.
 - After card creation or edit, calls `refreshSnapshot()` to reload the full board state.
 - **Blocked-move toast:** If the server rejects a move with `MOVE_BLOCKED`, a toast is shown via `useToast()` (color `error`, icon `i-lucide-ban`) and the optimistic local move is reverted so the card snaps back.
-- **Auto-polling:** Watches `hasProcessingCards`. When true, starts polling the snapshot endpoint every 2 seconds so the UI reflects processor callback results (unlock/move) without manual refresh. Stops polling when no cards are processing. Cleans up on unmount.
+- **Real-time SSE sync:** On mount, opens `useBoardRealtime(boardUid)`. Incoming SSE events mutate the store directly; cards glide between columns without full page refresh.
+- **Real-time status badge:**
+  - `connected` → green "Live" `UBadge` with `animate-pulse`.
+  - `connecting` → yellow "Connecting..." badge.
+  - `disconnected` → red "Offline" badge.
+- **BOARD_RELOAD recovery:** When the SSE stream emits `BOARD_RELOAD` (buffer miss, cursor expired, or server reset), `refreshSnapshot()` is called to re-hydrate the entire board from the server.
+- **Auto-polling:** Watches `hasProcessingCards`. When true, starts polling the snapshot endpoint every 2 seconds so the UI reflects processor callback results (unlock/move) without manual refresh. Stops polling when no cards are processing. Cleans up on unmount. Polling complements SSE as a fallback.
 
 ### Events (internal)
 | Handler          | Triggered by     | Action                                      |
@@ -138,6 +205,7 @@ Root layout component that renders the full board with all columns horizontally.
 ### Dependencies
 - `@repo/shared` — `SnapshotResponse`, `MoveCardRequest`, `MoveCardResponse`, `CardEntity`
 - `@nuxt/ui` — `UPageHeader`, `UPageBody`, `UAlert`, `UBadge`
+- `~/composables/useBoardRealtime` — SSE connection management
 
 ---
 
@@ -207,6 +275,61 @@ Displays a single card with title, description, badges, drag support, and proces
 ### Dependencies
 - `@repo/shared` — `CardEntity`
 - `@nuxt/ui` — `UCard`, `UButton`, `UBadge`, `UIcon`
+
+---
+
+## `components/kanban/AuditLogPanel.vue`
+
+Slide-over drawer that displays the immutable audit log for the current board.
+
+### Props
+| Prop       | Type    | Required | Description                |
+|------------|---------|----------|----------------------------|
+| `boardId`  | string  | yes      | Board UUID to query        |
+
+### v-model
+| Name   | Type      | Default | Description                 |
+|--------|-----------|---------|-----------------------------|
+| `open` | `boolean` | `false` | Controls slide-over visibility |
+
+### State
+| Name         | Type                        | Description                                      |
+|--------------|-----------------------------|--------------------------------------------------|
+| `events`     | `Ref<EventLogRow[]>`        | Loaded audit events, chronologically ordered     |
+| `loading`    | `Ref<boolean>`              | True while fetching                              |
+| `error`      | `Ref<string \| null>`       | Error message on fetch failure                   |
+| `nextCursor` | `Ref<string \| null>`       | Pagination cursor for the next page              |
+| `hasMore`    | `ComputedRef<boolean>`      | True when `nextCursor` is non-null               |
+
+### Methods
+| Method         | Signature                          | Description                                                   |
+|----------------|------------------------------------|---------------------------------------------------------------|
+| `loadAuditLog` | `(isLoadMore = false) => Promise<void>` | Fetches audit log. On first open loads page 1; on "Load more" appends the next page. |
+
+### Behavior
+- Uses `USlideover` from `@nuxt/ui` with `side="right"` and title "Audit Log".
+- Lazy-loads: fetches only when `open` becomes `true` and `events` is empty.
+- Validates server response via `AuditLogResponseSchema` (Zod).
+- Each event renders as a `UCard`:
+  - Header row: `UBadge` for the action (colored by category) + localized timestamp.
+  - Body: human-readable sentence describing the actor, action, and column transition or card reference.
+- **Categories:**
+  - `user_action` → primary color badge
+  - `lifecycle` → info color badge
+  - otherwise → neutral color badge
+- **Empty state:** `UIcon` (`i-lucide-clipboard-list`) + "No audit events yet".
+- **Loading state:** `USkeleton` placeholders shown during initial fetch.
+- **Error state:** `UAlert` (color `error`) displays the failure message.
+- **Pagination:** "Load more" `UButton` fetches the next cursor page and appends to `events`.
+
+### API Calls
+| Method | Endpoint                                           | Purpose          |
+|--------|----------------------------------------------------|------------------|
+| GET    | `/api/boards/{boardId}/audit-log?limit=50&cursor=` | Fetch audit events |
+
+### Dependencies
+- `@repo/shared` — `AuditLogResponseSchema`, `EventLogRow`
+- `@nuxt/ui` — `USlideover`, `UAlert`, `USkeleton`, `UCard`, `UBadge`, `UButton`, `UIcon`
 
 ---
 

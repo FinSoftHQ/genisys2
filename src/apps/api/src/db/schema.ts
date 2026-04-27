@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
 
 export const boards = sqliteTable('boards', {
   uid: text('uid').primaryKey(),
@@ -62,3 +62,23 @@ export const consumedCallbackTokens = sqliteTable('consumed_callback_tokens', {
   token: text('token').primaryKey(),
   consumed_at: text('consumed_at').notNull(),
 });
+
+export const eventLog = sqliteTable('event_log', {
+  event_id: text('event_id').primaryKey(),
+  card_uid: text('card_uid').notNull(),
+  board_uid: text('board_uid'),
+  timestamp: text('timestamp').notNull(),
+  actor: text('actor').notNull(),
+  action: text('action', { enum: ['CARD_CREATED', 'CARD_UPDATED', 'CARD_MOVED', 'MOVED', 'ACTION_TRIGGERED', 'PROCESSING_STARTED', 'PROCESSING_COMPLETED', 'PROCESSING_ERROR', 'ROLLUP_CHANGED', 'ADMIN_OVERRIDE', 'BOARD_RELOAD'] }).notNull(),
+  category: text('category', { enum: ['routing', 'lifecycle', 'user_action', 'system'] }).notNull(),
+  lifecycle_event: text('lifecycle_event', { enum: ['PROCESSING_STARTED', 'PROCESSING_COMPLETED', 'PROCESSING_ERROR'] }),
+  from_column: text('from_column'),
+  to_column: text('to_column'),
+  idempotency_key: text('idempotency_key'),
+  payload_delta: text('payload_delta', { mode: 'json' }),
+  metadata: text('metadata', { mode: 'json' }),
+}, (table) => ({
+  cardTimestampIdx: index('event_log_card_timestamp_idx').on(table.card_uid, table.timestamp),
+  boardTimestampIdx: index('event_log_board_timestamp_idx').on(table.board_uid, table.timestamp),
+  categoryTimestampIdx: index('event_log_category_timestamp_idx').on(table.category, table.timestamp),
+}));

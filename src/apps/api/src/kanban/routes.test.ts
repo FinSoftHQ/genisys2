@@ -14,11 +14,17 @@ import {
   CallbackTokenRejectedResponseSchema,
   TriggerActionResponseSchema,
   ListBoardsResponseSchema,
+  AuditLogResponseSchema,
+  AuditLogQuerySchema,
+  BoardStreamSseEventSchema,
 } from '@repo/shared';
 import { kanbanRoutes, callbackRoutes } from './routes.js';
 import * as repository from './repository.js';
 import { dispatchSyncHook } from './hook-dispatcher.js';
 import { consumeCallback, startProcessing } from './processing-orchestrator.js';
+import { subscribeToBoardEvents, broadcastEvent } from './board-stream.js';
+import { appendEventLog, queryAuditLog } from './event-log.js';
+import { resolveActor } from './request-actor.js';
 
 vi.mock('./repository.js', () => ({
   getBoardById: vi.fn(),
@@ -39,6 +45,20 @@ vi.mock('./hook-dispatcher.js', () => ({
 vi.mock('./processing-orchestrator.js', () => ({
   consumeCallback: vi.fn(),
   startProcessing: vi.fn(),
+}));
+
+vi.mock('./board-stream.js', () => ({
+  subscribeToBoardEvents: vi.fn(() => () => {}),
+  broadcastEvent: vi.fn(),
+}));
+
+vi.mock('./event-log.js', () => ({
+  appendEventLog: vi.fn((db, event) => event),
+  queryAuditLog: vi.fn(() => ({ events: [], next_cursor: null })),
+}));
+
+vi.mock('./request-actor.js', () => ({
+  resolveActor: vi.fn(() => 'user:anonymous'),
 }));
 
 const mockBoard = {
@@ -1032,6 +1052,239 @@ describe('kanban routes', () => {
           status: 'success',
           payload_updates: { title: 'Updated via callback' },
         }),
+      );
+    });
+  });
+
+  describe('GET /api/boards/:boardId/stream — Slice 4 SSE', () => {
+    it('returns 400 for malformed boardId', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/boards/not-a-uuid/stream',
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(ApiErrorSchema.safeParse(response.json()).success).toBe(true);
+    });
+
+    it('returns 200 with Content-Type text/event-stream', async () => {
+      vi.mocked(subscribeToBoardEvents).mockImplementation((_boardUid, handler) => {
+        handler('id: test\nevent: test\ndata: {}\n\n');
+        return () => {};
+      });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/stream`,
+        simulate: { close: true },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toContain('text/event-stream');
+    });
+
+    it('passes Last-Event-ID header to subscribeToBoardEvents', async () => {
+      await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/stream`,
+        headers: { 'last-event-id': '550e8400-e29b-41d4-a716-446655440001' },
+        simulate: { close: true },
+      });
+
+      expect(subscribeToBoardEvents).toHaveBeenCalledWith(
+        mockBoard.uid,
+        expect.any(Function),
+        '550e8400-e29b-41d4-a716-446655440001',
+      );
+    });
+
+    it('emits SSE events with id equal to event_log.event_id', async () => {
+      const eventId = '550e8400-e29b-41d4-a716-446655440002';
+      vi.mocked(subscribeToBoardEvents).mockImplementation((_boardUid, handler) => {
+        handler(`id: ${eventId}\nevent: CARD_CREATED\ndata: {\\"event_id\\":\\"${eventId}\\"}\n\n`);
+        return () => {};
+      });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/stream`,
+        simulate: { close: true },
+      });
+
+      expect(response.payload).toContain(`id: ${eventId}`);
+    });
+  });
+
+  describe('GET /api/boards/:boardId/audit-log — Slice 4 audit', () => {
+    it('returns 200 with valid AuditLogResponseSchema', async () => {
+      vi.mocked(queryAuditLog).mockResolvedValue({
+        events: [
+          {
+            event_id: '550e8400-e29b-41d4-a716-446655440003',
+            card_uid: mockCard.uid,
+            board_uid: mockBoard.uid,
+            timestamp: '2026-04-27T00:00:00.000Z',
+            actor: 'alice',
+            action: 'CARD_CREATED',
+            category: 'user_action',
+            lifecycle_event: null,
+            from_column: null,
+            to_column: null,
+          },
+        ],
+        next_cursor: null,
+      });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/audit-log`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(AuditLogResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.events).toHaveLength(1);
+      expect(body.data.events[0].board_uid).toBe(mockBoard.uid);
+    });
+
+    it('validates query parameters against AuditLogQuerySchema', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/audit-log?limit=999`,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(ApiErrorSchema.safeParse(response.json()).success).toBe(true);
+    });
+
+    it('passes validated query to queryAuditLog', async () => {
+      vi.mocked(queryAuditLog).mockResolvedValue({ events: [], next_cursor: null });
+
+      await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/audit-log?limit=10&cursor=next&from=2026-04-01T00:00:00.000Z&to=2026-04-30T00:00:00.000Z&categories=user_action&actions=CARD_CREATED&card_uid=${mockCard.uid}`,
+      });
+
+      expect(queryAuditLog).toHaveBeenCalledWith(
+        expect.anything(),
+        mockBoard.uid,
+        expect.objectContaining({
+          limit: 10,
+          cursor: 'next',
+          from: '2026-04-01T00:00:00.000Z',
+          to: '2026-04-30T00:00:00.000Z',
+          categories: ['user_action'],
+          actions: ['CARD_CREATED'],
+          card_uid: mockCard.uid,
+        }),
+      );
+    });
+
+    it('returns empty events array when no audit entries exist', async () => {
+      vi.mocked(queryAuditLog).mockResolvedValue({ events: [], next_cursor: null });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/audit-log`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(AuditLogResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.data.events).toEqual([]);
+      expect(body.data.next_cursor).toBeNull();
+    });
+
+    it('returns 400 when from is after to', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/audit-log?from=2026-04-30T00:00:00.000Z&to=2026-04-01T00:00:00.000Z`,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(ApiErrorSchema.safeParse(response.json()).success).toBe(true);
+    });
+  });
+
+  describe('actor resolution — Slice 4', () => {
+    it('uses x-actor header value for create card', async () => {
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.createCard).mockResolvedValue(mockCard);
+      vi.mocked(resolveActor).mockReturnValue('alice');
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards`,
+        payload: { title: 'New Card', current_status: 'backlog' },
+        headers: { 'x-actor': 'alice' },
+      });
+
+      expect(resolveActor).toHaveBeenCalled();
+      expect(repository.createCard).toHaveBeenCalledWith(
+        expect.anything(),
+        mockBoard.uid,
+        expect.anything(),
+        'alice',
+      );
+    });
+
+    it('falls back to user:anonymous when x-actor is absent', async () => {
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.createCard).mockResolvedValue(mockCard);
+      vi.mocked(resolveActor).mockReturnValue('user:anonymous');
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards`,
+        payload: { title: 'New Card', current_status: 'backlog' },
+      });
+
+      expect(repository.createCard).toHaveBeenCalledWith(
+        expect.anything(),
+        mockBoard.uid,
+        expect.anything(),
+        'user:anonymous',
+      );
+    });
+
+    it('uses resolved actor for update card', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.updateCard).mockResolvedValue({ ...mockCard, version: 2 });
+      vi.mocked(resolveActor).mockReturnValue('bob');
+
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { version: 1, title: 'Updated' },
+        headers: { 'x-actor': 'bob' },
+      });
+
+      expect(repository.updateCard).toHaveBeenCalledWith(
+        expect.anything(),
+        mockBoard.uid,
+        mockCard.uid,
+        expect.anything(),
+        'bob',
+      );
+    });
+
+    it('uses resolved actor for move card', async () => {
+      vi.mocked(repository.moveCard).mockResolvedValue({ ...mockCard, current_status: 'in-progress' });
+      vi.mocked(resolveActor).mockReturnValue('charlie');
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'in-progress' },
+        headers: { 'x-actor': 'charlie' },
+      });
+
+      expect(repository.moveCard).toHaveBeenCalledWith(
+        expect.anything(),
+        mockBoard.uid,
+        mockCard.uid,
+        'in-progress',
+        'charlie',
       );
     });
   });

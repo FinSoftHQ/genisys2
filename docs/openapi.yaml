@@ -2,11 +2,12 @@ openapi: 3.1.0
 info:
   title: Genisys2 Kanban API
   description: |
-    Slice 3 "Smart Columns" Kanban API.
+    Slice 4 "Live Board" Kanban API.
 
-    Provides board snapshot retrieval, card creation, card updates, card moves
-    between columns, and processor callback handling. All successful responses are
-    wrapped in a `{ data: { ... } }` envelope.
+    Provides board snapshot retrieval, card CRUD, card moves between columns,
+    processor callback handling, real-time SSE board streams, and an immutable
+    audit log query endpoint. All successful JSON responses are wrapped in a
+    `{ data: { ... } }` envelope.
 
     ## Deterministic Demo Board
     The API seeds a deterministic demo board on startup via `seedBoard`. The demo board
@@ -17,7 +18,20 @@ info:
     `PROCESSING`, `is_editable` becomes `false`, and the system dispatches an async
     `on-enter` hook to the column's processor. The processor must POST back to the
     provided `callback_url` to unlock the card or move it to another column.
-  version: "1.2.0"
+
+    ## Real-Time SSE Stream
+    `GET /boards/{boardId}/stream` opens a Server-Sent Events connection. It emits
+    `CARD_CREATED`, `CARD_UPDATED`, `CARD_MOVED`, and `BOARD_RELOAD` events. Clients
+    may supply a `Last-Event-ID` header to resume from a disconnect. The server buffers
+    the last 5 minutes of events per board. If the cursor is older than the buffer,
+    a `BOARD_RELOAD` event is emitted so the client can fetch a fresh snapshot.
+
+    ## Audit Log
+    `GET /boards/{boardId}/audit-log` queries the immutable `event_log` table. Every
+    card mutation (create, update, move, processing lifecycle) appends a row with
+    `actor`, `action`, `category`, `lifecycle_event`, `from_column`, `to_column`,
+    `payload_delta`, and `metadata`.
+  version: "1.3.0"
   contact:
     name: Genisys2 Team
 servers:
@@ -31,9 +45,29 @@ tags:
     description: Card CRUD and movement operations
   - name: Callbacks
     description: Processor callback receiver for async hook completion
+  - name: Events
+    description: Real-time SSE board event stream
+  - name: Audit
+    description: Immutable audit log queries
 
 paths:
   /boards:
+    get:
+      operationId: listBoards
+      summary: List all boards
+      description: Returns every board in the system with no pagination.
+      tags:
+        - Boards
+      responses:
+        "200":
+          description: List of boards
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListBoardsResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
     post:
       operationId: createBoard
       summary: Create a new board
@@ -70,6 +104,153 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SnapshotResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /boards/{boardId}/stream:
+    get:
+      operationId: getBoardStream
+      summary: Subscribe to board SSE events
+      description: |
+        Opens a Server-Sent Events connection for real-time card updates on the
+        specified board.
+
+        **Event types:**
+        - `CARD_CREATED` — a new card was created.
+        - `CARD_UPDATED` — a card's title, description, or processing state changed.
+        - `CARD_MOVED` — a card moved to a different column.
+        - `BOARD_RELOAD` — sent when `Last-Event-ID` cannot be resumed (buffer miss,
+          cursor expired, or server reset). The client should fetch a fresh snapshot.
+
+        **Replay / resume:**
+        Pass `Last-Event-ID: <event-id>` on connect. The server replays all events
+        after that ID that are still within the 5-minute buffer window. If the ID
+        is missing or stale, a single `BOARD_RELOAD` event is emitted.
+
+        **Connection lifecycle:**
+        The stream stays open for up to 5 minutes (or until the client disconnects).
+      tags:
+        - Events
+      parameters:
+        - $ref: "#/components/parameters/BoardIdParam"
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: |
+            Event ID from the last received SSE message. Used to replay missed events
+            on reconnect.
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: SSE stream established
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /boards/{boardId}/audit-log:
+    get:
+      operationId: getAuditLog
+      summary: Query board audit log
+      description: |
+        Queries the immutable `event_log` table for a given board. Results are ordered
+        chronologically by `timestamp` then `event_id`. Supports cursor-based pagination.
+      tags:
+        - Audit
+      parameters:
+        - $ref: "#/components/parameters/BoardIdParam"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          description: Maximum number of events to return.
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          description: |
+            Pagination cursor in the format `{timestamp}|{event_id}`. Obtained from
+            `next_cursor` in the previous response.
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: ISO 8601 lower bound (inclusive) for `timestamp`.
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: ISO 8601 upper bound (inclusive) for `timestamp`.
+        - name: categories
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - routing
+                - lifecycle
+                - user_action
+                - system
+          style: form
+          explode: true
+          description: Filter by event category.
+        - name: actions
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - CARD_CREATED
+                - CARD_UPDATED
+                - CARD_MOVED
+                - MOVED
+                - ACTION_TRIGGERED
+                - PROCESSING_STARTED
+                - PROCESSING_COMPLETED
+                - PROCESSING_ERROR
+                - ROLLUP_CHANGED
+                - ADMIN_OVERRIDE
+                - BOARD_RELOAD
+          style: form
+          explode: true
+          description: Filter by action type.
+        - name: card_uid
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Filter events to a single card.
+      responses:
+        "200":
+          description: Audit log events retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -218,6 +399,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+
+  /boards/{boardId}/cards/{cardId}/action:
+    post:
+      operationId: triggerAction
+      summary: Trigger a card action
+      description: |
+        Placeholder action endpoint. Validates the card exists and that the provided
+        `version` matches the current server version. Returns the card unchanged with
+        status `completed`.
+      tags:
+        - Cards
+      parameters:
+        - $ref: "#/components/parameters/BoardIdParam"
+        - $ref: "#/components/parameters/CardIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriggerActionRequest"
+      responses:
+        "200":
+          description: Action accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /callbacks/{token}:
     post:
@@ -654,6 +868,21 @@ components:
         data:
           $ref: "#/components/schemas/SnapshotData"
 
+    ListBoardsResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - boards
+          properties:
+            boards:
+              type: array
+              items:
+                $ref: "#/components/schemas/BoardEntity"
+
     CreateBoardResponse:
       type: object
       required:
@@ -777,6 +1006,41 @@ components:
           properties:
             card:
               $ref: "#/components/schemas/CardEntity"
+
+    TriggerActionRequest:
+      type: object
+      required:
+        - action
+        - version
+      properties:
+        action:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Action identifier to trigger
+        version:
+          type: integer
+          minimum: 1
+          description: Current optimistic-lock version
+
+    TriggerActionResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - card
+            - status
+          properties:
+            card:
+              $ref: "#/components/schemas/CardEntity"
+            status:
+              type: string
+              enum:
+                - completed
+                - accepted
 
     ProcessorCallbackRequest:
       type: object
@@ -911,6 +1175,149 @@ components:
                   enum:
                     - can-exit
 
+    EventLogRow:
+      type: object
+      required:
+        - event_id
+        - card_uid
+        - board_uid
+        - timestamp
+        - actor
+        - action
+        - category
+        - lifecycle_event
+        - from_column
+        - to_column
+      properties:
+        event_id:
+          type: string
+          minLength: 1
+          description: Unique event identifier (UUID)
+        card_uid:
+          type: string
+          format: uuid
+          description: Associated card UUID
+        board_uid:
+          type: string
+          format: uuid
+          nullable: true
+          description: Associated board UUID
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 event timestamp
+        actor:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Entity that performed the action (e.g. `user:anonymous`, `system:processor`)
+        action:
+          type: string
+          enum:
+            - CARD_CREATED
+            - CARD_UPDATED
+            - CARD_MOVED
+            - MOVED
+            - ACTION_TRIGGERED
+            - PROCESSING_STARTED
+            - PROCESSING_COMPLETED
+            - PROCESSING_ERROR
+            - ROLLUP_CHANGED
+            - ADMIN_OVERRIDE
+            - BOARD_RELOAD
+          description: Action type
+        category:
+          type: string
+          enum:
+            - routing
+            - lifecycle
+            - user_action
+            - system
+          description: Event category
+        lifecycle_event:
+          type: string
+          enum:
+            - PROCESSING_STARTED
+            - PROCESSING_COMPLETED
+            - PROCESSING_ERROR
+          nullable: true
+          description: Lifecycle detail when category is `lifecycle`
+        from_column:
+          type: string
+          minLength: 1
+          maxLength: 64
+          nullable: true
+          description: Source column uid for move events
+        to_column:
+          type: string
+          minLength: 1
+          maxLength: 64
+          nullable: true
+          description: Destination column uid for move events
+        idempotency_key:
+          type: string
+          format: uuid
+          nullable: true
+          description: Idempotency key for idempotent operations
+        payload_delta:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: JSON patch-like delta of what changed
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Arbitrary contextual metadata
+
+    AuditLogResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - events
+            - next_cursor
+          properties:
+            events:
+              type: array
+              items:
+                $ref: "#/components/schemas/EventLogRow"
+              description: Chronologically ordered audit events
+            next_cursor:
+              type: string
+              minLength: 1
+              maxLength: 200
+              nullable: true
+              description: Cursor for the next page, or null when exhausted
+
+    BoardReloadEventData:
+      type: object
+      required:
+        - event_id
+        - board_uid
+        - reason
+        - timestamp
+      properties:
+        event_id:
+          type: string
+          minLength: 1
+        board_uid:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          enum:
+            - CURSOR_EXPIRED
+            - BUFFER_MISS
+            - SERVER_RESET
+          description: Why a full reload was requested
+        timestamp:
+          type: string
+          format: date-time
+
     ApiError:
       type: object
       required:
@@ -980,6 +1387,13 @@ components:
             error:
               code: BOARD_NOT_FOUND
               message: Board not found
+
+    Conflict:
+      description: Optimistic locking conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CardConflictResponse"
 
     InternalError:
       description: Unexpected internal server error

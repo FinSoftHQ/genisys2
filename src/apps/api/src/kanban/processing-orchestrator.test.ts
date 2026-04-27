@@ -6,8 +6,10 @@ import {
   ProcessorCallbackRequestSchema,
   ProcessorCallbackResponseSchema,
   CallbackTokenRejectedResponseSchema,
+  EventLogRowSchema,
   type BoardEntity,
   type CardEntity,
+  type EventLogRow,
 } from '@repo/shared';
 import {
   openDb,
@@ -21,9 +23,24 @@ import {
 } from './repository.js';
 import { startProcessing, consumeCallback } from './processing-orchestrator.js';
 import { dispatchAsyncHook } from './hook-dispatcher.js';
+import { appendEventLog } from './event-log.js';
 
 vi.mock('./hook-dispatcher.js', () => ({
   dispatchAsyncHook: vi.fn(),
+}));
+
+vi.mock('./event-log.js', () => ({
+  appendEventLog: vi.fn((_db, event) => ({
+    ...event,
+    event_id: '550e8400-e29b-41d4-a716-446655440000',
+    timestamp: new Date().toISOString(),
+    lifecycle_event: event.lifecycle_event ?? null,
+    from_column: event.from_column ?? null,
+    to_column: event.to_column ?? null,
+    idempotency_key: event.idempotency_key ?? null,
+    payload_delta: event.payload_delta ?? null,
+    metadata: event.metadata ?? null,
+  })),
 }));
 
 describe('processing orchestrator', () => {
@@ -370,6 +387,143 @@ describe('processing orchestrator', () => {
 
     it('rejects PROCESSING -> PROCESSING', () => {
       expect(ProcessingStateTransitionSchema.safeParse({ from: 'PROCESSING', to: 'PROCESSING' }).success).toBe(false);
+    });
+  });
+
+  describe('lifecycle event logging', () => {
+    it('appends PROCESSING_STARTED on startProcessing', async () => {
+      const board = seedBoard(db);
+      const processingColumn = {
+        uid: 'in-review',
+        title: 'In Review',
+        type: 'Processing' as const,
+        processor_id: 'manager-approval',
+        exit_logic: { approved: 'done' },
+        order: 99,
+      };
+
+      const card = createCard(db, board.uid, {
+        title: 'Test Card',
+        current_status: 'backlog',
+      });
+
+      vi.mocked(appendEventLog).mockClear();
+      await startProcessing(db, board, card, processingColumn);
+
+      expect(appendEventLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          card_uid: card.uid,
+          board_uid: board.uid,
+          action: 'PROCESSING_STARTED',
+          category: 'lifecycle',
+          lifecycle_event: 'PROCESSING_STARTED',
+          actor: expect.any(String),
+        }),
+      );
+    });
+
+    it('appends PROCESSING_COMPLETED on successful consumeCallback', async () => {
+      const board = seedBoard(db);
+      const card = createCard(db, board.uid, {
+        title: 'Test Card',
+        current_status: 'in-review',
+      });
+
+      updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'PROCESSING', { is_editable: false });
+
+      const token = '550e8400-e29b-41d4-a716-446655440016';
+      createCallbackToken(db, {
+        token,
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440017',
+        context: {},
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      });
+
+      vi.mocked(appendEventLog).mockClear();
+      await consumeCallback(db, token, 'Bearer token', { status: 'success' });
+
+      expect(appendEventLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          card_uid: card.uid,
+          board_uid: board.uid,
+          action: 'PROCESSING_COMPLETED',
+          category: 'lifecycle',
+          lifecycle_event: 'PROCESSING_COMPLETED',
+          actor: expect.any(String),
+        }),
+      );
+    });
+
+    it('appends PROCESSING_ERROR on error consumeCallback', async () => {
+      const board = seedBoard(db);
+      const card = createCard(db, board.uid, {
+        title: 'Test Card',
+        current_status: 'in-review',
+      });
+
+      updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'PROCESSING', { is_editable: false });
+
+      const token = '550e8400-e29b-41d4-a716-446655440018';
+      createCallbackToken(db, {
+        token,
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440019',
+        context: {},
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      });
+
+      vi.mocked(appendEventLog).mockClear();
+      await consumeCallback(db, token, 'Bearer token', {
+        status: 'error',
+        error_message: 'Processor failed',
+      });
+
+      expect(appendEventLog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          card_uid: card.uid,
+          board_uid: board.uid,
+          action: 'PROCESSING_ERROR',
+          category: 'lifecycle',
+          lifecycle_event: 'PROCESSING_ERROR',
+          actor: expect.any(String),
+        }),
+      );
+    });
+
+    it('returns events that validate against EventLogRowSchema', async () => {
+      const board = seedBoard(db);
+      const card = createCard(db, board.uid, {
+        title: 'Test Card',
+        current_status: 'backlog',
+      });
+
+      const processingColumn = {
+        uid: 'in-review',
+        title: 'In Review',
+        type: 'Processing' as const,
+        processor_id: 'manager-approval',
+        exit_logic: { approved: 'done' },
+        order: 99,
+      };
+
+      vi.mocked(appendEventLog).mockImplementation((_db, event) => ({
+        ...event,
+        event_id: '550e8400-e29b-41d4-a716-446655440000',
+        timestamp: new Date().toISOString(),
+      }));
+
+      await startProcessing(db, board, card, processingColumn);
+
+      const callArg = vi.mocked(appendEventLog).mock.calls[0][1] as EventLogRow;
+      expect(EventLogRowSchema.safeParse(callArg).success).toBe(true);
     });
   });
 });

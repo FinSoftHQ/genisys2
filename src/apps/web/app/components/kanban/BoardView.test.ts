@@ -37,6 +37,16 @@ const UBadgeStub = defineComponent({
   },
 });
 
+const UButtonStub = defineComponent({
+  name: 'UButton',
+  props: ['icon', 'variant', 'color', 'size', 'loading', 'disabled'],
+  emits: ['click'],
+  setup(props, { slots, emit }) {
+    return () =>
+      h('button', { 'data-testid': 'u-button', disabled: props.disabled, onClick: () => emit('click') }, slots.default?.());
+  },
+});
+
 const BoardColumnStub = defineComponent({
   name: 'BoardColumn',
   props: ['column', 'cards', 'boardUid'],
@@ -82,12 +92,51 @@ const EditCardModalStub = defineComponent({
   },
 });
 
+const AuditLogPanelStub = defineComponent({
+  name: 'AuditLogPanel',
+  props: ['open', 'boardId'],
+  emits: ['update:open'],
+  setup() {
+    return () => h('div', { 'data-testid': 'audit-log-panel' });
+  },
+});
+
 // ---- Mock globals ----
 const fetchMock = vi.fn();
 const toastAddMock = vi.fn();
 
 vi.stubGlobal('$fetch', fetchMock);
 vi.stubGlobal('useToast', () => ({ add: toastAddMock }));
+
+// ---- Native fetch mock for SSE stream ----
+let streamControllers: ReadableStreamDefaultController<Uint8Array>[] = [];
+
+function createMockStreamResponse() {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamControllers.push(controller);
+    },
+  });
+  return {
+    ok: true,
+    status: 200,
+    body: stream,
+    headers: new Headers(),
+  } as Response;
+}
+
+function encodeSseChunk(event: string, data: string, id?: string): Uint8Array {
+  const lines: string[] = [];
+  if (id) lines.push(`id: ${id}`);
+  lines.push(`event: ${event}`);
+  lines.push(`data: ${data}`);
+  lines.push('');
+  lines.push('');
+  return new TextEncoder().encode(lines.join('\n'));
+}
+
+const nativeFetchMock = vi.fn();
+vi.stubGlobal('fetch', nativeFetchMock);
 
 // ---- Fixtures ----
 const mockBoard: BoardEntity = {
@@ -145,9 +194,11 @@ function mountView() {
         UAlert: UAlertStub,
         UPageBody: UPageBodyStub,
         UBadge: UBadgeStub,
+        UButton: UButtonStub,
         BoardColumn: BoardColumnStub,
         CreateCardModal: CreateCardModalStub,
         EditCardModal: EditCardModalStub,
+        AuditLogPanel: AuditLogPanelStub,
       },
     },
   });
@@ -160,11 +211,21 @@ describe('BoardView', () => {
     vi.clearAllMocks();
     store = useBoardStore();
     store.resetStore();
+    streamControllers = [];
+
+    nativeFetchMock.mockImplementation((url: string | Request) => {
+      const urlString = typeof url === 'string' ? url : url.toString();
+      if (urlString.includes('/stream')) {
+        return Promise.resolve(createMockStreamResponse());
+      }
+      return Promise.resolve(new Response());
+    });
   });
 
   afterEach(() => {
     store.resetStore();
     vi.useRealTimers();
+    streamControllers = [];
   });
 
   describe('polling while any card is PROCESSING', () => {
@@ -236,9 +297,9 @@ describe('BoardView', () => {
       const wrapper = mountView();
       await flushPromises();
 
-      const badge = wrapper.find('[data-testid="u-badge"]');
-      expect(badge.exists()).toBe(true);
-      expect(badge.text()).toContain('Saving');
+      const badges = wrapper.findAll('[data-testid="u-badge"]');
+      const savingBadge = badges.find((b) => b.text().includes('Saving'));
+      expect(savingBadge).toBeDefined();
     });
 
     it('does not show saving badge when isSaving is false', async () => {
@@ -312,6 +373,89 @@ describe('BoardView', () => {
 
       const doneColumnCards = store.getCardsForColumn('done');
       expect(doneColumnCards.map((c) => c.uid)).toContain(mockCardProcessing.uid);
+    });
+  });
+
+  describe('realtime connection badges — Slice 4', () => {
+    it('shows Connecting badge after mount', async () => {
+      nativeFetchMock.mockImplementation(() => new Promise(() => {}));
+      store.hydrate({ board: mockBoard, cards: [mockCardIdle] });
+      const wrapper = mountView();
+      await flushPromises();
+
+      const badges = wrapper.findAll('[data-testid="u-badge"]');
+      const connecting = badges.find((b) => b.text().includes('Connecting'));
+      expect(connecting).toBeDefined();
+    });
+
+    it('shows Live badge when SSE connects', async () => {
+      store.hydrate({ board: mockBoard, cards: [mockCardIdle] });
+      const wrapper = mountView();
+      await flushPromises();
+
+      // Stream connected automatically via mocked fetch
+      const badges = wrapper.findAll('[data-testid="u-badge"]');
+      const live = badges.find((b) => b.text().includes('Live'));
+      expect(live).toBeDefined();
+    });
+
+    it('shows Offline badge when SSE disconnects', async () => {
+      vi.useFakeTimers();
+      store.hydrate({ board: mockBoard, cards: [mockCardIdle] });
+      const wrapper = mountView();
+      await flushPromises();
+
+      // Close the stream to trigger disconnect
+      streamControllers[0]?.close();
+      await flushPromises();
+
+      const badges = wrapper.findAll('[data-testid="u-badge"]');
+      const offline = badges.find((b) => b.text().includes('Offline'));
+      expect(offline).toBeDefined();
+    });
+  });
+
+  describe('BOARD_RELOAD — Slice 4', () => {
+    it('refetches snapshot on BOARD_RELOAD event', async () => {
+      fetchMock.mockResolvedValue({ data: { board: mockBoard, cards: [mockCardIdle] } });
+      store.hydrate({ board: mockBoard, cards: [mockCardIdle] });
+
+      const wrapper = mountView();
+      await flushPromises();
+      fetchMock.mockClear();
+
+      const payload = {
+        event_id: 'reload-1',
+        board_uid: mockBoard.uid,
+        reason: 'BUFFER_MISS',
+        timestamp: '2026-04-27T00:00:00.000Z',
+      };
+      const chunk = encodeSseChunk('BOARD_RELOAD', JSON.stringify(payload), 'reload-1');
+      streamControllers[0]?.enqueue(chunk);
+      await flushPromises();
+
+      expect(fetchMock).toHaveBeenCalledWith(`/api/boards/${mockBoard.uid}/snapshot`);
+      wrapper.unmount();
+    });
+  });
+
+  describe('audit log — Slice 4', () => {
+    it('opens audit log panel when button is clicked', async () => {
+      store.hydrate({ board: mockBoard, cards: [mockCardIdle] });
+      const wrapper = mountView();
+      await flushPromises();
+
+      const auditBtn = wrapper
+        .findAll('[data-testid="u-button"]')
+        .find((b) => b.text().includes('Audit Log'));
+      expect(auditBtn).toBeDefined();
+
+      await auditBtn!.trigger('click');
+      await flushPromises();
+
+      const panel = wrapper.findComponent({ name: 'AuditLogPanel' });
+      expect(panel.exists()).toBe(true);
+      expect(panel.props('open')).toBe(true);
     });
   });
 });
