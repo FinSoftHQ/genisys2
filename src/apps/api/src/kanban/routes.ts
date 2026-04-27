@@ -25,6 +25,7 @@ import {
 } from './repository.js';
 import { dispatchSyncHook } from './hook-dispatcher.js';
 import { consumeCallback, startProcessing } from './processing-orchestrator.js';
+import { DEFAULT_PROCESSOR_BASE_URL, getDefaultProcessor } from './config.js';
 
 function callRepo<TArgs extends unknown[], TReturn>(
   fn: (instance: unknown, ...args: TArgs) => TReturn,
@@ -36,8 +37,6 @@ function callRepo<TArgs extends unknown[], TReturn>(
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
 }
-
-const DEFAULT_PROCESSOR_BASE_URL = process.env.KANBAN_API_BASE_URL ?? 'http://localhost:8080/api/processor';
 
 export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
   instance.get('/', async (_request, reply) => {
@@ -171,22 +170,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
 
       const currentColumn = board.schema.columns.find((c) => c.uid === card.current_status);
       if (currentColumn) {
-        const processor = (getProcessorById ? callRepo(getProcessorById, currentColumn.processor_id) : undefined) ?? {
-          processor_id: currentColumn.processor_id,
-          name: 'Default Manual Processor',
-          base_url: DEFAULT_PROCESSOR_BASE_URL,
-          health_endpoint: '/health',
-          hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
-          sla_seconds: 300,
-          max_sla_seconds: 86400,
-          auth_type: 'none',
-          auth_config: null,
-          hmac_secret: 'dev-secret',
-          status: 'healthy',
-          last_health_check: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
+        const processor = (getProcessorById ? callRepo(getProcessorById, currentColumn.processor_id) : undefined) ?? getDefaultProcessor(currentColumn.processor_id);
 
         const dispatchRequest = SyncHookDispatchRequestSchema.parse({
           hook: 'can-exit',

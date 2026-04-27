@@ -5,6 +5,7 @@ import {
   type ProcessorRegistryEntity,
   type CanExitHookResponse,
 } from '@repo/shared';
+import { getDefaultProcessor } from './config.js';
 
 export async function dispatchSyncHook(
   processorOrContext: ProcessorRegistryEntity | unknown,
@@ -27,22 +28,7 @@ export async function dispatchSyncHook(
     ) {
       processor = processorOrContext as ProcessorRegistryEntity;
     } else {
-      processor = {
-        processor_id: dispatchRequest.processor_id,
-        name: 'Default Manual Processor',
-        base_url: 'http://localhost:4001',
-        health_endpoint: '/health',
-        hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
-        sla_seconds: 300,
-        max_sla_seconds: 86400,
-        auth_type: 'none',
-        auth_config: null,
-        hmac_secret: 'dev-secret',
-        status: 'healthy',
-        last_health_check: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as ProcessorRegistryEntity;
+      processor = getDefaultProcessor(dispatchRequest.processor_id);
     }
   }
 

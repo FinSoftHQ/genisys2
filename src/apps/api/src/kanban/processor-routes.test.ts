@@ -51,7 +51,7 @@ describe('processor routes', () => {
 
   beforeEach(async () => {
     app = fastify();
-    await app.register(processorRoutes, { prefix: '/api/processor' });
+    await app.register(processorRoutes, { prefix: '/api/kanban-processor/default' });
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
   });
 
@@ -60,11 +60,11 @@ describe('processor routes', () => {
     fetchSpy.mockRestore();
   });
 
-  describe('GET /api/processor/health', () => {
+  describe('GET /api/kanban-processor/default/health', () => {
     it('returns 200 with healthy status', async () => {
       const response = await app.inject({
         method: 'GET',
-        url: '/api/processor/health',
+        url: '/api/kanban-processor/default/health',
       });
 
       expect(response.statusCode).toBe(200);
@@ -74,11 +74,11 @@ describe('processor routes', () => {
     });
   });
 
-  describe('POST /api/processor/can-exit', () => {
+  describe('POST /api/kanban-processor/default/can-exit', () => {
     it('returns 200 with allowed: true', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/can-exit',
+        url: '/api/kanban-processor/default/can-exit',
         payload: {
           card: mockCard,
           target_column: 'in-progress',
@@ -95,7 +95,7 @@ describe('processor routes', () => {
     it('returns 400 for invalid body', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/can-exit',
+        url: '/api/kanban-processor/default/can-exit',
         payload: { card: 'not-a-card' },
       });
 
@@ -105,11 +105,11 @@ describe('processor routes', () => {
     });
   });
 
-  describe('POST /api/processor/on-update', () => {
+  describe('POST /api/kanban-processor/default/on-update', () => {
     it('returns 200 with allowed: true and no transformation', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/on-update',
+        url: '/api/kanban-processor/default/on-update',
         payload: {
           card: mockCard,
           proposed_payload: { title: 'New Title' },
@@ -127,7 +127,7 @@ describe('processor routes', () => {
     it('returns 400 for invalid body', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/on-update',
+        url: '/api/kanban-processor/default/on-update',
         payload: {},
       });
 
@@ -137,12 +137,12 @@ describe('processor routes', () => {
     });
   });
 
-  describe('POST /api/processor/on-enter', () => {
+  describe('POST /api/kanban-processor/default/on-enter', () => {
     it('returns 202 accepted and fires callback', async () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/on-enter',
+        url: '/api/kanban-processor/default/on-enter',
         payload: {
           card: mockCard,
           board: mockBoard,
@@ -177,7 +177,7 @@ describe('processor routes', () => {
     it('returns 400 for invalid body', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/on-enter',
+        url: '/api/kanban-processor/default/on-enter',
         payload: {},
       });
 
@@ -187,12 +187,12 @@ describe('processor routes', () => {
     });
   });
 
-  describe('POST /api/processor/on-action', () => {
+  describe('POST /api/kanban-processor/default/on-action', () => {
     it('returns 202 accepted and fires callback', async () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/on-action',
+        url: '/api/kanban-processor/default/on-action',
         payload: {
           card: mockCard,
           board: mockBoard,
@@ -227,7 +227,7 @@ describe('processor routes', () => {
     it('returns 400 for invalid body', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/on-action',
+        url: '/api/kanban-processor/default/on-action',
         payload: {},
       });
 
@@ -237,11 +237,11 @@ describe('processor routes', () => {
     });
   });
 
-  describe('POST /api/processor/on-exit', () => {
+  describe('POST /api/kanban-processor/default/on-exit', () => {
     it('returns 200 acknowledged', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/on-exit',
+        url: '/api/kanban-processor/default/on-exit',
         payload: {
           card: mockCard,
           next_column: mockBoard.schema.columns[0],
@@ -257,7 +257,7 @@ describe('processor routes', () => {
     it('returns 400 for invalid body', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/processor/on-exit',
+        url: '/api/kanban-processor/default/on-exit',
         payload: {},
       });
 

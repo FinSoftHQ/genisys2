@@ -77,7 +77,7 @@ await app.register(squadRoutes, { prefix: '/api/v1/squads' });
 await app.register(agentRoomRoutes, { prefix: '/api/v1/agent-rooms' });
 await app.register(proxyRoomRoutes, { prefix: '/api/v1/proxy-room' });
 await app.register(kanbanRoutes, { prefix: '/api/boards' });
-await app.register(processorRoutes, { prefix: '/api/processor' });
+await app.register(processorRoutes, { prefix: '/api/kanban-processor/default' });
 
 process.on('SIGTERM', () => {
   (async () => {

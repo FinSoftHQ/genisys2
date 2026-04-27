@@ -7,6 +7,7 @@ import { boards, boardSequences, cards, processorRegistry, callbackTokens } from
 import type { ProcessorRegistryEntity } from '@repo/shared';
 import { seedBoard as seedBoardImpl } from '../db/seed.js';
 import type { BoardEntity, CardEntity } from '@repo/shared';
+import { DEFAULT_PROCESSOR_BASE_URL } from './config.js';
 
 let defaultDb: DbInstance | null = null;
 
@@ -200,7 +201,7 @@ export function seedBoard(instance: unknown): BoardEntity {
     db.insert(processorRegistry).values({
       processor_id: 'manager-approval',
       name: 'Manager Approval Gate',
-      base_url: 'http://localhost:4001',
+      base_url: DEFAULT_PROCESSOR_BASE_URL,
       health_endpoint: '/health',
       hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
       sla_seconds: 300,

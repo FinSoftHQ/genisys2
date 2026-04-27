@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import type { DbInstance } from './client.js';
 import { boards, boardSequences, processorRegistry } from './schema.js';
 import type { BoardEntity } from '@repo/shared';
+import { DEFAULT_PROCESSOR_BASE_URL } from '../kanban/config.js';
 
 let seedCounter = 0;
 
@@ -117,7 +118,7 @@ export function seedDemoBoardWithProcessingColumn(instance: DbInstance): BoardEn
     db.insert(processorRegistry).values({
       processor_id: 'manager-approval',
       name: 'Manager Approval Gate',
-      base_url: 'http://localhost:4001',
+      base_url: DEFAULT_PROCESSOR_BASE_URL,
       health_endpoint: '/health',
       hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
       sla_seconds: 300,
@@ -144,7 +145,7 @@ export function bootstrapDefaultProcessor(instance: DbInstance): void {
   db.insert(processorRegistry).values({
     processor_id: 'default-manual',
     name: 'Default Manual Processor',
-    base_url: 'http://localhost:4001',
+    base_url: DEFAULT_PROCESSOR_BASE_URL,
     health_endpoint: '/health',
     hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
     sla_seconds: 300,
