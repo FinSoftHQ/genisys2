@@ -350,10 +350,11 @@ export const UpdateCardRequestSchema = z
     version: CardVersionSchema,
     title: CardTitleSchema.optional(),
     description: CardDescriptionSchema.optional(),
+    payload: CardPayloadSchema.optional(),
   })
   .strict()
-  .refine((value) => value.title !== undefined || value.description !== undefined, {
-    message: 'at least one of title or description must be provided',
+  .refine((value) => value.title !== undefined || value.description !== undefined || value.payload !== undefined, {
+    message: 'at least one of title, description, or payload must be provided',
     path: ['title'],
   });
 

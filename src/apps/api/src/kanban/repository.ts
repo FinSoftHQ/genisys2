@@ -323,7 +323,7 @@ export function updateCard(
   instance: unknown,
   boardUid: string,
   cardUid: string,
-  input: { version: number; title?: string; description?: string | null },
+  input: { version: number; title?: string; description?: string | null; payload?: Record<string, unknown> },
   actor: string = 'user:anonymous',
 ): CardEntity | null {
   const { db } = resolveDb(instance);
@@ -340,6 +340,9 @@ export function updateCard(
     }
     if (input.description !== undefined) {
       updateData.description = input.description;
+    }
+    if (input.payload !== undefined) {
+      updateData.payload = input.payload;
     }
 
     const conditions = [
@@ -363,6 +366,7 @@ export function updateCard(
     const payloadDelta: Record<string, unknown> = {};
     if (input.title !== undefined) payloadDelta.title = input.title;
     if (input.description !== undefined) payloadDelta.description = input.description;
+    if (input.payload !== undefined) payloadDelta.payload = input.payload;
 
     const logEvent = appendEventLog(instance, {
       event_id: randomUUID(),
@@ -383,6 +387,7 @@ export function updateCard(
       const changedFields: Array<'title' | 'description' | 'payload' | 'processing_state' | 'is_editable' | 'current_status' | 'version' | 'updated_at'> = ['version', 'updated_at'];
       if (input.title !== undefined) changedFields.push('title');
       if (input.description !== undefined) changedFields.push('description');
+      if (input.payload !== undefined) changedFields.push('payload');
       const updatedEvent = BoardStreamSseEventSchema.parse({
         id: logEvent.event_id,
         event: 'CARD_UPDATED',

@@ -20,7 +20,7 @@ import {
 } from '@repo/shared';
 import { kanbanRoutes, callbackRoutes } from './routes.js';
 import * as repository from './repository.js';
-import { dispatchSyncHook } from './hook-dispatcher.js';
+import { dispatchSyncHook, dispatchOnUpdateHook, dispatchAsyncHook, dispatchFireAndForgetHook } from './hook-dispatcher.js';
 import { consumeCallback, startProcessing } from './processing-orchestrator.js';
 import { subscribeToBoardEvents, broadcastEvent } from './board-stream.js';
 import { appendEventLog, queryAuditLog } from './event-log.js';
@@ -36,10 +36,14 @@ vi.mock('./repository.js', () => ({
   createBoard: vi.fn(),
   getProcessorById: vi.fn(),
   listBoards: vi.fn(),
+  createCallbackToken: vi.fn(),
 }));
 
 vi.mock('./hook-dispatcher.js', () => ({
   dispatchSyncHook: vi.fn(),
+  dispatchOnUpdateHook: vi.fn(),
+  dispatchAsyncHook: vi.fn(),
+  dispatchFireAndForgetHook: vi.fn(),
 }));
 
 vi.mock('./processing-orchestrator.js', () => ({
@@ -430,10 +434,89 @@ describe('kanban routes', () => {
       const body = response.json();
       expect(ApiErrorSchema.safeParse(body).success).toBe(true);
     });
+
+    it('dispatches on-update hook when payload is provided', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(dispatchOnUpdateHook).mockResolvedValue({ allowed: true });
+      const updatedCard = { ...mockCard, payload: { reviewed: true }, version: 2 };
+      vi.mocked(repository.updateCard).mockResolvedValue(updatedCard);
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { version: 1, payload: { reviewed: true } },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(dispatchOnUpdateHook).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          card: expect.objectContaining({ uid: mockCard.uid }),
+          proposed_payload: { reviewed: true },
+        }),
+      );
+    });
+
+    it('applies transformed_payload from on-update hook', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(dispatchOnUpdateHook).mockResolvedValue({ allowed: true, transformed_payload: { reviewed: true, approved: true } });
+      const updatedCard = { ...mockCard, payload: { reviewed: true, approved: true }, version: 2 };
+      vi.mocked(repository.updateCard).mockResolvedValue(updatedCard);
+
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { version: 1, payload: { reviewed: true } },
+      });
+
+      expect(repository.updateCard).toHaveBeenCalledWith(
+        expect.anything(),
+        mockBoard.uid,
+        mockCard.uid,
+        expect.objectContaining({ payload: { reviewed: true, approved: true } }),
+      );
+    });
+
+    it('returns 403 when on-update hook rejects', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(dispatchOnUpdateHook).mockResolvedValue({ allowed: false, message: 'Invalid payload' });
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { version: 1, payload: { reviewed: true } },
+      });
+
+      expect(response.statusCode).toBe(403);
+      const body = response.json();
+      expect(body.error.code).toBe('UPDATE_REJECTED');
+    });
+
+    it('returns 503 when on-update processor is unavailable', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(dispatchOnUpdateHook).mockRejectedValue(new Error('Timeout'));
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}`,
+        payload: { version: 1, payload: { reviewed: true } },
+      });
+
+      expect(response.statusCode).toBe(503);
+      const body = response.json();
+      expect(body.error.code).toBe('PROCESSOR_UNAVAILABLE');
+    });
   });
 
   describe('POST /api/boards/:boardId/cards/:cardId/move', () => {
     it('returns 200 with data envelope when card is moved', async () => {
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(dispatchSyncHook).mockResolvedValue({ allowed: true });
       const movedCard = { ...mockCard, current_status: 'in-progress' };
       vi.mocked(repository.moveCard).mockResolvedValue(movedCard);
 
@@ -465,6 +548,8 @@ describe('kanban routes', () => {
     });
 
     it('returns 404 for unknown card', async () => {
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(null);
       vi.mocked(repository.moveCard).mockResolvedValue(null);
 
       const response = await app.inject({
@@ -751,6 +836,75 @@ describe('kanban routes', () => {
       expect(body.data.card.current_status).toBe('in-progress');
       expect(body.data.card.version).toBe(2);
     });
+
+    it('dispatches on-exit fire-and-forget after successful move', async () => {
+      const movedCard = { ...mockCard, current_status: 'in-progress', version: 2 };
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(dispatchSyncHook).mockResolvedValue({ allowed: true });
+      vi.mocked(repository.moveCard).mockResolvedValue(movedCard);
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'in-progress' },
+      });
+
+      expect(dispatchFireAndForgetHook).toHaveBeenCalledWith(
+        expect.anything(),
+        'on-exit',
+        expect.objectContaining({
+          card: expect.objectContaining({ uid: mockCard.uid, current_status: 'in-progress' }),
+          next_column: expect.objectContaining({ uid: 'in-progress' }),
+        }),
+      );
+    });
+
+    it('dispatches on-exit fire-and-forget after moving to Processing column', async () => {
+      const processingBoard = {
+        ...mockBoard,
+        schema: {
+          columns: [
+            {
+              uid: 'backlog',
+              title: 'Backlog',
+              type: 'Normal',
+              processor_id: 'default-manual',
+              exit_logic: { default: 'in-review' },
+              order: 0,
+            },
+            {
+              uid: 'in-review',
+              title: 'In Review',
+              type: 'Processing',
+              processor_id: 'manager-approval',
+              exit_logic: { approved: 'done', rejected: 'backlog' },
+              order: 1,
+            },
+          ],
+        },
+      };
+      const processingCard = { ...mockCard, current_status: 'in-review', processing_state: 'PROCESSING', is_editable: false, version: 2 };
+      vi.mocked(repository.getBoardById).mockResolvedValue(processingBoard);
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(dispatchSyncHook).mockResolvedValue({ allowed: true });
+      vi.mocked(startProcessing).mockResolvedValue(processingCard);
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/move`,
+        payload: { to_column_uid: 'in-review' },
+      });
+
+      expect(dispatchFireAndForgetHook).toHaveBeenCalledWith(
+        expect.anything(),
+        'on-exit',
+        expect.objectContaining({
+          card: expect.objectContaining({ uid: mockCard.uid, current_status: 'in-review' }),
+          next_column: expect.objectContaining({ uid: 'in-review' }),
+        }),
+      );
+    });
   });
 
   describe('POST /api/boards/:boardId/cards/:cardId/move — Slice 3 Processing column', () => {
@@ -826,8 +980,10 @@ describe('kanban routes', () => {
   });
 
   describe('POST /api/boards/:boardId/cards/:cardId/action', () => {
-    it('returns 200 with card and status completed for Normal columns', async () => {
+    it('returns 200 with card and status accepted', async () => {
       vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(dispatchAsyncHook).mockResolvedValue({ status: 'accepted' });
 
       const response = await app.inject({
         method: 'POST',
@@ -839,7 +995,56 @@ describe('kanban routes', () => {
       const body = response.json();
       expect(TriggerActionResponseSchema.safeParse(body).success).toBe(true);
       expect(body.data.card.uid).toBe(mockCard.uid);
-      expect(body.data.status).toBe('completed');
+      expect(body.data.status).toBe('accepted');
+    });
+
+    it('dispatches on-action async hook with callback token', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(dispatchAsyncHook).mockResolvedValue({ status: 'accepted' });
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/action`,
+        payload: { action: 'Approve', version: 1 },
+      });
+
+      expect(dispatchAsyncHook).toHaveBeenCalledWith(
+        expect.anything(),
+        'on-action',
+        expect.objectContaining({
+          card: expect.objectContaining({ uid: mockCard.uid }),
+          board: expect.objectContaining({ uid: mockBoard.uid }),
+          column: expect.objectContaining({ uid: 'backlog' }),
+          action: 'Approve',
+          callback_url: expect.stringContaining('/api/callbacks/'),
+          idempotency_key: expect.any(String),
+        }),
+      );
+      expect(repository.createCallbackToken).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          card_uid: mockCard.uid,
+          hook: 'on-action',
+        }),
+      );
+    });
+
+    it('returns 503 when processor is unavailable for on-action', async () => {
+      vi.mocked(repository.getCardById).mockResolvedValue(mockCard);
+      vi.mocked(repository.getBoardById).mockResolvedValue(mockBoard);
+      vi.mocked(dispatchAsyncHook).mockRejectedValue(new Error('Connection refused'));
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/boards/${mockBoard.uid}/cards/${mockCard.uid}/action`,
+        payload: { action: 'Approve', version: 1 },
+      });
+
+      expect(response.statusCode).toBe(503);
+      const body = response.json();
+      expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('PROCESSOR_UNAVAILABLE');
     });
 
     it('returns 404 for unknown card', async () => {

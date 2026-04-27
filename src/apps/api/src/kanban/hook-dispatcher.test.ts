@@ -7,7 +7,7 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   type ProcessorRegistryEntity,
 } from '@repo/shared';
-import { dispatchSyncHook, dispatchAsyncHook } from './hook-dispatcher.js';
+import { dispatchSyncHook, dispatchAsyncHook, dispatchOnUpdateHook, dispatchFireAndForgetHook } from './hook-dispatcher.js';
 
 const mockProcessor: ProcessorRegistryEntity = {
   processor_id: 'default-manual',
@@ -254,6 +254,129 @@ describe('sync hook dispatcher', () => {
           idempotency_key: '550e8400-e29b-41d4-a716-446655440000',
         }),
       ).rejects.toThrow();
+    });
+  });
+
+  describe('on-update dispatch', () => {
+    it('exports dispatchOnUpdateHook function', () => {
+      expect(typeof dispatchOnUpdateHook).toBe('function');
+    });
+
+    it('POSTs to processor on-update endpoint with OnUpdateRequestSchema payload', async () => {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ allowed: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const payload = {
+        card: {
+          uid: 'a601f5b3-f91b-4ce0-b562-f4a11fcb45f9',
+          board_uid: '550e8400-e29b-41d4-a716-446655440000',
+          display_id: 'TST-1',
+          title: 'Test Card',
+          description: null,
+          version: 1,
+          processing_state: 'IDLE',
+          is_editable: true,
+          payload: {},
+          current_status: 'backlog',
+          created_at: '2026-04-26T08:30:00.000Z',
+          updated_at: '2026-04-26T08:30:00.000Z',
+        },
+        proposed_payload: { reviewed: true },
+        actor: 'user:alice@corp.com',
+      };
+
+      await dispatchOnUpdateHook(mockProcessor, payload);
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'http://localhost:4001/on-update',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+          body: expect.any(String),
+          signal: expect.any(AbortSignal),
+        }),
+      );
+    });
+
+    it('returns parsed OnUpdateResponse when allowed=true with transformed_payload', async () => {
+      vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(
+          JSON.stringify({ allowed: true, transformed_payload: { reviewed: true, approved: true } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      const result = await dispatchOnUpdateHook(mockProcessor, {
+        card: {},
+        proposed_payload: {},
+        actor: 'system',
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({ allowed: true, transformed_payload: { reviewed: true, approved: true } }),
+      );
+    });
+
+    it('fails fast when fetch exceeds 3000ms', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.spyOn(global, 'fetch').mockImplementation(
+        () => new Promise(() => {}),
+      );
+
+      const promise = dispatchOnUpdateHook(mockProcessor, {
+        card: {},
+        proposed_payload: {},
+        actor: 'system',
+      });
+
+      vi.advanceTimersByTime(3001);
+
+      await expect(promise).rejects.toThrow();
+
+      vi.useRealTimers();
+    });
+  });
+
+  describe('fire-and-forget dispatch', () => {
+    it('exports dispatchFireAndForgetHook function', () => {
+      expect(typeof dispatchFireAndForgetHook).toBe('function');
+    });
+
+    it('fires POST to processor endpoint without awaiting', () => {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ status: 'acknowledged' }), { status: 200 }),
+      );
+
+      dispatchFireAndForgetHook(mockProcessor, 'on-exit', {
+        card: { uid: 'test-card' },
+        next_column: { uid: 'next-col' },
+        actor: 'system',
+      });
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'http://localhost:4001/on-exit',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+          body: expect.any(String),
+        }),
+      );
+    });
+
+    it('does not throw when fetch fails', () => {
+      vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Network error'));
+
+      expect(() => {
+        dispatchFireAndForgetHook(mockProcessor, 'on-exit', {
+          card: { uid: 'test-card' },
+          next_column: { uid: 'next-col' },
+          actor: 'system',
+        });
+      }).not.toThrow();
     });
   });
 });

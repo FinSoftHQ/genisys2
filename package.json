@@ -26,7 +26,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
-      "@parcel/watcher"
+      "@parcel/watcher",
+      "better-sqlite3"
     ]
   },
   "devDependencies": {

@@ -22,11 +22,12 @@ import {
   updateCardProcessingState,
 } from './repository.js';
 import { startProcessing, consumeCallback } from './processing-orchestrator.js';
-import { dispatchAsyncHook } from './hook-dispatcher.js';
+import { dispatchAsyncHook, dispatchFireAndForgetHook } from './hook-dispatcher.js';
 import { appendEventLog } from './event-log.js';
 
 vi.mock('./hook-dispatcher.js', () => ({
   dispatchAsyncHook: vi.fn(),
+  dispatchFireAndForgetHook: vi.fn(),
 }));
 
 vi.mock('./event-log.js', () => ({
@@ -357,6 +358,105 @@ describe('processing orchestrator', () => {
       await expect(
         consumeCallback(db, token, 'Basic token', { status: 'success' }),
       ).rejects.toThrow();
+    });
+
+    it('fires on-exit when callback moves card to a new column', async () => {
+      const board = seedBoard(db);
+      const card = createCard(db, board.uid, {
+        title: 'Test Card',
+        current_status: 'in-review',
+      });
+
+      updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'PROCESSING', { is_editable: false });
+
+      const token = '550e8400-e29b-41d4-a716-446655440020';
+      createCallbackToken(db, {
+        token,
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440021',
+        context: {},
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      });
+
+      vi.mocked(dispatchFireAndForgetHook).mockClear();
+      await consumeCallback(db, token, 'Bearer token', {
+        status: 'success',
+        move_to_column: 'done',
+      });
+
+      expect(dispatchFireAndForgetHook).toHaveBeenCalledWith(
+        expect.anything(),
+        'on-exit',
+        expect.objectContaining({
+          card: expect.objectContaining({ uid: card.uid, current_status: 'done' }),
+          next_column: expect.objectContaining({ uid: 'done' }),
+          actor: 'system:processor',
+        }),
+      );
+    });
+
+    it('does not fire on-exit when callback does not move card', async () => {
+      const board = seedBoard(db);
+      const card = createCard(db, board.uid, {
+        title: 'Test Card',
+        current_status: 'in-review',
+      });
+
+      updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'PROCESSING', { is_editable: false });
+
+      const token = '550e8400-e29b-41d4-a716-446655440022';
+      createCallbackToken(db, {
+        token,
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440023',
+        context: {},
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      });
+
+      vi.mocked(dispatchFireAndForgetHook).mockClear();
+      await consumeCallback(db, token, 'Bearer token', { status: 'success' });
+
+      expect(dispatchFireAndForgetHook).not.toHaveBeenCalled();
+    });
+
+    it('triggers startProcessing when callback moves card to Processing column', async () => {
+      const board = seedBoard(db);
+      const card = createCard(db, board.uid, {
+        title: 'Test Card',
+        current_status: 'in-review',
+      });
+
+      updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'PROCESSING', { is_editable: false });
+
+      const token = '550e8400-e29b-41d4-a716-446655440024';
+      createCallbackToken(db, {
+        token,
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440025',
+        context: {},
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      });
+
+      vi.mocked(dispatchAsyncHook).mockClear();
+      await consumeCallback(db, token, 'Bearer token', {
+        status: 'success',
+        move_to_column: 'in-review',
+      });
+
+      expect(dispatchAsyncHook).toHaveBeenCalledWith(
+        expect.anything(),
+        'on-enter',
+        expect.objectContaining({
+          card: expect.objectContaining({ uid: card.uid, current_status: 'in-review', processing_state: 'PROCESSING' }),
+          column: expect.objectContaining({ uid: 'in-review', type: 'Processing' }),
+        }),
+      );
     });
   });
 

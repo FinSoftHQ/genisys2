@@ -14,6 +14,7 @@ import {
   AuditLogQuerySchema,
   BoardStreamRequestHeadersSchema,
 } from '@repo/shared';
+import { randomUUID } from 'node:crypto';
 import {
   getBoardById,
   getSnapshot,
@@ -24,8 +25,9 @@ import {
   createBoard,
   getProcessorById,
   listBoards,
+  createCallbackToken,
 } from './repository.js';
-import { dispatchSyncHook } from './hook-dispatcher.js';
+import { dispatchSyncHook, dispatchOnUpdateHook, dispatchAsyncHook, dispatchFireAndForgetHook } from './hook-dispatcher.js';
 import { consumeCallback, startProcessing } from './processing-orchestrator.js';
 import { getDefaultProcessor } from './config.js';
 import { resolveActor } from './request-actor.js';
@@ -124,10 +126,51 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
     }
 
+    const board = await callRepo(getBoardById, params.data.boardId);
     const actor = resolveActor(request);
+    let updateInput = body.data;
+
+    // Dispatch on-update hook when payload is being modified
+    if (body.data.payload !== undefined && board) {
+      const currentColumn = board.schema.columns.find((c) => c.uid === currentCard.current_status);
+      if (currentColumn) {
+        const processor = (getProcessorById ? callRepo(getProcessorById, currentColumn.processor_id) : undefined) ?? getDefaultProcessor(currentColumn.processor_id);
+        let hookResult;
+        try {
+          hookResult = await dispatchOnUpdateHook(processor, {
+            card: currentCard,
+            proposed_payload: body.data.payload,
+            actor,
+          });
+        } catch (_err) {
+          return reply.status(503).send({
+            error: {
+              code: 'PROCESSOR_UNAVAILABLE',
+              message: 'on-update hook failed: processor unavailable',
+              details: { hook: 'on-update' },
+            },
+          });
+        }
+
+        if (!hookResult.allowed) {
+          return reply.status(403).send({
+            error: {
+              code: 'UPDATE_REJECTED',
+              message: hookResult.message || 'Update rejected by processor',
+              details: { hook: 'on-update' },
+            },
+          });
+        }
+
+        if (hookResult.transformed_payload) {
+          updateInput = { ...body.data, payload: hookResult.transformed_payload };
+        }
+      }
+    }
+
     const updatedCard = actor !== 'user:anonymous'
-      ? await callRepo(updateCard, params.data.boardId, params.data.cardId, body.data, actor)
-      : await callRepo(updateCard, params.data.boardId, params.data.cardId, body.data);
+      ? await callRepo(updateCard, params.data.boardId, params.data.cardId, updateInput, actor)
+      : await callRepo(updateCard, params.data.boardId, params.data.cardId, updateInput);
     if (!updatedCard) {
       const freshCard = await callRepo(getCardById, params.data.boardId, params.data.cardId);
       return reply.status(409).send({
@@ -220,6 +263,9 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     const targetColumn = board.schema.columns.find((c) => c.uid === body.data.to_column_uid);
 
     try {
+      const actor = resolveActor(request);
+      const sourceColumn = board.schema.columns.find((c) => c.uid === card?.current_status);
+
       if (targetColumn?.type === 'Processing') {
         if (!card) {
           return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
@@ -237,13 +283,30 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
             order: number;
           },
         );
+        // Fire-and-forget on-exit for the source column
+        if (sourceColumn) {
+          const processor = (getProcessorById ? callRepo(getProcessorById, sourceColumn.processor_id) : undefined) ?? getDefaultProcessor(sourceColumn.processor_id);
+          dispatchFireAndForgetHook(processor, 'on-exit', {
+            card: result,
+            next_column: targetColumn,
+            actor,
+          });
+        }
         return reply.status(200).send({ data: { card: result } });
       }
 
-      const actor = resolveActor(request);
       const movedCard = await callRepo(moveCard, params.data.boardId, params.data.cardId, body.data.to_column_uid, actor);
       if (!movedCard) {
         return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
+      }
+      // Fire-and-forget on-exit for the source column
+      if (sourceColumn) {
+        const processor = (getProcessorById ? callRepo(getProcessorById, sourceColumn.processor_id) : undefined) ?? getDefaultProcessor(sourceColumn.processor_id);
+        dispatchFireAndForgetHook(processor, 'on-exit', {
+          card: movedCard,
+          next_column: targetColumn,
+          actor,
+        });
       }
       return reply.status(200).send({ data: { card: movedCard } });
     } catch (err) {
@@ -352,7 +415,54 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       });
     }
 
-    return reply.status(200).send({ data: { card, status: 'completed' } });
+    const board = await callRepo(getBoardById, params.data.boardId);
+    if (!board) {
+      return reply.status(404).send(errorResponse('BOARD_NOT_FOUND', 'Board not found'));
+    }
+
+    const currentColumn = board.schema.columns.find((c) => c.uid === card.current_status);
+    if (!currentColumn) {
+      return reply.status(404).send(errorResponse('COLUMN_NOT_FOUND', 'Column not found'));
+    }
+
+    const processor = (getProcessorById ? callRepo(getProcessorById, currentColumn.processor_id) : undefined) ?? getDefaultProcessor(currentColumn.processor_id);
+    const actor = resolveActor(request);
+    const token = randomUUID();
+    const idempotencyKey = randomUUID();
+    const callbackUrl = `http://localhost:3000/api/callbacks/${token}`;
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    createCallbackToken({}, {
+      token,
+      card_uid: card.uid,
+      processor_id: currentColumn.processor_id,
+      hook: 'on-action',
+      idempotency_key: idempotencyKey,
+      context: { action: body.data.action },
+      expires_at: expiresAt,
+    });
+
+    try {
+      await dispatchAsyncHook(processor, 'on-action', {
+        card,
+        board,
+        column: currentColumn,
+        action: body.data.action,
+        actor,
+        callback_url: callbackUrl,
+        idempotency_key: idempotencyKey,
+      });
+    } catch (_err) {
+      return reply.status(503).send({
+        error: {
+          code: 'PROCESSOR_UNAVAILABLE',
+          message: 'Processor is currently unavailable',
+          details: { processor_id: currentColumn.processor_id },
+        },
+      });
+    }
+
+    return reply.status(200).send({ data: { card, status: 'accepted' } });
   });
 }
 

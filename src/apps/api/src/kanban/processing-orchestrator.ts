@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { CardEntitySchema, BoardStreamSseEventSchema } from '@repo/shared';
+import { CardEntitySchema, BoardStreamSseEventSchema, BoardEntitySchema } from '@repo/shared';
 import type { BoardEntity, CardEntity } from '@repo/shared';
 import {
   resolveDb,
@@ -7,7 +7,8 @@ import {
   createCallbackToken,
   getProcessorById,
 } from './repository.js';
-import { dispatchAsyncHook } from './hook-dispatcher.js';
+import { dispatchAsyncHook, dispatchFireAndForgetHook } from './hook-dispatcher.js';
+import { getDefaultProcessor } from './config.js';
 import { appendEventLog } from './event-log.js';
 import { broadcastEvent } from './board-stream.js';
 import { cards, callbackTokens, boards, processorRegistry, consumedCallbackTokens } from '../db/schema.js';
@@ -114,7 +115,7 @@ export async function consumeCallback(
   const { db: database } = resolveDb(db);
   const now = new Date().toISOString();
 
-  return database.transaction(() => {
+  const transactionResult = database.transaction(() => {
     const tokenRow = database
       .select()
       .from(callbackTokens)
@@ -249,6 +250,41 @@ export async function consumeCallback(
     if (!parsed.success) {
       throw new Error('INVALID_CARD_DATA');
     }
-    return parsed.data;
+    return { result: parsed.data, tokenRow };
   });
+
+  // After transaction: handle post-callback column transitions
+  if (payload.status === 'success' && payload.move_to_column) {
+    const board = database.select().from(boards).where(eq(boards.uid, transactionResult.result.board_uid)).get();
+    const targetColumn = (board?.schema as { columns: Array<{ uid: string; title: string; type: string; processor_id: string; exit_logic: Record<string, string>; order: number }> } | undefined)?.columns.find((c) => c.uid === payload.move_to_column);
+
+    // 1. Fire on-exit for the source column
+    const processor = getProcessorById(db, transactionResult.tokenRow.processor_id) ?? getDefaultProcessor(transactionResult.tokenRow.processor_id);
+    dispatchFireAndForgetHook(processor, 'on-exit', {
+      card: transactionResult.result,
+      next_column: targetColumn,
+      actor: 'system:processor',
+    });
+
+    // 2. If moving into a Processing column, trigger on-enter
+    if (targetColumn?.type === 'Processing') {
+      const boardParsed = BoardEntitySchema.safeParse(board);
+      if (boardParsed.success) {
+        try {
+          await startProcessing(db, boardParsed.data, transactionResult.result, targetColumn as {
+            uid: string;
+            title: string;
+            type: 'Processing';
+            processor_id: string;
+            exit_logic: Record<string, string>;
+            order: number;
+          });
+        } catch (_err) {
+          // Log but don't fail — the callback was already processed
+        }
+      }
+    }
+  }
+
+  return transactionResult.result;
 }
