@@ -3,8 +3,15 @@ import type { NuxtConfig } from 'nuxt/schema';
 
 const config: NuxtConfig & { nitro?: unknown } = {
   compatibilityDate: '2025-01-01',
-  ssr: true,
+  ssr: false,
   devtools: { enabled: true },
+  modules: ['@nuxt/ui'],
+  css: ['~/assets/css/main.css'],
+  vite: {
+    optimizeDeps: {
+      include: ['zod'],
+    },
+  },
   runtimeConfig: {
     public: {
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL,

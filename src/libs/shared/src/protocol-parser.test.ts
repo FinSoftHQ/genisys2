@@ -137,24 +137,48 @@ describe('parseAgentPromptFile', () => {
 	it('extracts model and body from front matter', () => {
 		const result = parseAgentPromptFile(`---\nmodel: gpt-4o\n---\n\nYou are an architect.`);
 		expect(result.model).toBe('gpt-4o');
+		expect(result.execution).toBe('session');
 		expect(result.body).toBe('You are an architect.');
 	});
 
 	it('returns undefined model when front matter lacks model', () => {
 		const result = parseAgentPromptFile(`---\nother: value\n---\n\nYou are a developer.`);
 		expect(result.model).toBeUndefined();
+		expect(result.execution).toBe('session');
 		expect(result.body).toBe('You are a developer.');
 	});
 
 	it('returns whole content as body when no front matter', () => {
 		const result = parseAgentPromptFile('You are a tester.');
 		expect(result.model).toBeUndefined();
+		expect(result.execution).toBe('session');
 		expect(result.body).toBe('You are a tester.');
 	});
 
 	it('handles empty body after front matter', () => {
 		const result = parseAgentPromptFile(`---\nmodel: gpt-4o\n---\n`);
 		expect(result.model).toBe('gpt-4o');
+		expect(result.execution).toBe('session');
 		expect(result.body).toBe('');
+	});
+
+	it('defaults execution to session when field is absent', () => {
+		const result = parseAgentPromptFile(`---\nmodel: gpt-4o\n---\n\nBody.`);
+		expect(result.execution).toBe('session');
+	});
+
+	it('passes through execution: session', () => {
+		const result = parseAgentPromptFile(`---\nexecution: session\n---\n\nBody.`);
+		expect(result.execution).toBe('session');
+	});
+
+	it('passes through execution: single-shot', () => {
+		const result = parseAgentPromptFile(`---\nexecution: single-shot\n---\n\nBody.`);
+		expect(result.execution).toBe('single-shot');
+	});
+
+	it('passes through unknown execution value without validation', () => {
+		const result = parseAgentPromptFile(`---\nexecution: turbo\n---\n\nBody.`);
+		expect(result.execution).toBe('turbo');
 	});
 });

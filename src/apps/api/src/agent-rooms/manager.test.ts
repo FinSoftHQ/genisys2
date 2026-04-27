@@ -13,6 +13,8 @@ import {
 	destroyRoom,
 	buildPiArgs,
 	determineRecipients,
+	resolveMessageTargets,
+	shouldCheckCompletionAfterTaskMarker,
 	routeMessageToAgents,
 	type Room,
 } from './manager.js';
@@ -90,7 +92,13 @@ describe('agent-rooms manager', () => {
 		const room = getRoom(roomId);
 		expect(room).toBeDefined();
 		expect(room!.status).toBe('completed');
-		expect(getRoomEvents(room!).events.length).toBeGreaterThanOrEqual(0);
+		const events = getRoomEvents(room!).events;
+		expect(events.length).toBeGreaterThanOrEqual(1);
+		expect(events[events.length - 1]).toMatchObject({
+			type: 'room_closed',
+			from: 'system',
+			reason: 'completed',
+		});
 		destroyRoom(roomId);
 		expect(getRoom(roomId)).toBeUndefined();
 	});
@@ -103,6 +111,62 @@ describe('agent-rooms manager', () => {
 		expect(existsSync(promptDir)).toBe(false);
 		expect(getRoom(roomId)).toBeDefined();
 		destroyRoom(roomId);
+	});
+
+	it('sends callback with x-signature when room completes', async () => {
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response(null, { status: 204 }));
+
+		const markdown = `---\nteam:\n  alpha: Lead\n---\n\nComplete this task.\n`;
+		const result = await createRoomFromMarkdown(markdown, {
+			callbackUrl: 'https://example.com/room-hook',
+			callbackSecret: 'top-secret',
+		});
+
+		completeRoom(result.roomId);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe('https://example.com/room-hook');
+		const payload = JSON.parse(String(init.body)) as Record<string, string>;
+		expect(payload.type).toBe('room_closed');
+		expect(payload.roomId).toBe(result.roomId);
+		expect(payload.reason).toBe('completed');
+		const headers = init.headers as Record<string, string>;
+		expect(headers['x-signature']).toBeTypeOf('string');
+		expect(headers['x-signature'].length).toBeGreaterThan(0);
+
+		destroyRoom(result.roomId);
+		fetchSpy.mockRestore();
+	});
+
+	it('sends callback for manual and expired destroys', async () => {
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response(null, { status: 204 }));
+		const markdown = `---\nteam:\n  alpha: Lead\n---\n\nDo work.\n`;
+
+		const manual = await createRoomFromMarkdown(markdown, {
+			callbackUrl: 'https://example.com/room-hook',
+		});
+		destroyRoom(manual.roomId, 'manual');
+
+		const expired = await createRoomFromMarkdown(markdown, {
+			callbackUrl: 'https://example.com/room-hook',
+		});
+		destroyRoom(expired.roomId, 'expired');
+
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		const reasons = fetchSpy.mock.calls.map(([, init]) => {
+			const payload = JSON.parse(String((init as RequestInit).body)) as Record<string, string>;
+			return payload.reason;
+		});
+		expect(reasons).toEqual(expect.arrayContaining(['manual', 'expired']));
+		fetchSpy.mockRestore();
 	});
 
 	describe('buildPiArgs', () => {
@@ -136,24 +200,26 @@ describe('agent-rooms manager', () => {
 			}
 		});
 
-		it('always appends body prompt', () => {
-			const args = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir);
+		it('always appends identity and body prompts', () => {
+			const { args } = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 			]);
 		});
 
-		it('appends agent role prompt and working_protocol when both exist', () => {
+		it('appends identity, agent role prompt, and working_protocol when both exist', () => {
 			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
 			const agentsDir = join(tailorDir, 'agents');
 			mkdirSync(agentsDir, { recursive: true });
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 			writeFileSync(join(tailorDir, 'working_protocol.md'), 'Work hard.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 				'--append-system-prompt', join(tailorDir, 'agents', 'alpha.md'),
 				'--append-system-prompt', join(tailorDir, 'working_protocol.md'),
@@ -166,7 +232,7 @@ describe('agent-rooms manager', () => {
 			mkdirSync(agentsDir, { recursive: true });
 			writeFileSync(join(agentsDir, 'Lead.md'), 'You are a lead.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain(join(tailorDir, 'agents', 'Lead.md'));
 			expect(warnSpy).not.toHaveBeenCalled();
 		});
@@ -178,7 +244,7 @@ describe('agent-rooms manager', () => {
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 			writeFileSync(join(agentsDir, 'Lead.md'), 'You are a lead.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain(join(tailorDir, 'agents', 'alpha.md'));
 			expect(args).not.toContain(join(tailorDir, 'agents', 'Lead.md'));
 		});
@@ -193,7 +259,7 @@ describe('agent-rooms manager', () => {
 				'utf-8',
 			);
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain('--model');
 			expect(args).toContain('gpt-4o');
 			const tempPromptPath = join(roomPromptDir, 'alpha.prompt');
@@ -207,7 +273,7 @@ describe('agent-rooms manager', () => {
 			mkdirSync(agentsDir, { recursive: true });
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain(join(tailorDir, 'agents', 'alpha.md'));
 			expect(args).not.toContain(join(roomPromptDir, 'alpha.prompt'));
 		});
@@ -223,7 +289,7 @@ describe('agent-rooms manager', () => {
 				'utf-8',
 			);
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			const tempPromptPath = join(roomPromptDir, 'working_protocol.prompt');
 			expect(existsSync(tempPromptPath)).toBe(true);
 			expect(args).toContain(tempPromptPath);
@@ -237,7 +303,7 @@ describe('agent-rooms manager', () => {
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 			writeFileSync(join(tailorDir, 'working_protocol.md'), 'Shared protocol body.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toContain(join(tailorDir, 'working_protocol.md'));
 			expect(args).not.toContain(join(roomPromptDir, 'working_protocol.prompt'));
 		});
@@ -246,9 +312,10 @@ describe('agent-rooms manager', () => {
 			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
 			writeFileSync(join(tailorDir, 'working_protocol.md'), 'Work hard.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 				'--append-system-prompt', join(tailorDir, 'working_protocol.md'),
 			]);
@@ -261,15 +328,65 @@ describe('agent-rooms manager', () => {
 		it('warns when both agent prompt and working_protocol are missing', () => {
 			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
 
-			const args = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 			]);
 			expect(warnSpy).toHaveBeenCalledWith(
 				'[agent-rooms] tailor_shop agent prompt not found:',
 				join(tailorDir, 'agents', 'alpha.md'),
 			);
+		});
+
+		it('defaults executionMode to session when no execution field in agent file', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
+
+			const { executionMode } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('session');
+		});
+
+		it('resolves executionMode to session from explicit front matter', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), '---\nexecution: session\n---\n\nYou are alpha.', 'utf-8');
+
+			const { executionMode } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('session');
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('resolves executionMode to single-shot from front matter', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), '---\nexecution: single-shot\n---\n\nYou are alpha.', 'utf-8');
+
+			const { executionMode } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('single-shot');
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('warns for unknown execution value and falls back to session', () => {
+			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
+			const agentsDir = join(tailorDir, 'agents');
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(join(agentsDir, 'alpha.md'), '---\nexecution: turbo\n---\n\nYou are alpha.', 'utf-8');
+
+			const { executionMode } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('session');
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('"turbo"'));
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('alpha'));
+		});
+
+		it('defaults executionMode to session when no tailorShop is provided', () => {
+			const { executionMode } = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir);
+			expect(executionMode).toBe('session');
 		});
 
 		it('resolves relative tailorShop against workingDir when provided', () => {
@@ -279,9 +396,41 @@ describe('agent-rooms manager', () => {
 			mkdirSync(agentsDir, { recursive: true });
 			writeFileSync(join(agentsDir, 'alpha.md'), 'You are alpha.', 'utf-8');
 
-			const args = buildPiArgs('alpha', 'Lead', './prompts', bodyPromptPath, roomPromptDir, baseDir);
+			const { args } = buildPiArgs('alpha', 'Lead', './prompts', bodyPromptPath, roomPromptDir, baseDir);
 			expect(args).toContain(join(tailorDir, 'agents', 'alpha.md'));
 		});
+	});
+
+	it('creates single-shot agents as dormant and session agents as spawned at room creation', async () => {
+		const tailorDir = mkdtempSync(join(tmpdir(), 'tailor-exec-'));
+		const agentsDir = join(tailorDir, 'agents');
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, 'alpha.md'),
+			'---\nexecution: session\n---\n\nYou are alpha.',
+			'utf-8',
+		);
+		writeFileSync(
+			join(agentsDir, 'beta.md'),
+			'---\nexecution: single-shot\n---\n\nYou are beta.',
+			'utf-8',
+		);
+
+		const markdown = `---\nteam:\n  alpha: Lead\n  beta: Reviewer\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
+		const result = await createRoomFromMarkdown(markdown);
+		const room = getRoom(result.roomId)!;
+
+		const alpha = room.agents.get('alpha')!;
+		const beta = room.agents.get('beta')!;
+
+		expect(alpha.executionMode).toBe('session');
+		expect(alpha.proc).not.toBeNull();
+
+		expect(beta.executionMode).toBe('single-shot');
+		expect(beta.proc).toBeNull();
+
+		destroyRoom(result.roomId);
+		rmSync(tailorDir, { recursive: true, force: true });
 	});
 
 	describe('instructions front-matter', () => {
@@ -563,6 +712,76 @@ describe('agent-rooms manager', () => {
 				{ name: 'beta', role: 'Dev' },
 			]);
 			expect(determineRecipients(room, 'alpha', '@attn:QA hello')).toEqual([]);
+		});
+	});
+
+	describe('completion flow helpers', () => {
+		function makeRoom(
+			routingStrategy: 'broadcast' | 'explicit',
+			agents: Array<{ name: string; role: string; taskCompleted?: boolean }>,
+			routes?: Record<string, string[]>,
+			facilitator?: string,
+		): Room {
+			return {
+				id: 'test',
+				status: 'running',
+				agents: new Map(agents.map((a) => [a.name, {
+					name: a.name,
+					role: a.role,
+					taskCompleted: Boolean(a.taskCompleted),
+				} as any])),
+				sseClients: new Set(),
+				createdAt: Date.now(),
+				lastActivityAt: Date.now(),
+				protocolBody: '',
+				routingStrategy,
+				routes,
+				facilitator,
+				events: [],
+				eventSeq: 0,
+				promptDir: '',
+			} as Room;
+		}
+
+		it('resolveMessageTargets returns explicit recipients first', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'beta', role: 'Dev' },
+				{ name: 'fac', role: 'Lead' },
+			], { alpha: ['beta'] }, 'fac');
+			expect(resolveMessageTargets(room, 'alpha', 'hello')).toEqual(['beta']);
+		});
+
+		it('resolveMessageTargets falls back to facilitator when no recipients', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead' },
+				{ name: 'fac', role: 'Lead' },
+			], undefined, 'fac');
+			expect(resolveMessageTargets(room, 'alpha', 'hello')).toEqual(['fac']);
+		});
+
+		it('shouldCheckCompletionAfterTaskMarker is false when routing to incomplete target', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead', taskCompleted: true },
+				{ name: 'beta', role: 'Dev', taskCompleted: false },
+			], { alpha: ['beta'] });
+			expect(shouldCheckCompletionAfterTaskMarker(room, 'alpha', 'done')).toBe(false);
+		});
+
+		it('shouldCheckCompletionAfterTaskMarker is true when all targets already completed', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead', taskCompleted: true },
+				{ name: 'beta', role: 'Dev', taskCompleted: true },
+			], { alpha: ['beta'] });
+			expect(shouldCheckCompletionAfterTaskMarker(room, 'alpha', 'done')).toBe(true);
+		});
+
+		it('shouldCheckCompletionAfterTaskMarker is true when there are no targets', () => {
+			const room = makeRoom('explicit', [
+				{ name: 'alpha', role: 'Lead', taskCompleted: true },
+				{ name: 'beta', role: 'Dev', taskCompleted: false },
+			]);
+			expect(shouldCheckCompletionAfterTaskMarker(room, 'alpha', 'done')).toBe(true);
 		});
 	});
 

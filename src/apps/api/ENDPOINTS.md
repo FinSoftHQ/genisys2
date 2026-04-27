@@ -233,11 +233,96 @@ Endpoints (starter guide)
   POST /api/v1/agent-rooms/
   Headers:
     Content-Type: text/markdown
+    x-room-callback-url: https://caller.example.com/hooks/agent-room (optional)
+    x-room-callback-secret: your-shared-secret (optional, used to sign x-signature)
   Body: (raw protocol Markdown. Front matter may omit `team:` if defaults are provided by `tailor_shop/working_protocol.md`.)
 
 - Success: 201 Created
   Body: { roomId: string, status: "initialized" }
-- Common errors: 415 if Content-Type does not include text/markdown; 500 if no team is found in either the protocol or `working_protocol.md` defaults.
+- Common errors: 415 if Content-Type does not include text/markdown; 400 for invalid callback headers; 500 if no team is found in either the protocol or `working_protocol.md` defaults.
+- Callback behavior (optional): when `x-room-callback-url` is set, the API sends HTTP POST callbacks on room close (`completed`, `manual`, `expired`) with body:
+  `{ "type": "room_closed", "roomId": "...", "reason": "completed|manual|expired", "at": "<ISO timestamp>" }`
+  and `x-signature` header (HMAC-SHA256 hex of raw JSON body) when `x-room-callback-secret` is set.
+
+- Callback verification sample (Node/Express):
+
+```ts
+import crypto from "crypto";
+import express from "express";
+
+const app = express();
+
+// IMPORTANT: capture raw body for signature verification.
+app.use(express.raw({ type: "application/json" }));
+
+app.post("/hooks/agent-room", (req, res) => {
+  const secret = process.env.AGENT_ROOM_CALLBACK_SECRET;
+  const signature = req.header("x-signature") ?? "";
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+
+  if (secret) {
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(rawBody)
+      .digest("hex");
+
+    const sigBuf = Buffer.from(signature);
+    const expectedBuf = Buffer.from(expected);
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return res.status(401).json({ error: "Invalid signature" });
+    }
+  }
+
+  const event = JSON.parse(rawBody.toString("utf8"));
+  // { type: "room_closed", roomId, reason, at }
+  console.log("agent room callback", event);
+
+  return res.status(204).end();
+});
+```
+
+- Callback verification sample (Fastify):
+
+```ts
+import crypto from "crypto";
+import Fastify from "fastify";
+
+const app = Fastify();
+
+app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_req, body, done) => {
+  done(null, body);
+});
+
+app.post("/hooks/agent-room", async (request, reply) => {
+  const secret = process.env.AGENT_ROOM_CALLBACK_SECRET;
+  const signature = String(request.headers["x-signature"] ?? "");
+  const rawBody = Buffer.isBuffer(request.body) ? request.body : Buffer.from("");
+
+  if (secret) {
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(rawBody)
+      .digest("hex");
+
+    const sigBuf = Buffer.from(signature);
+    const expectedBuf = Buffer.from(expected);
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return reply.status(401).send({ error: "Invalid signature" });
+    }
+  }
+
+  const event = JSON.parse(rawBody.toString("utf8"));
+  // { type: "room_closed", roomId, reason, at }
+  request.log.info({ event }, "agent room callback");
+
+  return reply.status(204).send();
+});
+```
+
+- Troubleshooting callback signature mismatches:
+  - Most mismatches happen when you verify against a parsed/re-stringified JSON object instead of the **raw request bytes**.
+  - Always compute HMAC on the raw body exactly as received.
+  - Ensure your callback secret exactly matches `x-room-callback-secret` (no extra spaces/newlines).
 
 - Example raw protocol with routing rules, tailor_shop, instructions, and agent files with front matter:
 
@@ -335,8 +420,9 @@ This allows you to keep shared configuration (team roster, routing rules, etc.) 
       from: string,
       at: string,
       type: "thinking" | "message" | "tool_start" | "tool_end"
-           | "retry_start" | "retry_end" | "agent_start" | "agent_end" | "room_error",
-      // type-specific fields are identical to squads
+           | "retry_start" | "retry_end" | "agent_start" | "agent_end" | "room_error" | "room_closed",
+      // type-specific fields are identical to squads, plus:
+      // room_closed: reason: "completed"
       // present if any field in this event was truncated:
       _fieldTruncated?: boolean,
     }>
@@ -431,3 +517,15 @@ Key behavioral difference from squads
 - When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
 - **Broadcast Mode** (no `routes:` block): messages are broadcast to all other agents.
 - **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists.
+
+---
+
+# API: /api/v1/proxy-room
+
+`/api/v1/proxy-room` is a decorator/proxy for `/api/v1/agent-rooms`.
+
+- It exposes the same public route contract and payload shapes as `agent-rooms`.
+- In most clients, you can switch from `.../agent-rooms` to `.../proxy-room` without changing request/response handling.
+- It performs additional proxy-level logging on create/close and supports callback + status reconciliation behavior.
+- It includes an internal callback endpoint used by the proxy implementation; this endpoint is intentionally undocumented for public clients.
+

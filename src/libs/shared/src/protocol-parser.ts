@@ -153,22 +153,28 @@ export function parseProtocol(filePath: string, options?: { requireTeam?: boolea
 	};
 }
 
-export function parseAgentPromptFile(content: string): { model?: string; body: string } {
+export function parseAgentPromptFile(content: string): {
+	model?: string;
+	execution: string;
+	body: string;
+} {
 	if (!content.startsWith("---")) {
-		return { body: content };
+		return { execution: "session", body: content };
 	}
 
 	const endIdx = content.indexOf("\n---", 3);
 	if (endIdx === -1) {
-		return { body: content };
+		return { execution: "session", body: content };
 	}
 
 	const frontMatter = content.slice(3, endIdx).trim();
 	const body = content.slice(endIdx + 4).trimStart();
 
 	const modelMatch = frontMatter.match(/^model:\s*(.+)$/m);
+	const executionMatch = frontMatter.match(/^execution:\s*(.+)$/m);
 	return {
 		model: modelMatch ? modelMatch[1].trim() : undefined,
+		execution: executionMatch ? executionMatch[1].trim() : "session",
 		body,
 	};
 }
