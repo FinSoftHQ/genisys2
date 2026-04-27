@@ -7,6 +7,11 @@ const config: NuxtConfig & { nitro?: unknown } = {
   devtools: { enabled: true },
   modules: ['@nuxt/ui'],
   css: ['~/assets/css/main.css'],
+  vite: {
+    optimizeDeps: {
+      include: ['zod'],
+    },
+  },
   runtimeConfig: {
     public: {
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL,
