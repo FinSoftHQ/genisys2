@@ -109,8 +109,7 @@ describe('todo processor routes', () => {
         payload: {
           card: mockCard,
           board: mockBoard,
-          column: mockBoard.schema.columns[0],
-          actor: 'user:test@example.com',
+          column: { uid: 'in-review', title: 'In Review', type: 'Processing', processor_id: 'manager-approval', exit_logic: { approved: 'done' }, order: 1 },
           callback_url: callbackUrl,
           idempotency_key: '550e8400-e29b-41d4-a716-446655440002',
         },
@@ -186,8 +185,7 @@ describe('todo processor routes', () => {
         payload: {
           card: mockCard,
           board: mockBoard,
-          column: mockBoard.schema.columns[0],
-          actor: 'user:test@example.com',
+          column: { uid: 'in-review', title: 'In Review', type: 'Processing', processor_id: 'manager-approval', exit_logic: { approved: 'done' }, order: 1 },
           callback_url: callbackUrl,
           idempotency_key: '550e8400-e29b-41d4-a716-446655440004',
         },
@@ -300,8 +298,7 @@ describe('todo processor routes', () => {
         payload: {
           card: mockCard,
           board: mockBoard,
-          column: mockBoard.schema.columns[0],
-          actor: 'user:test@example.com',
+          column: { uid: 'in-review', title: 'In Review', type: 'Processing', processor_id: 'manager-approval', exit_logic: { approved: 'done' }, order: 1 },
           callback_url: callbackUrl,
           idempotency_key: '550e8400-e29b-41d4-a716-446655440002',
         },

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   ProcessorContextSchema,
+  OnEnterDispatchRequestSchema,
   OnUpdateRequestSchema,
   OnUpdateResponseSchema,
   OnActionRequestSchema,
@@ -56,7 +57,7 @@ export async function processorRoutes(instance: FastifyInstance): Promise<void> 
   });
 
   instance.post('/on-enter', async (request, reply) => {
-    const body = ProcessorContextSchema.safeParse(request.body);
+    const body = OnEnterDispatchRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.status(400).send(errorResponse('VALIDATION_ERROR', 'Invalid request body', { issues: body.error.issues }));
     }
