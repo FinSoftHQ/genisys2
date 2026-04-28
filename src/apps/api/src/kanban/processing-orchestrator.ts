@@ -6,13 +6,96 @@ import {
   updateCardProcessingState,
   createCallbackToken,
   getProcessorById,
+  getBoardById,
+  moveCard,
 } from './repository.js';
-import { dispatchAsyncHook, dispatchFireAndForgetHook } from './hook-dispatcher.js';
+import { dispatchAsyncHook, dispatchFireAndForgetHook, dispatchSyncHook } from './hook-dispatcher.js';
 import { getDefaultProcessor } from './config.js';
 import { appendEventLog } from './event-log.js';
 import { broadcastEvent } from './board-stream.js';
 import { cards, callbackTokens, boards, processorRegistry, consumedCallbackTokens } from '../db/schema.js';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, and, asc } from 'drizzle-orm';
+
+export async function moveCardToNextColumn(
+  db: unknown,
+  board: BoardEntity,
+  fromProcessorId: string,
+): Promise<CardEntity | undefined> {
+  const { db: database } = resolveDb(db);
+
+  const sourceColumns = board.schema.columns.filter((c) => c.processor_id === fromProcessorId);
+
+  for (const sourceColumn of sourceColumns) {
+    const nextColumnUid = sourceColumn.exit_logic?.default;
+    if (!nextColumnUid) continue;
+
+    const targetColumn = board.schema.columns.find((c) => c.uid === nextColumnUid);
+    if (!targetColumn) continue;
+
+    const nextCardRaw = database
+      .select()
+      .from(cards)
+      .where(
+        and(
+          eq(cards.board_uid, board.uid),
+          eq(cards.current_status, sourceColumn.uid),
+          eq(cards.processing_state, 'IDLE'),
+        ),
+      )
+      .orderBy(asc(cards.created_at))
+      .limit(1)
+      .get();
+
+    if (!nextCardRaw) continue;
+
+    const nextCard = CardEntitySchema.safeParse(nextCardRaw);
+    if (!nextCard.success) continue;
+
+    // Dispatch can-exit hook to source processor (gives it veto power)
+    const sourceProcessor = getProcessorById(db, sourceColumn.processor_id) ?? getDefaultProcessor(sourceColumn.processor_id);
+
+    let canExit;
+    try {
+      canExit = await dispatchSyncHook(sourceProcessor, 'can-exit', {
+        card: nextCard.data,
+        target_column: targetColumn.uid,
+        actor: 'system:auto-pull',
+      });
+    } catch (_err) {
+      continue; // Processor unavailable — skip this column
+    }
+
+    if (!canExit.allowed) continue;
+
+    // Dispatch on-exit fire-and-forget to source processor
+    dispatchFireAndForgetHook(sourceProcessor, 'on-exit', {
+      card: nextCard.data,
+      next_column: targetColumn,
+      actor: 'system:auto-pull',
+    });
+
+    if (targetColumn.type === 'Processing') {
+      try {
+        await startProcessing(db, board, nextCard.data, targetColumn as {
+          uid: string;
+          title: string;
+          type: 'Processing';
+          processor_id: string;
+          exit_logic: Record<string, string>;
+          order: number;
+        });
+        return nextCard.data;
+      } catch (_err) {
+        continue;
+      }
+    } else {
+      const moved = moveCard(db, board.uid, nextCard.data.uid, targetColumn.uid, 'system:auto-pull');
+      if (moved) return moved;
+    }
+  }
+
+  return undefined;
+}
 
 export async function startProcessing(
   db: unknown,
@@ -41,7 +124,8 @@ export async function startProcessing(
 
   const token = randomUUID();
   const idempotencyKey = randomUUID();
-  const callbackUrl = `http://localhost:3000/api/callbacks/${token}`;
+  const callbackBaseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 8080}`;
+  const callbackUrl = `${callbackBaseUrl.replace(/\/$/, '')}/api/callbacks/${token}`;
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
   createCallbackToken(db, {
@@ -282,6 +366,18 @@ export async function consumeCallback(
         } catch (_err) {
           // Log but don't fail — the callback was already processed
         }
+      }
+    }
+  }
+
+  // 3. Auto-pull: if a card entered 'done', pull next card from 'todo'
+  if (payload.status === 'success' && transactionResult.tokenRow.processor_id === 'done') {
+    const board = getBoardById(db, transactionResult.result.board_uid);
+    if (board) {
+      try {
+        await moveCardToNextColumn(db, board, 'todo');
+      } catch (_err) {
+        // Best-effort: ignore failures
       }
     }
   }

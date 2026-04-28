@@ -38,9 +38,10 @@ export const test = base.extend<{ boardId: string }>({
 
     const schema = JSON.stringify({
       columns: [
-        { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'in-progress' }, order: 0 },
-        { uid: 'in-progress', title: 'In Progress', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'done' }, order: 1 },
-        { uid: 'done', title: 'Done', type: 'Normal', processor_id: 'default-manual', exit_logic: {}, order: 2 },
+        { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'todo' }, order: 0 },
+        { uid: 'todo', title: 'TODO', type: 'Processing', processor_id: 'todo', exit_logic: { default: 'in-progress' }, order: 1 },
+        { uid: 'in-progress', title: 'In Progress', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'done' }, order: 2 },
+        { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 3 },
       ],
     });
 

@@ -36,9 +36,10 @@ describe('db seed', () => {
 
   it('creates a board with the expected default columns', () => {
     const board = seedBoard(db);
-    expect(board.schema.columns).toHaveLength(3);
+    expect(board.schema.columns).toHaveLength(4);
     expect(board.schema.columns.map((c) => c.uid)).toEqual([
       'backlog',
+      'todo',
       'in-progress',
       'done',
     ]);

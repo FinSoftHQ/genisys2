@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import * as schema from './schema.js';
-import { bootstrapDefaultProcessor } from './seed.js';
+import { bootstrapDefaultProcessor, bootstrapTodoProcessor, bootstrapDoneProcessor } from './seed.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -34,5 +34,7 @@ export function createClient(path: string): DbInstance {
 
   const db = drizzle(sqlite, { schema });
   bootstrapDefaultProcessor({ sqlite, db });
+  bootstrapTodoProcessor({ sqlite, db });
+  bootstrapDoneProcessor({ sqlite, db });
   return { sqlite, db };
 }
