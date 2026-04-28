@@ -78,6 +78,8 @@ await app.register(agentRoomRoutes, { prefix: '/api/v1/agent-rooms' });
 await app.register(proxyRoomRoutes, { prefix: '/api/v1/proxy-room' });
 await app.register(kanbanRoutes, { prefix: '/api/boards' });
 await app.register(processorRoutes, { prefix: '/api/kanban-processor/default' });
+await app.register(processorRoutes, { prefix: '/api/kanban-processor/todo' });
+await app.register(processorRoutes, { prefix: '/api/kanban-processor/done' });
 
 process.on('SIGTERM', () => {
   (async () => {

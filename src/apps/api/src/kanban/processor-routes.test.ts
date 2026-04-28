@@ -60,6 +60,160 @@ describe('processor routes', () => {
     fetchSpy.mockRestore();
   });
 
+describe('todo processor routes', () => {
+    let todoApp: FastifyInstance;
+
+    beforeEach(async () => {
+      todoApp = fastify();
+      await todoApp.register(processorRoutes, { prefix: '/api/kanban-processor/todo' });
+    });
+
+    afterEach(async () => {
+      await todoApp.close();
+    });
+
+    it('returns 200 with healthy status', async () => {
+      const response = await todoApp.inject({
+        method: 'GET',
+        url: '/api/kanban-processor/todo/health',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(HealthCheckResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.status).toBe('healthy');
+    });
+
+    it('returns 200 with allowed: true for can-exit', async () => {
+      const response = await todoApp.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/todo/can-exit',
+        payload: {
+          card: mockCard,
+          target_column: 'in-progress',
+          actor: 'user:test@example.com',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(CanExitHookResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.allowed).toBe(true);
+    });
+
+    it('returns 202 accepted and fires callback for on-enter', async () => {
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
+      const response = await todoApp.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/todo/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          actor: 'user:test@example.com',
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440002',
+        },
+      });
+
+      expect(response.statusCode).toBe(202);
+      const body = response.json();
+      expect(OnEnterDispatchAcceptedResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.status).toBe('accepted');
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer processor',
+          }),
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+  });
+
+  describe('done processor routes', () => {
+    let doneApp: FastifyInstance;
+
+    beforeEach(async () => {
+      doneApp = fastify();
+      await doneApp.register(processorRoutes, { prefix: '/api/kanban-processor/done' });
+    });
+
+    afterEach(async () => {
+      await doneApp.close();
+    });
+
+    it('returns 200 with healthy status', async () => {
+      const response = await doneApp.inject({
+        method: 'GET',
+        url: '/api/kanban-processor/done/health',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(HealthCheckResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.status).toBe('healthy');
+    });
+
+    it('returns 200 with allowed: true for can-exit', async () => {
+      const response = await doneApp.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/done/can-exit',
+        payload: {
+          card: mockCard,
+          target_column: 'in-progress',
+          actor: 'user:test@example.com',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(CanExitHookResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.allowed).toBe(true);
+    });
+
+    it('returns 202 accepted and fires callback for on-enter', async () => {
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440003';
+      const response = await doneApp.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/done/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          actor: 'user:test@example.com',
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440004',
+        },
+      });
+
+      expect(response.statusCode).toBe(202);
+      const body = response.json();
+      expect(OnEnterDispatchAcceptedResponseSchema.safeParse(body).success).toBe(true);
+      expect(body.status).toBe('accepted');
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer processor',
+          }),
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+  });
+
   describe('GET /api/kanban-processor/default/health', () => {
     it('returns 200 with healthy status', async () => {
       const response = await app.inject({

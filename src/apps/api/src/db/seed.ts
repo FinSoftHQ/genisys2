@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import type { DbInstance } from './client.js';
 import { boards, boardSequences, processorRegistry } from './schema.js';
 import type { BoardEntity } from '@repo/shared';
-import { DEFAULT_PROCESSOR_BASE_URL } from '../kanban/config.js';
+import { DEFAULT_PROCESSOR_BASE_URL, API_BASE_URL } from '../kanban/config.js';
 
 let seedCounter = 0;
 
@@ -146,6 +146,54 @@ export function bootstrapDefaultProcessor(instance: DbInstance): void {
     processor_id: 'default-manual',
     name: 'Default Manual Processor',
     base_url: DEFAULT_PROCESSOR_BASE_URL,
+    health_endpoint: '/health',
+    hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+    sla_seconds: 300,
+    max_sla_seconds: 86400,
+    auth_type: 'none',
+    auth_config: null,
+    hmac_secret: 'dev-secret',
+    status: 'healthy',
+    last_health_check: now,
+    created_at: now,
+    updated_at: now,
+  }).run();
+}
+
+export function bootstrapTodoProcessor(instance: DbInstance): void {
+  const { db } = instance;
+  const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'todo')).get();
+  if (existing) return;
+
+  const now = new Date().toISOString();
+  db.insert(processorRegistry).values({
+    processor_id: 'todo',
+    name: 'Todo Processor',
+    base_url: `${API_BASE_URL}/api/kanban-processor/todo`,
+    health_endpoint: '/health',
+    hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+    sla_seconds: 300,
+    max_sla_seconds: 86400,
+    auth_type: 'none',
+    auth_config: null,
+    hmac_secret: 'dev-secret',
+    status: 'healthy',
+    last_health_check: now,
+    created_at: now,
+    updated_at: now,
+  }).run();
+}
+
+export function bootstrapDoneProcessor(instance: DbInstance): void {
+  const { db } = instance;
+  const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'done')).get();
+  if (existing) return;
+
+  const now = new Date().toISOString();
+  db.insert(processorRegistry).values({
+    processor_id: 'done',
+    name: 'Done Processor',
+    base_url: `${API_BASE_URL}/api/kanban-processor/done`,
     health_endpoint: '/health',
     hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
     sla_seconds: 300,
