@@ -14,4 +14,4 @@ export const UserSchema = z
 export type User = z.infer<typeof UserSchema>;
 
 export * from './kanban-schemas.js';
-export { parseProtocol, parseAgentPromptFile, type Protocol } from './protocol-parser.js';
+export { parseProtocol, parseProtocolFromString, parseAgentPromptFile, type Protocol } from './protocol-parser.js';

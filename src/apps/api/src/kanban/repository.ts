@@ -57,7 +57,7 @@ const BOARD_TEMPLATES: Record<string, { title: string; columns: Array<{ uid: str
       { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'todo' }, order: 0 },
       { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'prep' }, order: 1 },
       { uid: 'prep', title: 'Prep', type: 'Processing', processor_id: 'prep', exit_logic: { default: 'wip' }, order: 2 },
-      { uid: 'wip', title: 'WIP', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'wrap' }, order: 3 },
+      { uid: 'wip', title: 'WIP', type: 'Processing', processor_id: 'wip', exit_logic: { default: 'wrap' }, order: 3 },
       { uid: 'wrap', title: 'Wrap', type: 'Processing', processor_id: 'wrap', exit_logic: { default: 'done' }, order: 4 },
       { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 5 },
     ],

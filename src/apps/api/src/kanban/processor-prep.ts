@@ -12,6 +12,7 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   HealthCheckResponseSchema,
 } from '@repo/shared';
+import { parseProtocolFromString } from '@repo/shared';
 
 function execFilePromise(
   file: string,
@@ -49,10 +50,51 @@ function fireAndForgetCallback(callbackUrl: string, payload: Record<string, unkn
 
 const GITHUB_URL_REGEX = /(?:https?:\/\/github\.com\/[^\/\s]+\/[^\/\s]+(?:\.git)?|git@github\.com[^:\s]*:[^\/\s]+\/[^\/\s]+(?:\.git)?)/i;
 
+function parseCardDescription(description: string | null | undefined): {
+  repo?: string;
+  teamName?: string;
+  tailorShop?: string;
+  body?: string;
+  team?: Record<string, string>;
+  routes?: Record<string, string[]>;
+  facilitator?: string;
+  workingDir?: string;
+  instructions?: Record<string, string>;
+} {
+  if (!description || !description.startsWith('---')) {
+    return {};
+  }
+  try {
+    const parsed = parseProtocolFromString(description, { requireTeam: false });
+    const result: ReturnType<typeof parseCardDescription> = {
+      ...(parsed.repo ? { repo: parsed.repo } : {}),
+      ...(parsed.teamName ? { teamName: parsed.teamName } : {}),
+      ...(parsed.body ? { body: parsed.body } : {}),
+      ...(parsed.team && Object.keys(parsed.team).length > 0 ? { team: parsed.team } : {}),
+      ...(parsed.routes && Object.keys(parsed.routes).length > 0 ? { routes: parsed.routes } : {}),
+      ...(parsed.facilitator ? { facilitator: parsed.facilitator } : {}),
+      ...(parsed.workingDir ? { workingDir: parsed.workingDir } : {}),
+      ...(parsed.instructions && Object.keys(parsed.instructions).length > 0 ? { instructions: parsed.instructions } : {}),
+    };
+    if (parsed.teamName) {
+      const tailorShopPath = resolve(process.cwd(), 'teams', parsed.teamName);
+      console.log('[prep] Resolving team_name:', parsed.teamName, 'cwd:', process.cwd(), 'resolved:', tailorShopPath);
+      result.tailorShop = tailorShopPath;
+    }
+    return result;
+  } catch (_err) {
+    return {};
+  }
+}
+
 function extractRepositoryUrl(card: { payload?: Record<string, unknown>; description?: string | null }): string | undefined {
   const fromPayload = card.payload?.repository_url;
   if (typeof fromPayload === 'string' && fromPayload.trim().length > 0) {
     return fromPayload.trim();
+  }
+  const parsed = parseCardDescription(card.description);
+  if (parsed.repo) {
+    return parsed.repo;
   }
   const fromDescription = card.description ?? '';
   const match = fromDescription.match(GITHUB_URL_REGEX);
@@ -74,6 +116,7 @@ async function runPrepWorkflow(
   callbackUrl: string,
 ) {
   try {
+    const parsed = parseCardDescription(card.description);
     const repositoryUrl = extractRepositoryUrl(card);
     if (!repositoryUrl) {
       fireAndForgetCallback(callbackUrl, {
@@ -85,6 +128,7 @@ async function runPrepWorkflow(
 
     const workspacePath = getWorkspacePath(card.display_id);
     console.log(`[prep] Card ${card.display_id}: cloning ${repositoryUrl} into ${workspacePath}`);
+    console.log('[prep] Parsed description for card', card.display_id, '→ repo:', repositoryUrl, 'tailor_shop:', parsed.tailorShop);
 
     // 1. Clone
     await execFilePromise('git', ['clone', repositoryUrl, workspacePath], { timeout: 120_000 });
@@ -98,14 +142,24 @@ async function runPrepWorkflow(
 
     // 4. Success callback
     console.log(`[prep] Card ${card.display_id}: success, moving to wip`);
+    const updatedPayload: Record<string, unknown> = {
+      ...card.payload,
+      workspace_path: workspacePath,
+      repository_url: repositoryUrl,
+      ...(parsed.repo ? { repo: parsed.repo } : {}),
+      ...(parsed.tailorShop ? { tailor_shop: parsed.tailorShop } : {}),
+      ...(parsed.teamName ? { team_name: parsed.teamName } : {}),
+      ...(parsed.team ? { team: parsed.team } : {}),
+      ...(parsed.routes ? { routes: parsed.routes } : {}),
+      ...(parsed.facilitator ? { facilitator: parsed.facilitator } : {}),
+      ...(parsed.workingDir ? { working_dir: parsed.workingDir } : {}),
+      ...(parsed.instructions ? { instructions: parsed.instructions } : {}),
+      ...(parsed.body ? { body: parsed.body } : {}),
+    };
     fireAndForgetCallback(callbackUrl, {
       status: 'success',
       payload_updates: {
-        payload: {
-          ...card.payload,
-          workspace_path: workspacePath,
-          repository_url: repositoryUrl,
-        },
+        payload: updatedPayload,
       },
       move_to_column: 'wip',
     });

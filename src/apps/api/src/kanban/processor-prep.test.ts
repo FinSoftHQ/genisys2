@@ -1,5 +1,6 @@
 import fastify, { type FastifyInstance } from 'fastify';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { resolve } from 'node:path';
 import {
   HealthCheckResponseSchema,
   CanExitHookResponseSchema,
@@ -188,6 +189,105 @@ describe('prep processor routes', () => {
           body: expect.stringContaining('"status":"error"'),
         }),
       );
+    });
+
+    it('parses markdown description with repo and team_name and stores parsed fields in payload', async () => {
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440005';
+      const originalCwd = process.cwd();
+      const cardWithFrontMatter = {
+        ...mockCard,
+        description: `---\nteam:\n  alice: Developer\nrepo: https://github.com/org/repo.git\nteam_name: dev\nfacilitator: alice\n---\n\nDo the work.`,
+        payload: {},
+      };
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/prep/on-enter',
+        payload: {
+          card: cardWithFrontMatter,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440006',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const call = fetchSpy.mock.calls.find((c) => (c[0] as string) === callbackUrl);
+      expect(call).toBeDefined();
+      const requestBody = JSON.parse((call![1] as RequestInit).body as string);
+      expect(requestBody.status).toBe('success');
+      expect(requestBody.payload_updates.payload.repository_url).toBe('https://github.com/org/repo.git');
+      expect(requestBody.payload_updates.payload.repo).toBe('https://github.com/org/repo.git');
+      expect(requestBody.payload_updates.payload.team_name).toBe('dev');
+      expect(requestBody.payload_updates.payload.tailor_shop).toBe(resolve(originalCwd, 'teams', 'dev'));
+      expect(requestBody.payload_updates.payload.facilitator).toBe('alice');
+      expect(requestBody.payload_updates.payload.body).toBe('Do the work.');
+      expect(requestBody.payload_updates.payload.team).toEqual({ alice: 'Developer' });
+    });
+
+    it('falls back to regex when repo is missing in front matter but other fields are stored', async () => {
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440007';
+      const originalCwd = process.cwd();
+      const cardWithFrontMatterNoRepo = {
+        ...mockCard,
+        description: `---\nteam:\n  bob: Tester\nteam_name: sample\n---\n\nhttps://github.com/fallback-org/fallback-repo.git\n\nSome instructions.`,
+        payload: {},
+      };
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/prep/on-enter',
+        payload: {
+          card: cardWithFrontMatterNoRepo,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440008',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const call = fetchSpy.mock.calls.find((c) => (c[0] as string) === callbackUrl);
+      expect(call).toBeDefined();
+      const requestBody = JSON.parse((call![1] as RequestInit).body as string);
+      expect(requestBody.status).toBe('success');
+      expect(requestBody.payload_updates.payload.repository_url).toBe('https://github.com/fallback-org/fallback-repo.git');
+      expect(requestBody.payload_updates.payload.team_name).toBe('sample');
+      expect(requestBody.payload_updates.payload.tailor_shop).toBe(resolve(originalCwd, 'teams', 'sample'));
+      expect(requestBody.payload_updates.payload.team).toEqual({ bob: 'Tester' });
+    });
+
+    it('gracefully handles invalid front matter and falls back to regex', async () => {
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440009';
+      const cardWithInvalid = {
+        ...mockCard,
+        description: '---\ninvalid yaml without closing\nhttps://github.com/org/repo.git',
+        payload: {},
+      };
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/prep/on-enter',
+        payload: {
+          card: cardWithInvalid,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440010',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const call = fetchSpy.mock.calls.find((c) => (c[0] as string) === callbackUrl);
+      expect(call).toBeDefined();
+      const requestBody = JSON.parse((call![1] as RequestInit).body as string);
+      expect(requestBody.status).toBe('success');
+      expect(requestBody.payload_updates.payload.repository_url).toBe('https://github.com/org/repo.git');
+      expect(requestBody.payload_updates.payload.team_name).toBeUndefined();
     });
 
     it('returns 400 for invalid body', async () => {

@@ -3,6 +3,8 @@ import fs from "fs";
 export interface Protocol {
 	team: Record<string, string>;
 	body: string;
+	repo?: string;
+	teamName?: string;
 	routes?: Record<string, string[]>;
 	facilitator?: string;
 	tailorShop?: string;
@@ -10,9 +12,7 @@ export interface Protocol {
 	instructions?: Record<string, string>;
 }
 
-export function parseProtocol(filePath: string, options?: { requireTeam?: boolean }): Protocol {
-	const content = fs.readFileSync(filePath, "utf-8");
-
+export function parseProtocolFromString(content: string, options?: { requireTeam?: boolean }): Protocol {
 	if (!content.startsWith("---")) {
 		throw new Error("Expected front matter starting with ---");
 	}
@@ -30,6 +30,8 @@ export function parseProtocol(filePath: string, options?: { requireTeam?: boolea
 	let facilitator: string | undefined;
 	let tailorShop: string | undefined;
 	let workingDir: string | undefined;
+	let repo: string | undefined;
+	let teamName: string | undefined;
 	const instructions: Record<string, string> = {};
 	const lines = frontMatter.split("\n");
 	let inTeam = false;
@@ -40,6 +42,14 @@ export function parseProtocol(filePath: string, options?: { requireTeam?: boolea
 	for (const rawLine of lines) {
 		const line = rawLine.replace(/\r$/, "");
 
+		if (line.startsWith("team_name:")) {
+			inTeam = false;
+			inRoutes = false;
+			inInstructions = false;
+			currentRouteAgent = null;
+			teamName = line.slice("team_name:".length).trim();
+			continue;
+		}
 		if (line.startsWith("team:")) {
 			inTeam = true;
 			inRoutes = false;
@@ -83,6 +93,14 @@ export function parseProtocol(filePath: string, options?: { requireTeam?: boolea
 			inInstructions = false;
 			currentRouteAgent = null;
 			facilitator = line.slice("facilitator:".length).trim();
+			continue;
+		}
+		if (line.startsWith("repo:")) {
+			inTeam = false;
+			inRoutes = false;
+			inInstructions = false;
+			currentRouteAgent = null;
+			repo = line.slice("repo:".length).trim();
 			continue;
 		}
 
@@ -145,12 +163,19 @@ export function parseProtocol(filePath: string, options?: { requireTeam?: boolea
 	return {
 		team,
 		body,
+		...(repo ? { repo } : {}),
+		...(teamName ? { teamName } : {}),
 		...(Object.keys(routes).length > 0 ? { routes } : {}),
 		...(facilitator ? { facilitator } : {}),
 		...(tailorShop ? { tailorShop } : {}),
 		...(workingDir ? { workingDir } : {}),
 		...(Object.keys(instructions).length > 0 ? { instructions } : {}),
 	};
+}
+
+export function parseProtocol(filePath: string, options?: { requireTeam?: boolean }): Protocol {
+	const content = fs.readFileSync(filePath, "utf-8");
+	return parseProtocolFromString(content, options);
 }
 
 export function parseAgentPromptFile(content: string): {

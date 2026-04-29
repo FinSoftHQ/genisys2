@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { parseProtocol, parseAgentPromptFile } from './protocol-parser.js';
+import { parseProtocol, parseProtocolFromString, parseAgentPromptFile } from './protocol-parser.js';
 
 describe('parseProtocol', () => {
 	function withTempFile(content: string, fn: (path: string) => void) {
@@ -130,6 +130,57 @@ describe('parseProtocol', () => {
 				expect(result.facilitator).toBeUndefined();
 			},
 		);
+	});
+
+	it('parses repo field', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\nrepo: https://github.com/test-org/test-repo.git\n---\n\nHello team!`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.repo).toBe('https://github.com/test-org/test-repo.git');
+			},
+		);
+	});
+
+	it('parses team_name field', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\nteam_name: dev\n---\n\nHello team!`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.teamName).toBe('dev');
+			},
+		);
+	});
+
+	it('parses repo and team_name together', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\nrepo: https://github.com/test-org/test-repo.git\nteam_name: sample\ntailor_shop: ./override\n---\n\nBody content.`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.repo).toBe('https://github.com/test-org/test-repo.git');
+				expect(result.teamName).toBe('sample');
+				expect(result.tailorShop).toBe('./override');
+				expect(result.body).toBe('Body content.');
+			},
+		);
+	});
+});
+
+describe('parseProtocolFromString', () => {
+	it('parses front matter and body from a string', () => {
+		const content = `---\nteam:\n  alice: Developer\nrepo: https://github.com/org/repo.git\n---\n\nDo the work.`;
+		const result = parseProtocolFromString(content);
+		expect(result.team).toEqual({ alice: 'Developer' });
+		expect(result.repo).toBe('https://github.com/org/repo.git');
+		expect(result.body).toBe('Do the work.');
+	});
+
+	it('throws when content does not start with ---', () => {
+		expect(() => parseProtocolFromString('No front matter')).toThrow('Expected front matter starting with ---');
+	});
+
+	it('throws when closing --- is missing', () => {
+		expect(() => parseProtocolFromString('---\nteam:\n  alice: Dev\n')).toThrow('Expected closing --- for front matter');
 	});
 });
 
