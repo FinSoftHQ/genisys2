@@ -52,13 +52,14 @@ const BOARD_TEMPLATES: Record<string, { title: string; columns: Array<{ uid: str
     ],
   },
   development: {
-    title: 'New Board',
+    title: 'Development Board',
     columns: [
       { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'todo' }, order: 0 },
-      { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'in-progress' }, order: 1 },
-      { uid: 'in-progress', title: 'In Progress', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'review' }, order: 2 },
-      { uid: 'review', title: 'Review', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'done' }, order: 3 },
-      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 4 },
+      { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'prep' }, order: 1 },
+      { uid: 'prep', title: 'Prep', type: 'Processing', processor_id: 'prep', exit_logic: { default: 'wip' }, order: 2 },
+      { uid: 'wip', title: 'WIP', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'wrap' }, order: 3 },
+      { uid: 'wrap', title: 'Wrap', type: 'Processing', processor_id: 'wrap', exit_logic: { default: 'done' }, order: 4 },
+      { uid: 'done', title: 'Done', type: 'Normal', processor_id: 'done', exit_logic: { default: 'done' }, order: 5 },
     ],
   },
 };

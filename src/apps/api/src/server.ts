@@ -15,6 +15,8 @@ import { agentRoomRoutes } from './agent-rooms/index.js';
 import { proxyRoomRoutes } from './proxy-room/index.js';
 import { kanbanRoutes, callbackRoutes } from './kanban/routes.js';
 import { processorRoutes } from './kanban/processor-routes.js';
+import { prepProcessorRoutes } from './kanban/processor-prep.js';
+import { wrapProcessorRoutes } from './kanban/processor-wrap.js';
 import { devWrapupRoutes } from './dev-wrapup/routes.js';
 
 if (process.versions.bun && process.env.NODE_ENV === 'production') {
@@ -81,6 +83,8 @@ await app.register(kanbanRoutes, { prefix: '/api/boards' });
 await app.register(processorRoutes, { prefix: '/api/kanban-processor/default' });
 await app.register(processorRoutes, { prefix: '/api/kanban-processor/todo' });
 await app.register(processorRoutes, { prefix: '/api/kanban-processor/done' });
+await app.register(prepProcessorRoutes, { prefix: '/api/kanban-processor/prep' });
+await app.register(wrapProcessorRoutes, { prefix: '/api/kanban-processor/wrap' });
 await app.register(callbackRoutes, { prefix: '/api/callbacks' });
 await app.register(devWrapupRoutes, { prefix: '/api/v1/dev-wrapup' });
 
