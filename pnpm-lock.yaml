@@ -195,6 +195,9 @@ importers:
       '@fastify/websocket':
         specifier: 'catalog:'
         version: 11.2.0
+      '@mariozechner/pi-coding-agent':
+        specifier: ^0.60.0
+        version: 0.60.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@repo/logger':
         specifier: workspace:*
         version: link:../../libs/logger

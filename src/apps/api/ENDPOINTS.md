@@ -529,3 +529,40 @@ Key behavioral difference from squads
 - It performs additional proxy-level logging on create/close and supports callback + status reconciliation behavior.
 - It includes an internal callback endpoint used by the proxy implementation; this endpoint is intentionally undocumented for public clients.
 
+
+---
+
+# API: /api/v1/dev-wrapup
+
+Purpose
+
+Generate development wrap-up metadata — commit message, PR title, and PR body — for a given workspace directory. The endpoint uses a Pi/LLM session to inspect the git state (`git diff --staged`, `git log`) and generate the metadata. No fallback payload is returned on failure.
+
+Endpoints
+
+1) Generate wrap-up
+- Purpose: Use an LLM to analyze staged changes and return commit message, PR title, and PR body.
+- Request (HTTP):
+  POST /api/v1/dev-wrapup
+  Headers:
+    Content-Type: application/json
+  Body (JSON):
+  {
+    "workspace_path": "/path/to/project"
+  }
+
+- Success: 200 OK
+  Body (JSON):
+  {
+    "commit_message": "feat: add user authentication",
+    "pr_title": "Add user authentication",
+    "pr_body": "## Summary\n\nAdds auth.\n\n## Changes\n\n- Login\n\n## Risks\n\nLow"
+  }
+
+- Error responses:
+  - 400 `INVALID_BODY` — missing or invalid `workspace_path` (e.g. empty string, not a string)
+  - 400 `INVALID_PATH` — `workspace_path` contains `..` path-traversal characters
+  - 422 `NOT_A_GIT_REPO` — `workspace_path` is not a git repository
+  - 502 `GENERATION_FAILED` — LLM generation failed or produced invalid/unsatisfiable output
+  - 504 `GENERATION_TIMEOUT` — LLM generation timed out after 60 seconds
+

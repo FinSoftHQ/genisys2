@@ -21,6 +21,7 @@
     "fastify": "catalog:",
     "fastify-type-provider-zod": "catalog:",
     "pino": "catalog:",
+    "@mariozechner/pi-coding-agent": "^0.60.0",
     "zod": "catalog:"
   },
   "devDependencies": {
