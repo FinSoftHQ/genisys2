@@ -77,7 +77,7 @@ function parseCardDescription(description: string | null | undefined): {
       ...(parsed.instructions && Object.keys(parsed.instructions).length > 0 ? { instructions: parsed.instructions } : {}),
     };
     if (parsed.teamName) {
-      const tailorShopPath = resolve(process.cwd(), 'teams', parsed.teamName);
+      const tailorShopPath = resolve(process.cwd(), '../../..', 'teams', parsed.teamName);
       console.log('[prep] Resolving team_name:', parsed.teamName, 'cwd:', process.cwd(), 'resolved:', tailorShopPath);
       result.tailorShop = tailorShopPath;
     }

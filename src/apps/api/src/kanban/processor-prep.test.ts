@@ -221,7 +221,7 @@ describe('prep processor routes', () => {
       expect(requestBody.payload_updates.payload.repository_url).toBe('https://github.com/org/repo.git');
       expect(requestBody.payload_updates.payload.repo).toBe('https://github.com/org/repo.git');
       expect(requestBody.payload_updates.payload.team_name).toBe('dev');
-      expect(requestBody.payload_updates.payload.tailor_shop).toBe(resolve(originalCwd, 'teams', 'dev'));
+      expect(requestBody.payload_updates.payload.tailor_shop).toBe(resolve(originalCwd, '../../..', 'teams', 'dev'));
       expect(requestBody.payload_updates.payload.facilitator).toBe('alice');
       expect(requestBody.payload_updates.payload.body).toBe('Do the work.');
       expect(requestBody.payload_updates.payload.team).toEqual({ alice: 'Developer' });
@@ -256,7 +256,7 @@ describe('prep processor routes', () => {
       expect(requestBody.status).toBe('success');
       expect(requestBody.payload_updates.payload.repository_url).toBe('https://github.com/fallback-org/fallback-repo.git');
       expect(requestBody.payload_updates.payload.team_name).toBe('sample');
-      expect(requestBody.payload_updates.payload.tailor_shop).toBe(resolve(originalCwd, 'teams', 'sample'));
+      expect(requestBody.payload_updates.payload.tailor_shop).toBe(resolve(originalCwd, '../../..', 'teams', 'sample'));
       expect(requestBody.payload_updates.payload.team).toEqual({ bob: 'Tester' });
     });
 

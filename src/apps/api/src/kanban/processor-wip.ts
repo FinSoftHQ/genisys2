@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import {
   OnEnterDispatchRequestSchema,
   OnUpdateRequestSchema,
@@ -10,6 +11,7 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   HealthCheckResponseSchema,
 } from '@repo/shared';
+import { getCardById, updateCard } from './repository.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
@@ -27,6 +29,183 @@ function fireAndForgetCallback(callbackUrl: string, payload: Record<string, unkn
     // Fire-and-forget: failures are silently ignored.
   });
 }
+
+function getApiBaseUrl(): string {
+  return (process.env.API_BASE_URL ?? `http://127.0.0.1:${String(process.env.PORT || 8080)}`).replace(/\/$/, '');
+}
+
+function getAgentRoomsUrl(): string {
+  return `${getApiBaseUrl()}/api/v1/agent-rooms`;
+}
+
+function getRoomClosedCallbackUrl(): string {
+  return `${getApiBaseUrl()}/api/kanban-processor/wip/_internal/room-closed`;
+}
+
+// In-memory registry: roomId -> { cardUid, boardUid }
+const wipRoomRegistry = new Map<string, { cardUid: string; boardUid: string }>();
+
+function serializeYamlValue(value: unknown, indent = ''): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    // Use quoted string if it contains special YAML characters
+    if (value.includes('\n') || value.includes(':') || value.startsWith(' ') || value.startsWith('-') || value.startsWith('[') || value.startsWith('{') || value === '' || value === 'true' || value === 'false' || value === 'null' || /^\d+$/.test(value)) {
+      const lines = value.split('\n');
+      if (lines.length === 1) {
+        return `"${value.replace(/"/g, '\\"')}"`;
+      }
+      return `|\n${lines.map((l) => `${indent}  ${l}`).join('\n')}`;
+    }
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    return '\n' + value.map((v) => `${indent}  - ${serializeYamlValue(v, indent + '  ')}`).join('\n');
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return '{}';
+    return '\n' + entries.map(([k, v]) => {
+      const serialized = serializeYamlValue(v, indent + '  ');
+      if (serialized.startsWith('\n')) {
+        return `${indent}  ${k}:${serialized}`;
+      }
+      return `${indent}  ${k}: ${serialized}`;
+    }).join('\n');
+  }
+  return String(value);
+}
+
+function composeMarkdownFromPayload(card: {
+  display_id: string;
+  title: string;
+  payload: Record<string, unknown>;
+}): string {
+  const p = card.payload;
+  const frontMatterLines: string[] = [];
+
+  const team = p.team;
+  if (team && typeof team === 'object' && !Array.isArray(team) && Object.keys(team).length > 0) {
+    frontMatterLines.push(`team:${serializeYamlValue(team)}`);
+  }
+
+  const routes = p.routes;
+  if (routes && typeof routes === 'object' && !Array.isArray(routes) && Object.keys(routes).length > 0) {
+    frontMatterLines.push(`routes:${serializeYamlValue(routes)}`);
+  }
+
+  if (typeof p.facilitator === 'string' && p.facilitator.trim()) {
+    frontMatterLines.push(`facilitator: ${serializeYamlValue(p.facilitator.trim())}`);
+  }
+
+  if (typeof p.tailor_shop === 'string' && p.tailor_shop.trim()) {
+    frontMatterLines.push(`tailor_shop: ${serializeYamlValue(p.tailor_shop.trim())}`);
+  }
+
+  // Explicit mapping: workspace_path -> working_dir
+  const workingDir = typeof p.working_dir === 'string' && p.working_dir.trim()
+    ? p.working_dir.trim()
+    : typeof p.workspace_path === 'string' && p.workspace_path.trim()
+      ? p.workspace_path.trim()
+      : undefined;
+  if (workingDir) {
+    frontMatterLines.push(`working_dir: ${serializeYamlValue(workingDir)}`);
+  }
+
+  const instructions = p.instructions;
+  if (instructions && typeof instructions === 'object' && !Array.isArray(instructions) && Object.keys(instructions).length > 0) {
+    frontMatterLines.push(`instructions:${serializeYamlValue(instructions)}`);
+  }
+
+  const bodyText = typeof p.body === 'string' ? p.body : '';
+  const metadataBlock = `Card: ${card.display_id} / ${card.title}`;
+
+  return `---\n${frontMatterLines.join('\n')}\n---\n\n${metadataBlock}\n\n${bodyText}`;
+}
+
+async function createAgentRoom(
+  markdown: string,
+  callbackUrl: string,
+): Promise<{ roomId: string } | { error: string }> {
+  try {
+    const response = await fetch(getAgentRoomsUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/markdown',
+        'x-room-callback-url': callbackUrl,
+      },
+      body: markdown,
+    });
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      return { error: `Agent room creation failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ''}` };
+    }
+
+    const body = (await response.json()) as { roomId?: string };
+    if (!body.roomId) {
+      return { error: 'Agent room creation failed: missing roomId in response' };
+    }
+
+    return { roomId: body.roomId };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `Agent room creation failed: ${message}` };
+  }
+}
+
+async function runWipWorkflow(
+  card: {
+    uid: string;
+    board_uid: string;
+    display_id: string;
+    title: string;
+    payload: Record<string, unknown>;
+  },
+  callbackUrl: string,
+) {
+  const markdown = composeMarkdownFromPayload(card);
+  console.log('[wip] Composed markdown for card', card.display_id);
+  console.log(markdown);
+
+  const roomClosedCallbackUrl = getRoomClosedCallbackUrl();
+  const result = await createAgentRoom(markdown, roomClosedCallbackUrl);
+
+  if ('error' in result) {
+    console.error('[wip] Card', card.display_id, result.error);
+    fireAndForgetCallback(callbackUrl, {
+      status: 'error',
+      error_message: result.error,
+    });
+    return;
+  }
+
+  const roomId = result.roomId;
+  wipRoomRegistry.set(roomId, { cardUid: card.uid, boardUid: card.board_uid });
+  console.log('[wip] Card', card.display_id, 'created agent room:', roomId);
+
+  fireAndForgetCallback(callbackUrl, {
+    status: 'success',
+    payload_updates: {
+      payload: {
+        ...card.payload,
+        room_id: roomId,
+      },
+    },
+  });
+}
+
+const RoomClosedCallbackSchema = z.object({
+  type: z.literal('room_closed'),
+  roomId: z.string().min(1),
+  reason: z.enum(['completed', 'manual', 'expired']),
+  at: z.string().min(1),
+});
 
 export async function wipProcessorRoutes(instance: FastifyInstance): Promise<void> {
   instance.get('/health', async (_request, reply) => {
@@ -65,7 +244,8 @@ export async function wipProcessorRoutes(instance: FastifyInstance): Promise<voi
     const card = body.data.card;
     console.log('[wip] Card', card.display_id, 'payload:', JSON.stringify(card.payload, null, 2));
 
-    fireAndForgetCallback(body.data.callback_url, { status: 'success' });
+    // Fire-and-forget: create agent room in background
+    runWipWorkflow(card, body.data.callback_url);
 
     return reply.status(202).send(response);
   });
@@ -87,6 +267,55 @@ export async function wipProcessorRoutes(instance: FastifyInstance): Promise<voi
     const body = OnExitRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.status(400).send(errorResponse('VALIDATION_ERROR', 'Invalid request body', { issues: body.error.issues }));
+    }
+
+    return reply.status(200).send({ status: 'acknowledged' });
+  });
+
+  instance.post('/_internal/room-closed', async (request, reply) => {
+    const body = RoomClosedCallbackSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send(errorResponse('VALIDATION_ERROR', 'Invalid request body', { issues: body.error.issues }));
+    }
+
+    const { roomId, reason, at } = body.data;
+    const record = wipRoomRegistry.get(roomId);
+
+    if (!record) {
+      console.warn('[wip] Room closed callback for unknown room:', roomId);
+      return reply.status(200).send({ status: 'acknowledged' });
+    }
+
+    try {
+      const currentCard = getCardById({}, record.boardUid, record.cardUid);
+      if (!currentCard) {
+        console.warn('[wip] Card not found for room:', roomId, 'card:', record.cardUid);
+        return reply.status(200).send({ status: 'acknowledged' });
+      }
+
+      const updatedPayload = {
+        ...currentCard.payload,
+        room_status: 'completed',
+        room_closed_at: at,
+        room_close_reason: reason,
+      };
+
+      const result = updateCard(
+        {},
+        record.boardUid,
+        record.cardUid,
+        { version: currentCard.version, payload: updatedPayload },
+        'system:room-closed',
+      );
+
+      if (result) {
+        console.log('[wip] Room', roomId, 'closed (', reason, ') for card', record.cardUid);
+      } else {
+        console.warn('[wip] Failed to update card for room:', roomId);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[wip] Error handling room closed callback:', message);
     }
 
     return reply.status(200).send({ status: 'acknowledged' });
