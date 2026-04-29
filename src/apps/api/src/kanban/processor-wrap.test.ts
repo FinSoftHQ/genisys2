@@ -1,5 +1,11 @@
 import fastify, { type FastifyInstance } from 'fastify';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+const mockRm = vi.fn().mockResolvedValue(undefined);
+
+vi.mock('node:fs/promises', () => ({
+  rm: (...args: unknown[]) => mockRm(...args),
+}));
 import {
   HealthCheckResponseSchema,
   CanExitHookResponseSchema,
@@ -96,6 +102,7 @@ describe('wrap processor routes', () => {
   afterEach(async () => {
     await app.close();
     fetchSpy.mockRestore();
+    mockRm.mockClear();
   });
 
   describe('GET /api/kanban-processor/wrap/health', () => {
@@ -316,7 +323,7 @@ describe('wrap processor routes', () => {
   });
 
   describe('POST /api/kanban-processor/wrap/on-exit', () => {
-    it('returns 200 acknowledged', async () => {
+    it('returns 200 acknowledged and cleans up workspace', async () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/kanban-processor/wrap/on-exit',
@@ -330,6 +337,34 @@ describe('wrap processor routes', () => {
       expect(response.statusCode).toBe(200);
       const body = response.json();
       expect(body.status).toBe('acknowledged');
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(mockRm).toHaveBeenCalledWith(
+        '/tmp/workspaces/TST-1',
+        expect.objectContaining({ recursive: true, force: true }),
+      );
+    });
+
+    it('returns 200 acknowledged when workspace_path is missing', async () => {
+      const cardNoWorkspace = { ...mockCard, payload: {} };
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/wrap/on-exit',
+        payload: {
+          card: cardNoWorkspace,
+          next_column: mockBoard.schema.columns[0],
+          actor: 'user:test@example.com',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.status).toBe('acknowledged');
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(mockRm).not.toHaveBeenCalled();
     });
   });
 });

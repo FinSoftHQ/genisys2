@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { execFile } from 'node:child_process';
+import { rm } from 'node:fs/promises';
 import {
   OnEnterDispatchRequestSchema,
   OnUpdateRequestSchema,
@@ -183,6 +184,15 @@ export async function wrapProcessorRoutes(instance: FastifyInstance): Promise<vo
     const body = OnExitRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.status(400).send(errorResponse('VALIDATION_ERROR', 'Invalid request body', { issues: body.error.issues }));
+    }
+
+    const workspacePath = body.data.card.payload?.workspace_path;
+    if (typeof workspacePath === 'string') {
+      rm(workspacePath, { recursive: true, force: true }).then(() => {
+        console.log(`[wrap] Cleaned up workspace ${workspacePath}`);
+      }).catch((err) => {
+        console.error(`[wrap] Failed to clean up workspace ${workspacePath}:`, err instanceof Error ? err.message : String(err));
+      });
     }
 
     return reply.status(200).send({ status: 'acknowledged' });

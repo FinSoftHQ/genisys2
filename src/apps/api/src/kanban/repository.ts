@@ -59,7 +59,7 @@ const BOARD_TEMPLATES: Record<string, { title: string; columns: Array<{ uid: str
       { uid: 'prep', title: 'Prep', type: 'Processing', processor_id: 'prep', exit_logic: { default: 'wip' }, order: 2 },
       { uid: 'wip', title: 'WIP', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'wrap' }, order: 3 },
       { uid: 'wrap', title: 'Wrap', type: 'Processing', processor_id: 'wrap', exit_logic: { default: 'done' }, order: 4 },
-      { uid: 'done', title: 'Done', type: 'Normal', processor_id: 'done', exit_logic: { default: 'done' }, order: 5 },
+      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 5 },
     ],
   },
 };
