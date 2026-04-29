@@ -2,6 +2,8 @@
 
 Enterprise-grade `pnpm` monorepo optimized for **Azure App Service Linux Code Deployment** (Oryx build system). Uses **Node.js 22 LTS** in production, with optional **Bun 1.2+** for local API hot-reload only.
 
+[TODO:] Here is additional information ...
+
 ---
 
 ## Tech Stack
