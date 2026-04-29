@@ -131,59 +131,59 @@ onUnmounted(() => {
 
 <template>
   <div class="flex flex-col h-full">
-    <UPageHeader
+    <div
       v-if="store.board"
-      :title="store.board.title"
-      :description="`Prefix: ${store.board.prefix}`"
-      class="px-4 py-4 shrink-0"
+      class="flex items-center justify-between px-4 py-3 shrink-0 border-b border-muted"
     >
-      <template #right>
-        <div class="flex items-center gap-2">
-          <UBadge
-            v-if="realtimeStatus === 'connected'"
-            color="success"
-            variant="soft"
-            size="sm"
-            class="animate-pulse"
-          >
-            Live
-          </UBadge>
-          <UBadge
-            v-else-if="realtimeStatus === 'connecting'"
-            color="warning"
-            variant="soft"
-            size="sm"
-          >
-            Connecting...
-          </UBadge>
-          <UBadge
-            v-else-if="realtimeStatus === 'disconnected'"
-            color="error"
-            variant="soft"
-            size="sm"
-          >
-            Offline
-          </UBadge>
-          <UBadge
-            v-if="store.ui.isSaving"
-            color="info"
-            variant="soft"
-            class="animate-pulse"
-          >
-            Saving...
-          </UBadge>
-          <UButton
-            icon="i-lucide-scroll-text"
-            variant="soft"
-            color="neutral"
-            size="sm"
-            @click="auditPanelOpen = true"
-          >
-            Audit Log
-          </UButton>
-        </div>
-      </template>
-    </UPageHeader>
+      <div class="flex items-center gap-2 text-sm text-muted">
+        <UIcon name="i-lucide-hash" class="size-4" />
+        <span>{{ store.board.prefix }}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <UBadge
+          v-if="realtimeStatus === 'connected'"
+          color="success"
+          variant="soft"
+          size="sm"
+          class="animate-pulse"
+        >
+          Live
+        </UBadge>
+        <UBadge
+          v-else-if="realtimeStatus === 'connecting'"
+          color="warning"
+          variant="soft"
+          size="sm"
+        >
+          Connecting...
+        </UBadge>
+        <UBadge
+          v-else-if="realtimeStatus === 'disconnected'"
+          color="error"
+          variant="soft"
+          size="sm"
+        >
+          Offline
+        </UBadge>
+        <UBadge
+          v-if="store.ui.isSaving"
+          color="info"
+          variant="soft"
+          class="animate-pulse"
+        >
+          Saving...
+        </UBadge>
+        <UButton
+          icon="i-lucide-scroll-text"
+          variant="soft"
+          color="neutral"
+          size="sm"
+          @click="auditPanelOpen = true"
+        >
+          Audit Log
+        </UButton>
+      </div>
+    </div>
 
     <UAlert
       v-if="store.ui.error"
@@ -194,7 +194,7 @@ onUnmounted(() => {
       :title="store.ui.error"
     />
 
-    <UPageBody class="flex-1 overflow-x-auto overflow-y-hidden px-4 pb-4">
+    <div class="flex-1 overflow-x-auto overflow-y-hidden px-4 pb-4">
       <div class="flex gap-6 h-full">
         <BoardColumn
           v-for="column in sortedColumns"
@@ -207,7 +207,7 @@ onUnmounted(() => {
           @drop-card="onDropCard"
         />
       </div>
-    </UPageBody>
+    </div>
 
     <CreateCardModal
       v-model:open="createModalOpen"

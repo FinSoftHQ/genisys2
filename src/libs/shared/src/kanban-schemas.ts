@@ -74,6 +74,9 @@ export const ProcessorRegistryAuthTypeSchema = z.enum(['bearer', 'oauth2', 'none
 
 export const BoardColumnTypeSchema = z.enum(['Normal', 'Processing']);
 
+export const BoardTemplateSchema = z.enum(['default', 'development']);
+export type BoardTemplate = z.infer<typeof BoardTemplateSchema>;
+
 export const BoardColumnSchema = z
   .object({
     uid: ColumnUidSchema,
@@ -913,6 +916,12 @@ export const CallbackTokenRejectedResponseSchema = z
   })
   .strict();
 
+export const CreateBoardRequestSchema = z
+  .object({
+    template: BoardTemplateSchema.optional().default('default'),
+  })
+  .strict();
+
 export const CreateBoardResponseSchema = z
   .object({
     data: z.object({ board: BoardEntitySchema }).strict(),
@@ -976,6 +985,7 @@ export type ProcessorCallbackPayloadUpdates = z.infer<typeof ProcessorCallbackPa
 export type ProcessorCallbackRequest = z.infer<typeof ProcessorCallbackRequestSchema>;
 export type ProcessorCallbackResponse = z.infer<typeof ProcessorCallbackResponseSchema>;
 export type CallbackTokenRejectedResponse = z.infer<typeof CallbackTokenRejectedResponseSchema>;
+export type CreateBoardRequest = z.infer<typeof CreateBoardRequestSchema>;
 export type CreateBoardResponse = z.infer<typeof CreateBoardResponseSchema>;
 export type ApiError = z.infer<typeof ApiErrorSchema>;
 export type ProcessorContext = z.infer<typeof ProcessorContextSchema>;

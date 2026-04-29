@@ -41,7 +41,29 @@ function generatePrefix(): string {
   return prefix;
 }
 
-export function createBoard(instance: unknown): BoardEntity {
+const BOARD_TEMPLATES: Record<string, { title: string; columns: Array<{ uid: string; title: string; type: 'Normal' | 'Processing'; processor_id: string; exit_logic: Record<string, string>; order: number }> }> = {
+  default: {
+    title: 'New Board',
+    columns: [
+      { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'todo' }, order: 0 },
+      { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'in-progress' }, order: 1 },
+      { uid: 'in-progress', title: 'In Progress', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'done' }, order: 2 },
+      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 3 },
+    ],
+  },
+  development: {
+    title: 'New Board',
+    columns: [
+      { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'todo' }, order: 0 },
+      { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'in-progress' }, order: 1 },
+      { uid: 'in-progress', title: 'In Progress', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'review' }, order: 2 },
+      { uid: 'review', title: 'Review', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'done' }, order: 3 },
+      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 4 },
+    ],
+  },
+};
+
+export function createBoard(instance: unknown, template: string = 'default'): BoardEntity {
   const { db } = resolveDb(instance);
   const uid = randomUUID();
   const now = new Date().toISOString();
@@ -60,45 +82,14 @@ export function createBoard(instance: unknown): BoardEntity {
     throw new Error('Failed to generate unique board prefix');
   }
 
+  const templateConfig = BOARD_TEMPLATES[template] ?? BOARD_TEMPLATES.default;
+
   const boardData = {
     uid,
-    title: 'New Board',
+    title: templateConfig.title,
     prefix,
     schema: {
-      columns: [
-        {
-          uid: 'backlog',
-          title: 'Backlog',
-          type: 'Normal' as const,
-          processor_id: 'default-manual',
-          exit_logic: { default: 'todo' },
-          order: 0,
-        },
-        {
-          uid: 'todo',
-          title: 'TODO',
-          type: 'Normal' as const,
-          processor_id: 'todo',
-          exit_logic: { default: 'in-progress' },
-          order: 1,
-        },
-        {
-          uid: 'in-progress',
-          title: 'In Progress',
-          type: 'Normal' as const,
-          processor_id: 'default-manual',
-          exit_logic: { default: 'done' },
-          order: 2,
-        },
-        {
-          uid: 'done',
-          title: 'Done',
-          type: 'Processing' as const,
-          processor_id: 'done',
-          exit_logic: { default: 'done' },
-          order: 3,
-        },
-      ],
+      columns: templateConfig.columns,
     },
     permissions: { read: [] as string[], write: [] as string[] },
     created_at: now,

@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import type { SnapshotResponse } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
 import BoardView from '~/components/kanban/BoardView.vue';
 
+definePageMeta({ layout: 'default' });
+
 const route = useRoute();
 const boardId = route.params.boardId as string;
 
 const { store, setLoading, setError, hydrate, resetStore } = useBoardStore();
+
+const boardTitle = computed(() => store.value.board?.title ?? 'Board');
 
 async function loadSnapshot() {
   resetStore();
@@ -30,8 +34,21 @@ onMounted(() => {
 </script>
 
 <template>
-  <UPage class="h-screen">
-    <UContainer class="h-full max-w-none p-0">
+  <UDashboardPanel>
+    <template #header>
+      <UDashboardNavbar :title="boardTitle">
+        <template #left>
+          <UBreadcrumb
+            :items="[
+              { label: 'Home', to: '/', icon: 'i-lucide-home' },
+              { label: boardTitle },
+            ]"
+          />
+        </template>
+      </UDashboardNavbar>
+    </template>
+
+    <template #body>
       <div v-if="store.ui.isLoading" class="flex items-center justify-center h-full">
         <UIcon name="i-lucide-loader-2" class="size-8 animate-spin text-muted" />
       </div>
@@ -54,6 +71,6 @@ onMounted(() => {
         v-else-if="store.board"
         :board-uid="boardId"
       />
-    </UContainer>
-  </UPage>
+    </template>
+  </UDashboardPanel>
 </template>

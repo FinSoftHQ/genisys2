@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   BoardPathParamsSchema,
   CardPathParamsSchema,
+  CreateBoardRequestSchema,
   CreateCardRequestSchema,
   UpdateCardRequestSchema,
   MoveCardRequestSchema,
@@ -51,8 +52,12 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     return reply.status(200).send({ data: { boards } });
   });
 
-  instance.post('/', async (_request, reply) => {
-    const board = await callRepo(createBoard);
+  instance.post('/', async (request, reply) => {
+    const body = CreateBoardRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
+    }
+    const board = await callRepo(createBoard, body.data.template);
     return reply.status(201).send({ data: { board } });
   });
 
