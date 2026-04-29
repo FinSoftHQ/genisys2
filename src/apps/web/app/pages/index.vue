@@ -7,9 +7,22 @@ import { useBoardsList } from '~/composables/useBoardsList';
 definePageMeta({ layout: 'default' });
 
 const router = useRouter();
+const toast = useToast();
+
 const boardId = ref('');
 const isCreating = ref(false);
 const { boards, isLoading: isLoadingBoards } = useBoardsList();
+
+// Create board form state
+const createForm = ref<{
+  title: string;
+  prefix: string;
+  template: 'default' | 'development';
+}>({
+  title: '',
+  prefix: '',
+  template: 'default',
+});
 
 function goToBoard() {
   const id = boardId.value.trim();
@@ -18,17 +31,48 @@ function goToBoard() {
   }
 }
 
-async function createBoard(template: 'default' | 'development') {
+function resetCreateForm() {
+  createForm.value = { title: '', prefix: '', template: 'default' };
+}
+
+const prefixRegex = /^[A-Z][A-Z0-9]{0,9}$/;
+
+async function onCreateBoard() {
+  const title = createForm.value.title.trim() || 'New Board';
+  const prefix = createForm.value.prefix.trim() || undefined;
+
+  if (prefix && !prefixRegex.test(prefix)) {
+    toast.add({
+      title: 'Invalid prefix',
+      description: 'Prefix must be 1–10 uppercase letters/numbers starting with a letter.',
+      color: 'error',
+      icon: 'i-lucide-alert-circle',
+    });
+    return;
+  }
+
   isCreating.value = true;
   try {
-    const body: CreateBoardRequest = { template };
+    const body: CreateBoardRequest = {
+      template: createForm.value.template,
+      title,
+      prefix,
+    };
     const response = await $fetch<CreateBoardResponse>('/api/boards', {
       method: 'POST',
       body,
     });
+    resetCreateForm();
     await router.push(`/boards/${response.data.board.uid}`);
-  } catch {
-    // Optionally: show error toast here
+  } catch (err: any) {
+    const code = err?.data?.error?.code;
+    const message = err?.data?.error?.message || 'Failed to create board';
+    toast.add({
+      title: code === 'PREFIX_EXISTS' ? 'Prefix taken' : 'Error',
+      description: message,
+      color: 'error',
+      icon: 'i-lucide-alert-circle',
+    });
   } finally {
     isCreating.value = false;
   }
@@ -63,32 +107,58 @@ async function createBoard(template: 'default' | 'development') {
           <template #header>
             <h2 class="text-lg font-semibold">Create New Board</h2>
           </template>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <UForm :state="createForm" @submit="onCreateBoard" class="flex flex-col gap-4">
+            <UFormField name="title" label="Title">
+              <UInput
+                v-model="createForm.title"
+                placeholder="New Board"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField name="prefix" label="Prefix (optional)">
+              <UInput
+                v-model="createForm.prefix"
+                placeholder="Auto-generated"
+                class="w-full"
+              />
+              <template #hint>
+                <span class="text-xs text-muted">1–10 uppercase letters/numbers, starting with a letter</span>
+              </template>
+            </UFormField>
+
+            <UFormField name="template" label="Template">
+              <div class="grid grid-cols-2 gap-2">
+                <UButton
+                  type="button"
+                  :variant="createForm.template === 'default' ? 'solid' : 'subtle'"
+                  color="neutral"
+                  block
+                  @click="createForm.template = 'default'"
+                >
+                  Default
+                </UButton>
+                <UButton
+                  type="button"
+                  :variant="createForm.template === 'development' ? 'solid' : 'subtle'"
+                  color="neutral"
+                  block
+                  @click="createForm.template = 'development'"
+                >
+                  Development
+                </UButton>
+              </div>
+            </UFormField>
+
             <UButton
-              color="neutral"
-              variant="subtle"
+              type="submit"
               icon="i-lucide-plus"
-              class="h-24 flex-col gap-2"
               block
               :loading="isCreating"
-              @click="createBoard('default')"
             >
-              <span class="font-semibold">Default</span>
-              <span class="text-xs text-muted">Backlog → TODO → In Progress → Done</span>
+              Create Board
             </UButton>
-            <UButton
-              color="neutral"
-              variant="subtle"
-              icon="i-lucide-code"
-              class="h-24 flex-col gap-2"
-              block
-              :loading="isCreating"
-              @click="createBoard('development')"
-            >
-              <span class="font-semibold">Development</span>
-              <span class="text-xs text-muted">Backlog → TODO → In Progress → Review → Done</span>
-            </UButton>
-          </div>
+          </UForm>
         </UCard>
 
         <!-- Recent Boards -->

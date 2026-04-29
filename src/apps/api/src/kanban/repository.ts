@@ -63,31 +63,44 @@ const BOARD_TEMPLATES: Record<string, { title: string; columns: Array<{ uid: str
   },
 };
 
-export function createBoard(instance: unknown, template: string = 'default'): BoardEntity {
+export function createBoard(
+  instance: unknown,
+  template: string = 'default',
+  title?: string,
+  prefix?: string,
+): BoardEntity {
   const { db } = resolveDb(instance);
   const uid = randomUUID();
   const now = new Date().toISOString();
 
-  let prefix: string;
-  let attempts = 0;
-  do {
-    prefix = generatePrefix();
-    attempts++;
-  } while (
-    db.select().from(boardSequences).where(eq(boardSequences.prefix, prefix)).get() &&
-    attempts < 10
-  );
+  let finalPrefix: string;
+  if (prefix) {
+    const existing = db.select().from(boardSequences).where(eq(boardSequences.prefix, prefix)).get();
+    if (existing) {
+      throw new Error('PREFIX_EXISTS');
+    }
+    finalPrefix = prefix;
+  } else {
+    let attempts = 0;
+    do {
+      finalPrefix = generatePrefix();
+      attempts++;
+    } while (
+      db.select().from(boardSequences).where(eq(boardSequences.prefix, finalPrefix)).get() &&
+      attempts < 10
+    );
 
-  if (attempts >= 10) {
-    throw new Error('Failed to generate unique board prefix');
+    if (attempts >= 10) {
+      throw new Error('Failed to generate unique board prefix');
+    }
   }
 
   const templateConfig = BOARD_TEMPLATES[template] ?? BOARD_TEMPLATES.default;
 
   const boardData = {
     uid,
-    title: templateConfig.title,
-    prefix,
+    title: title || templateConfig.title,
+    prefix: finalPrefix,
     schema: {
       columns: templateConfig.columns,
     },
@@ -102,9 +115,38 @@ export function createBoard(instance: unknown, template: string = 'default'): Bo
   }
 
   db.insert(boards).values(boardData).run();
-  db.insert(boardSequences).values({ prefix, seq_value: 0 }).run();
+  db.insert(boardSequences).values({ prefix: finalPrefix, seq_value: 0 }).run();
 
   return parsed.data;
+}
+
+export function updateBoard(
+  instance: unknown,
+  boardUid: string,
+  input: { title?: string },
+): BoardEntity | null {
+  const { db } = resolveDb(instance);
+  const now = new Date().toISOString();
+
+  const updateData: Partial<typeof boards.$inferInsert> = {
+    updated_at: now,
+  };
+
+  if (input.title !== undefined) {
+    updateData.title = input.title;
+  }
+
+  const result = db
+    .update(boards)
+    .set(updateData)
+    .where(eq(boards.uid, boardUid))
+    .returning()
+    .get();
+
+  if (!result) return null;
+
+  const parsed = BoardEntitySchema.safeParse(result);
+  return parsed.success ? parsed.data : null;
 }
 
 let repoSeedCounter = 0;

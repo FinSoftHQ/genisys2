@@ -919,6 +919,24 @@ export const CallbackTokenRejectedResponseSchema = z
 export const CreateBoardRequestSchema = z
   .object({
     template: BoardTemplateSchema.optional().default('default'),
+    title: z.string().min(1).max(200).optional(),
+    prefix: BoardPrefixSchema.optional(),
+  })
+  .strict();
+
+export const UpdateBoardRequestSchema = z
+  .object({
+    title: z.string().min(1).max(200).optional(),
+  })
+  .strict()
+  .refine((value) => value.title !== undefined, {
+    message: 'at least one field must be provided',
+    path: ['title'],
+  });
+
+export const UpdateBoardResponseSchema = z
+  .object({
+    data: z.object({ board: BoardEntitySchema }).strict(),
   })
   .strict();
 
@@ -987,6 +1005,8 @@ export type ProcessorCallbackResponse = z.infer<typeof ProcessorCallbackResponse
 export type CallbackTokenRejectedResponse = z.infer<typeof CallbackTokenRejectedResponseSchema>;
 export type CreateBoardRequest = z.infer<typeof CreateBoardRequestSchema>;
 export type CreateBoardResponse = z.infer<typeof CreateBoardResponseSchema>;
+export type UpdateBoardRequest = z.infer<typeof UpdateBoardRequestSchema>;
+export type UpdateBoardResponse = z.infer<typeof UpdateBoardResponseSchema>;
 export type ApiError = z.infer<typeof ApiErrorSchema>;
 export type ProcessorContext = z.infer<typeof ProcessorContextSchema>;
 export type OnUpdateRequest = z.infer<typeof OnUpdateRequestSchema>;

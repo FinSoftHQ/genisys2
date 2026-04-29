@@ -3,6 +3,7 @@ import {
   BoardPathParamsSchema,
   CardPathParamsSchema,
   CreateBoardRequestSchema,
+  UpdateBoardRequestSchema,
   CreateCardRequestSchema,
   UpdateCardRequestSchema,
   MoveCardRequestSchema,
@@ -24,6 +25,7 @@ import {
   updateCard,
   moveCard,
   createBoard,
+  updateBoard,
   getProcessorById,
   listBoards,
   createCallbackToken,
@@ -57,8 +59,35 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     if (!body.success) {
       return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
     }
-    const board = await callRepo(createBoard, body.data.template);
-    return reply.status(201).send({ data: { board } });
+    try {
+      const board = await callRepo(createBoard, body.data.template, body.data.title, body.data.prefix);
+      return reply.status(201).send({ data: { board } });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === 'PREFIX_EXISTS') {
+        return reply.status(409).send(errorResponse('PREFIX_EXISTS', 'Board prefix already exists'));
+      }
+      return reply.status(500).send(errorResponse('BOARD_CREATE_FAILED', 'Failed to create board'));
+    }
+  });
+
+  instance.patch('/:boardId', async (request, reply) => {
+    const params = BoardPathParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const body = UpdateBoardRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
+    }
+
+    const board = await callRepo(updateBoard, params.data.boardId, body.data);
+    if (!board) {
+      return reply.status(404).send(errorResponse('BOARD_NOT_FOUND', 'Board not found'));
+    }
+
+    return reply.status(200).send({ data: { board } });
   });
 
   instance.get('/:boardId/snapshot', async (request, reply) => {
