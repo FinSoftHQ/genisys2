@@ -37,7 +37,7 @@ const mockBoard = {
         title: 'Prep',
         type: 'Processing' as const,
         processor_id: 'prep',
-        exit_logic: { default: 'wip' },
+        exit_logic: { default: 'agentic-team' },
         order: 0,
       },
     ],
@@ -99,7 +99,7 @@ describe('prep processor routes', () => {
         url: '/api/kanban-processor/prep/can-exit',
         payload: {
           card: mockCard,
-          target_column: 'wip',
+          target_column: 'agentic-team',
           actor: 'user:test@example.com',
         },
       });

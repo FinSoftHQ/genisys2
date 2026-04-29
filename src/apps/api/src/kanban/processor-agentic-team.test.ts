@@ -3,10 +3,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mockGetCardById = vi.fn();
 const mockUpdateCard = vi.fn();
+const mockMoveCard = vi.fn();
+const mockGetBoardById = vi.fn();
+const mockUpdateCardProcessingState = vi.fn();
+const mockStartProcessing = vi.fn();
 
 vi.mock('./repository.js', () => ({
   getCardById: (...args: unknown[]) => mockGetCardById(...args),
   updateCard: (...args: unknown[]) => mockUpdateCard(...args),
+  moveCard: (...args: unknown[]) => mockMoveCard(...args),
+  getBoardById: (...args: unknown[]) => mockGetBoardById(...args),
+  updateCardProcessingState: (...args: unknown[]) => mockUpdateCardProcessingState(...args),
+}));
+
+vi.mock('./processing-orchestrator.js', () => ({
+  startProcessing: (...args: unknown[]) => mockStartProcessing(...args),
 }));
 
 import {
@@ -17,7 +28,7 @@ import {
   ApiErrorSchema,
 } from '@repo/shared';
 
-import { wipProcessorRoutes } from './processor-wip.js';
+import { agenticTeamProcessorRoutes } from './processor-agentic-team.js';
 
 const mockBoard = {
   uid: '550e8400-e29b-41d4-a716-446655440000',
@@ -26,10 +37,10 @@ const mockBoard = {
   schema: {
     columns: [
       {
-        uid: 'wip',
-        title: 'WIP',
+        uid: 'agentic-team',
+        title: 'AI Team',
         type: 'Processing' as const,
-        processor_id: 'wip',
+        processor_id: 'agentic-team',
         exit_logic: { default: 'wrap' },
         order: 0,
       },
@@ -50,7 +61,7 @@ const mockCard = {
   processing_state: 'IDLE' as const,
   is_editable: true,
   payload: { repository_url: 'https://github.com/test-org/test-repo.git', tailor_shop: '/workspace/teams/dev' },
-  current_status: 'wip',
+  current_status: 'agentic-team',
   created_at: '2026-04-26T08:30:00.000Z',
   updated_at: '2026-04-26T08:30:00.000Z',
 };
@@ -69,7 +80,7 @@ const mockCardWithProtocol = {
   },
 };
 
-describe('wip processor routes', () => {
+describe('agentic-team processor routes', () => {
   let app: FastifyInstance;
   let fetchSpy: ReturnType<typeof vi.spyOn>;
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
@@ -78,13 +89,17 @@ describe('wip processor routes', () => {
 
   beforeEach(async () => {
     app = fastify();
-    await app.register(wipProcessorRoutes, { prefix: '/api/kanban-processor/wip' });
+    await app.register(agenticTeamProcessorRoutes, { prefix: '/api/kanban-processor/agentic-team' });
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockGetCardById.mockReset();
     mockUpdateCard.mockReset();
+    mockMoveCard.mockReset();
+    mockGetBoardById.mockReset();
+    mockUpdateCardProcessingState.mockReset();
+    mockStartProcessing.mockReset();
   });
 
   afterEach(async () => {
@@ -95,11 +110,11 @@ describe('wip processor routes', () => {
     consoleWarnSpy.mockRestore();
   });
 
-  describe('GET /api/kanban-processor/wip/health', () => {
+  describe('GET /api/kanban-processor/agentic-team/health', () => {
     it('returns 200 with healthy status', async () => {
       const response = await app.inject({
         method: 'GET',
-        url: '/api/kanban-processor/wip/health',
+        url: '/api/kanban-processor/agentic-team/health',
       });
 
       expect(response.statusCode).toBe(200);
@@ -109,11 +124,11 @@ describe('wip processor routes', () => {
     });
   });
 
-  describe('POST /api/kanban-processor/wip/can-exit', () => {
+  describe('POST /api/kanban-processor/agentic-team/can-exit', () => {
     it('returns 200 with allowed: true', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/can-exit',
+        url: '/api/kanban-processor/agentic-team/can-exit',
         payload: {
           card: mockCard,
           target_column: 'wrap',
@@ -128,11 +143,11 @@ describe('wip processor routes', () => {
     });
   });
 
-  describe('POST /api/kanban-processor/wip/on-update', () => {
+  describe('POST /api/kanban-processor/agentic-team/on-update', () => {
     it('returns 200 with allowed: true', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-update',
+        url: '/api/kanban-processor/agentic-team/on-update',
         payload: {
           card: mockCard,
           proposed_payload: { title: 'New Title' },
@@ -147,7 +162,7 @@ describe('wip processor routes', () => {
     });
   });
 
-  describe('POST /api/kanban-processor/wip/on-enter', () => {
+  describe('POST /api/kanban-processor/agentic-team/on-enter', () => {
     it('returns 202 accepted, logs payload, and creates agent room', async () => {
       fetchSpy.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
         if (typeof url === 'string' && url.includes('/api/v1/agent-rooms')) {
@@ -162,7 +177,7 @@ describe('wip processor routes', () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-enter',
+        url: '/api/kanban-processor/agentic-team/on-enter',
         payload: {
           card: mockCard,
           board: mockBoard,
@@ -180,7 +195,7 @@ describe('wip processor routes', () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(consoleLogSpy).toHaveBeenCalledWith(
-        '[wip] Card',
+        '[agentic-team] Card',
         'TST-1',
         'payload:',
         JSON.stringify(mockCard.payload, null, 2),
@@ -193,16 +208,16 @@ describe('wip processor routes', () => {
       });
       expect(agentRoomsCall).toBeDefined();
 
-      // Verify kanban callback includes room_id
-      const kanbanCallbackCall = fetchSpy.mock.calls.find((call) => {
-        const url = call[0] as string;
-        return typeof url === 'string' && url.includes('/api/callbacks/');
-      });
-      expect(kanbanCallbackCall).toBeDefined();
-      const kanbanInit = kanbanCallbackCall![1] as { body: string };
-      const kanbanPayload = JSON.parse(kanbanInit.body);
-      expect(kanbanPayload.status).toBe('success');
-      expect(kanbanPayload.payload_updates.payload.room_id).toBe('rm_default123');
+      // Verify card payload was updated with room_id directly
+      expect(mockUpdateCard).toHaveBeenCalledWith(
+        {},
+        mockCard.board_uid,
+        mockCard.uid,
+        expect.objectContaining({
+          payload: expect.objectContaining({ room_id: 'rm_default123' }),
+        }),
+        'system:agentic-team',
+      );
     });
 
     it('composes markdown, POSTs to agent-rooms, and callbacks with room_id on success', async () => {
@@ -220,7 +235,7 @@ describe('wip processor routes', () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-enter',
+        url: '/api/kanban-processor/agentic-team/on-enter',
         payload: {
           card: mockCardWithProtocol,
           board: mockBoard,
@@ -261,16 +276,16 @@ describe('wip processor routes', () => {
       expect(markdownBody).toContain('Card: TST-1 / Test Card');
       expect(markdownBody).toContain('Build the new feature.');
 
-      // Verify kanban callback includes room_id
-      const kanbanCallbackCall = fetchSpy.mock.calls.find((call) => {
-        const url = call[0] as string;
-        return typeof url === 'string' && url.includes('/api/callbacks/');
-      });
-      expect(kanbanCallbackCall).toBeDefined();
-      const kanbanInit = kanbanCallbackCall![1] as { body: string };
-      const kanbanPayload = JSON.parse(kanbanInit.body);
-      expect(kanbanPayload.status).toBe('success');
-      expect(kanbanPayload.payload_updates.payload.room_id).toBe(roomId);
+      // Verify card payload was updated with room_id directly
+      expect(mockUpdateCard).toHaveBeenCalledWith(
+        {},
+        mockCardWithProtocol.board_uid,
+        mockCardWithProtocol.uid,
+        expect.objectContaining({
+          payload: expect.objectContaining({ room_id: roomId }),
+        }),
+        'system:agentic-team',
+      );
     });
 
     it('callbacks with error when agent-rooms returns non-2xx', async () => {
@@ -287,7 +302,7 @@ describe('wip processor routes', () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-enter',
+        url: '/api/kanban-processor/agentic-team/on-enter',
         payload: {
           card: mockCardWithProtocol,
           board: mockBoard,
@@ -314,7 +329,7 @@ describe('wip processor routes', () => {
     it('returns 400 for invalid body', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-enter',
+        url: '/api/kanban-processor/agentic-team/on-enter',
         payload: {},
       });
 
@@ -324,12 +339,12 @@ describe('wip processor routes', () => {
     });
   });
 
-  describe('POST /api/kanban-processor/wip/on-action', () => {
+  describe('POST /api/kanban-processor/agentic-team/on-action', () => {
     it('returns 202 accepted and fires callback', async () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-action',
+        url: '/api/kanban-processor/agentic-team/on-action',
         payload: {
           card: mockCard,
           board: mockBoard,
@@ -362,11 +377,11 @@ describe('wip processor routes', () => {
     });
   });
 
-  describe('POST /api/kanban-processor/wip/on-exit', () => {
+  describe('POST /api/kanban-processor/agentic-team/on-exit', () => {
     it('returns 200 acknowledged', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-exit',
+        url: '/api/kanban-processor/agentic-team/on-exit',
         payload: {
           card: mockCard,
           next_column: mockBoard.schema.columns[0],
@@ -380,11 +395,11 @@ describe('wip processor routes', () => {
     });
   });
 
-  describe('POST /api/kanban-processor/wip/_internal/room-closed', () => {
+  describe('POST /api/kanban-processor/agentic-team/_internal/room-closed', () => {
     it('returns 400 for invalid body', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/_internal/room-closed',
+        url: '/api/kanban-processor/agentic-team/_internal/room-closed',
         payload: { type: 'room_closed', roomId: 'rm_abc' },
       });
 
@@ -396,7 +411,7 @@ describe('wip processor routes', () => {
     it('returns 200 acknowledged when roomId not in registry', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/_internal/room-closed',
+        url: '/api/kanban-processor/agentic-team/_internal/room-closed',
         payload: {
           type: 'room_closed',
           roomId: 'rm_unknown',
@@ -425,7 +440,7 @@ describe('wip processor routes', () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-enter',
+        url: '/api/kanban-processor/agentic-team/on-enter',
         payload: {
           card: mockCardWithProtocol,
           board: mockBoard,
@@ -456,7 +471,7 @@ describe('wip processor routes', () => {
 
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/_internal/room-closed',
+        url: '/api/kanban-processor/agentic-team/_internal/room-closed',
         payload: {
           type: 'room_closed',
           roomId: 'rm_test123',
@@ -501,7 +516,7 @@ describe('wip processor routes', () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/on-enter',
+        url: '/api/kanban-processor/agentic-team/on-enter',
         payload: {
           card: mockCardWithProtocol,
           board: mockBoard,
@@ -513,11 +528,12 @@ describe('wip processor routes', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
+      mockUpdateCard.mockClear();
       mockGetCardById.mockReturnValue(null);
 
       const response = await app.inject({
         method: 'POST',
-        url: '/api/kanban-processor/wip/_internal/room-closed',
+        url: '/api/kanban-processor/agentic-team/_internal/room-closed',
         payload: {
           type: 'room_closed',
           roomId: 'rm_test456',
@@ -528,6 +544,184 @@ describe('wip processor routes', () => {
 
       expect(response.statusCode).toBe(200);
       expect(mockUpdateCard).not.toHaveBeenCalled();
+    });
+
+    it('transitions card to wrap column and triggers wrap processor when room closes', async () => {
+      const boardWithWrap = {
+        ...mockBoard,
+        schema: {
+          columns: [
+            mockBoard.schema.columns[0],
+            {
+              uid: 'wrap',
+              title: 'Wrap',
+              type: 'Processing' as const,
+              processor_id: 'wrap',
+              exit_logic: { default: 'done' },
+              order: 1,
+            },
+          ],
+        },
+      };
+
+      // First create a room to populate the registry
+      fetchSpy.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+        if (typeof url === 'string' && url.includes('/api/v1/agent-rooms')) {
+          return new Response(JSON.stringify({ roomId: 'rm_test789', status: 'initialized' }), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 200 });
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/agentic-team/on-enter',
+        payload: {
+          card: mockCardWithProtocol,
+          board: boardWithWrap,
+          column: boardWithWrap.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440002',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const cardInProcessing = {
+        ...mockCardWithProtocol,
+        processing_state: 'PROCESSING',
+        payload: { ...mockCardWithProtocol.payload, room_id: 'rm_test789' },
+      };
+
+      mockGetCardById.mockReturnValue(cardInProcessing);
+
+      const updatedCard = {
+        ...cardInProcessing,
+        version: 2,
+        payload: {
+          ...cardInProcessing.payload,
+          room_status: 'completed',
+          room_closed_at: '2026-04-26T10:00:00.000Z',
+          room_close_reason: 'completed',
+        },
+      };
+      mockUpdateCard.mockReturnValue(updatedCard);
+
+      const idleCard = { ...updatedCard, processing_state: 'IDLE', version: 3 };
+      mockUpdateCardProcessingState.mockReturnValue(idleCard);
+
+      const movedCard = { ...idleCard, current_status: 'wrap', version: 4 };
+      mockMoveCard.mockReturnValue(movedCard);
+
+      mockGetBoardById.mockReturnValue(boardWithWrap);
+      mockStartProcessing.mockResolvedValue({ ...movedCard, processing_state: 'PROCESSING', version: 5 });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/agentic-team/_internal/room-closed',
+        payload: {
+          type: 'room_closed',
+          roomId: 'rm_test789',
+          reason: 'completed',
+          at: '2026-04-26T10:00:00.000Z',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.status).toBe('acknowledged');
+
+      expect(mockUpdateCardProcessingState).toHaveBeenCalledWith(
+        {},
+        mockCardWithProtocol.board_uid,
+        mockCardWithProtocol.uid,
+        'PROCESSING',
+        'IDLE',
+        { is_editable: true },
+      );
+
+      expect(mockMoveCard).toHaveBeenCalledWith(
+        {},
+        mockCardWithProtocol.board_uid,
+        mockCardWithProtocol.uid,
+        'wrap',
+        'system:room-closed',
+      );
+
+      expect(mockGetBoardById).toHaveBeenCalledWith({}, mockCardWithProtocol.board_uid);
+      expect(mockStartProcessing).toHaveBeenCalled();
+    });
+
+    it('gracefully handles failure to transition to IDLE after room close', async () => {
+      // First create a room to populate the registry
+      fetchSpy.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+        if (typeof url === 'string' && url.includes('/api/v1/agent-rooms')) {
+          return new Response(JSON.stringify({ roomId: 'rm_test999', status: 'initialized' }), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 200 });
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/agentic-team/on-enter',
+        payload: {
+          card: mockCardWithProtocol,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440002',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const cardInProcessing = {
+        ...mockCardWithProtocol,
+        processing_state: 'PROCESSING',
+        payload: { ...mockCardWithProtocol.payload, room_id: 'rm_test999' },
+      };
+
+      mockGetCardById.mockReturnValue(cardInProcessing);
+
+      mockUpdateCard.mockReturnValue({
+        ...cardInProcessing,
+        version: 2,
+        payload: {
+          ...cardInProcessing.payload,
+          room_status: 'completed',
+          room_closed_at: '2026-04-26T10:00:00.000Z',
+          room_close_reason: 'completed',
+        },
+      });
+
+      // Simulate failure to transition to IDLE
+      mockUpdateCardProcessingState.mockReturnValue(null);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/agentic-team/_internal/room-closed',
+        payload: {
+          type: 'room_closed',
+          roomId: 'rm_test999',
+          reason: 'completed',
+          at: '2026-04-26T10:00:00.000Z',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.status).toBe('acknowledged');
+
+      expect(mockUpdateCardProcessingState).toHaveBeenCalled();
+      expect(mockMoveCard).not.toHaveBeenCalled();
+      expect(mockStartProcessing).not.toHaveBeenCalled();
     });
   });
 });

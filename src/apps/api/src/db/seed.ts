@@ -264,16 +264,16 @@ export function bootstrapWrapProcessor(instance: DbInstance): void {
   }).run();
 }
 
-export function bootstrapWipProcessor(instance: DbInstance): void {
+export function bootstrapAgenticTeamProcessor(instance: DbInstance): void {
   const { db } = instance;
-  const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'wip')).get();
+  const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'agentic-team')).get();
   if (existing) return;
 
   const now = new Date().toISOString();
   db.insert(processorRegistry).values({
-    processor_id: 'wip',
-    name: 'WIP Processor',
-    base_url: `${API_BASE_URL}/api/kanban-processor/wip`,
+    processor_id: 'agentic-team',
+    name: 'AI Team Processor',
+    base_url: `${API_BASE_URL}/api/kanban-processor/agentic-team`,
     health_endpoint: '/health',
     hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
     sla_seconds: 300,

@@ -17,7 +17,7 @@ import { kanbanRoutes, callbackRoutes } from './kanban/routes.js';
 import { processorRoutes } from './kanban/processor-routes.js';
 import { prepProcessorRoutes } from './kanban/processor-prep.js';
 import { wrapProcessorRoutes } from './kanban/processor-wrap.js';
-import { wipProcessorRoutes } from './kanban/processor-wip.js';
+import { agenticTeamProcessorRoutes } from './kanban/processor-agentic-team.js';
 import { devWrapupRoutes } from './dev-wrapup/routes.js';
 
 if (process.versions.bun && process.env.NODE_ENV === 'production') {
@@ -86,7 +86,7 @@ await app.register(processorRoutes, { prefix: '/api/kanban-processor/todo' });
 await app.register(processorRoutes, { prefix: '/api/kanban-processor/done' });
 await app.register(prepProcessorRoutes, { prefix: '/api/kanban-processor/prep' });
 await app.register(wrapProcessorRoutes, { prefix: '/api/kanban-processor/wrap' });
-await app.register(wipProcessorRoutes, { prefix: '/api/kanban-processor/wip' });
+await app.register(agenticTeamProcessorRoutes, { prefix: '/api/kanban-processor/agentic-team' });
 await app.register(callbackRoutes, { prefix: '/api/callbacks' });
 await app.register(devWrapupRoutes, { prefix: '/api/v1/dev-wrapup' });
 

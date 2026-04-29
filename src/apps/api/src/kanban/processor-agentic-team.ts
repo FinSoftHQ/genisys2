@@ -11,7 +11,8 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   HealthCheckResponseSchema,
 } from '@repo/shared';
-import { getCardById, updateCard } from './repository.js';
+import { getCardById, updateCard, moveCard, getBoardById, updateCardProcessingState } from './repository.js';
+import { startProcessing } from './processing-orchestrator.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
@@ -39,11 +40,11 @@ function getAgentRoomsUrl(): string {
 }
 
 function getRoomClosedCallbackUrl(): string {
-  return `${getApiBaseUrl()}/api/kanban-processor/wip/_internal/room-closed`;
+  return `${getApiBaseUrl()}/api/kanban-processor/agentic-team/_internal/room-closed`;
 }
 
 // In-memory registry: roomId -> { cardUid, boardUid }
-const wipRoomRegistry = new Map<string, { cardUid: string; boardUid: string }>();
+const agenticTeamRoomRegistry = new Map<string, { cardUid: string; boardUid: string }>();
 
 function serializeYamlValue(value: unknown, indent = ''): string {
   if (value === null || value === undefined) {
@@ -170,14 +171,14 @@ async function runWipWorkflow(
   callbackUrl: string,
 ) {
   const markdown = composeMarkdownFromPayload(card);
-  console.log('[wip] Composed markdown for card', card.display_id);
+  console.log('[agentic-team] Composed markdown for card', card.display_id);
   console.log(markdown);
 
   const roomClosedCallbackUrl = getRoomClosedCallbackUrl();
   const result = await createAgentRoom(markdown, roomClosedCallbackUrl);
 
   if ('error' in result) {
-    console.error('[wip] Card', card.display_id, result.error);
+    console.error('[agentic-team] Card', card.display_id, result.error);
     fireAndForgetCallback(callbackUrl, {
       status: 'error',
       error_message: result.error,
@@ -186,18 +187,18 @@ async function runWipWorkflow(
   }
 
   const roomId = result.roomId;
-  wipRoomRegistry.set(roomId, { cardUid: card.uid, boardUid: card.board_uid });
-  console.log('[wip] Card', card.display_id, 'created agent room:', roomId);
+  agenticTeamRoomRegistry.set(roomId, { cardUid: card.uid, boardUid: card.board_uid });
+  console.log('[agentic-team] Card', card.display_id, 'created agent room:', roomId);
 
-  fireAndForgetCallback(callbackUrl, {
-    status: 'success',
-    payload_updates: {
-      payload: {
-        ...card.payload,
-        room_id: roomId,
-      },
-    },
-  });
+  // Update card payload with room_id directly, without transitioning state.
+  // The card must stay in PROCESSING until the room actually closes.
+  updateCard(
+    {},
+    card.board_uid,
+    card.uid,
+    { payload: { ...card.payload, room_id: roomId } },
+    'system:agentic-team',
+  );
 }
 
 const RoomClosedCallbackSchema = z.object({
@@ -207,7 +208,7 @@ const RoomClosedCallbackSchema = z.object({
   at: z.string().min(1),
 });
 
-export async function wipProcessorRoutes(instance: FastifyInstance): Promise<void> {
+export async function agenticTeamProcessorRoutes(instance: FastifyInstance): Promise<void> {
   instance.get('/health', async (_request, reply) => {
     const response = HealthCheckResponseSchema.parse({ status: 'healthy' });
     return reply.status(200).send(response);
@@ -242,7 +243,7 @@ export async function wipProcessorRoutes(instance: FastifyInstance): Promise<voi
     const response = OnEnterDispatchAcceptedResponseSchema.parse({ status: 'accepted' });
 
     const card = body.data.card;
-    console.log('[wip] Card', card.display_id, 'payload:', JSON.stringify(card.payload, null, 2));
+    console.log('[agentic-team] Card', card.display_id, 'payload:', JSON.stringify(card.payload, null, 2));
 
     // Fire-and-forget: create agent room in background
     runWipWorkflow(card, body.data.callback_url);
@@ -279,17 +280,17 @@ export async function wipProcessorRoutes(instance: FastifyInstance): Promise<voi
     }
 
     const { roomId, reason, at } = body.data;
-    const record = wipRoomRegistry.get(roomId);
+    const record = agenticTeamRoomRegistry.get(roomId);
 
     if (!record) {
-      console.warn('[wip] Room closed callback for unknown room:', roomId);
+      console.warn('[agentic-team] Room closed callback for unknown room:', roomId);
       return reply.status(200).send({ status: 'acknowledged' });
     }
 
     try {
       const currentCard = getCardById({}, record.boardUid, record.cardUid);
       if (!currentCard) {
-        console.warn('[wip] Card not found for room:', roomId, 'card:', record.cardUid);
+        console.warn('[agentic-team] Card not found for room:', roomId, 'card:', record.cardUid);
         return reply.status(200).send({ status: 'acknowledged' });
       }
 
@@ -309,13 +310,57 @@ export async function wipProcessorRoutes(instance: FastifyInstance): Promise<voi
       );
 
       if (result) {
-        console.log('[wip] Room', roomId, 'closed (', reason, ') for card', record.cardUid);
+        console.log('[agentic-team] Room', roomId, 'closed (', reason, ') for card', record.cardUid);
+
+        try {
+          // 1. Transition from PROCESSING → IDLE to complete agentic-team work
+          const idleCard = updateCardProcessingState(
+            {},
+            record.boardUid,
+            record.cardUid,
+            'PROCESSING',
+            'IDLE',
+            { is_editable: true },
+          );
+          if (!idleCard) {
+            console.warn('[agentic-team] Failed to transition card to IDLE for room:', roomId);
+            return reply.status(200).send({ status: 'acknowledged' });
+          }
+
+          // 2. Move card to wrap column
+          const movedCard = moveCard(
+            {},
+            record.boardUid,
+            record.cardUid,
+            'wrap',
+            'system:room-closed',
+          );
+
+          // 3. Trigger wrap processor on-enter
+          const board = getBoardById({}, record.boardUid);
+          if (board) {
+            const wrapColumn = board.schema.columns.find((c) => c.uid === 'wrap');
+            if (wrapColumn && wrapColumn.type === 'Processing') {
+              await startProcessing({}, board, movedCard, wrapColumn as {
+                uid: string;
+                title: string;
+                type: 'Processing';
+                processor_id: string;
+                exit_logic: Record<string, string>;
+                order: number;
+              });
+            }
+          }
+        } catch (moveErr) {
+          const moveMessage = moveErr instanceof Error ? moveErr.message : String(moveErr);
+          console.warn('[agentic-team] Failed to move card after room close:', moveMessage);
+        }
       } else {
-        console.warn('[wip] Failed to update card for room:', roomId);
+        console.warn('[agentic-team] Failed to update card for room:', roomId);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn('[wip] Error handling room closed callback:', message);
+      console.warn('[agentic-team] Error handling room closed callback:', message);
     }
 
     return reply.status(200).send({ status: 'acknowledged' });
