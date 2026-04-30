@@ -28,7 +28,7 @@ describe("dev-wrapup routes", () => {
     await app.close();
   });
 
-  it("returns 200 with LLM-generated wrap-up for valid workspace_path", async () => {
+  it("returns 200 with LLM-generated wrap-up for valid workspace_path (default include=all)", async () => {
     vi.mocked(generateDevWrapup).mockResolvedValue({
       commit_message: "feat: add user authentication",
       pr_title: "Add user authentication",
@@ -50,6 +50,63 @@ describe("dev-wrapup routes", () => {
       pr_body: "## Summary\n\nAdds auth.\n\n## Changes\n\n- Login\n\n## Risks\n\nLow",
       has_staged_changes: true,
     });
+    expect(vi.mocked(generateDevWrapup)).toHaveBeenCalledWith("/home/user/projects/my-app", "all");
+  });
+
+  it("returns 200 with commit-only output when include=commit", async () => {
+    vi.mocked(generateDevWrapup).mockResolvedValue({
+      commit_message: "feat: add user authentication",
+      has_staged_changes: true,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev-wrapup",
+      payload: { workspace_path: "/home/user/projects/my-app", include: "commit" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const json = response.json();
+    expect(json).toEqual({
+      commit_message: "feat: add user authentication",
+      has_staged_changes: true,
+    });
+    expect(vi.mocked(generateDevWrapup)).toHaveBeenCalledWith("/home/user/projects/my-app", "commit");
+  });
+
+  it("returns 200 with PR-only output when include=pr", async () => {
+    vi.mocked(generateDevWrapup).mockResolvedValue({
+      pr_title: "Add user authentication",
+      pr_body: "## Summary\n\nAdds auth.\n\n## Changes\n\n- Login\n\n## Risks\n\nLow",
+      has_staged_changes: true,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev-wrapup",
+      payload: { workspace_path: "/home/user/projects/my-app", include: "pr" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const json = response.json();
+    expect(json).toEqual({
+      pr_title: "Add user authentication",
+      pr_body: "## Summary\n\nAdds auth.\n\n## Changes\n\n- Login\n\n## Risks\n\nLow",
+      has_staged_changes: true,
+    });
+    expect(vi.mocked(generateDevWrapup)).toHaveBeenCalledWith("/home/user/projects/my-app", "pr");
+  });
+
+  it("returns 400 when include is an invalid value", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev-wrapup",
+      payload: { workspace_path: "/home/user/projects/my-app", include: "invalid" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const json = response.json();
+    expect(json.error.code).toBe("INVALID_BODY");
   });
 
   it("returns 400 when workspace_path is missing", async () => {

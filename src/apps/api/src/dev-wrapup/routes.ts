@@ -9,6 +9,7 @@ import {
 
 const DevWrapupRequestSchema = z.object({
   workspace_path: z.string().min(1),
+  include: z.enum(["all", "commit", "pr"]).default("all"),
 });
 
 export async function devWrapupRoutes(instance: FastifyInstance): Promise<void> {
@@ -34,7 +35,7 @@ export async function devWrapupRoutes(instance: FastifyInstance): Promise<void> 
     }
 
     try {
-      const result = await generateDevWrapup(body.data.workspace_path);
+      const result = await generateDevWrapup(body.data.workspace_path, body.data.include);
       return reply.status(200).send(result);
     } catch (err) {
       if (err instanceof GitRepoError) {

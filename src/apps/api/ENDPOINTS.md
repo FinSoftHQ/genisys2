@@ -548,11 +548,14 @@ Endpoints
     Content-Type: application/json
   Body (JSON):
   {
-    "workspace_path": "/path/to/project"
+    "workspace_path": "/path/to/project",
+    "include": "all"          // Optional. Default: "all". Allowed: "all", "commit", "pr"
   }
 
 - Success: 200 OK
-  Body (JSON):
+  Response shape depends on the `include` parameter:
+
+  `include: "all"` (default):
   {
     "commit_message": "feat: add user authentication",
     "pr_title": "Add user authentication",
@@ -560,8 +563,21 @@ Endpoints
     "has_staged_changes": true
   }
 
+  `include: "commit"`:
+  {
+    "commit_message": "feat: add user authentication",
+    "has_staged_changes": true
+  }
+
+  `include: "pr"`:
+  {
+    "pr_title": "Add user authentication",
+    "pr_body": "## Summary\n\nAdds auth.\n\n## Changes\n\n- Login\n\n## Risks\n\nLow",
+    "has_staged_changes": true
+  }
+
 - Error responses:
-  - 400 `INVALID_BODY` — missing or invalid `workspace_path` (e.g. empty string, not a string)
+  - 400 `INVALID_BODY` — missing or invalid `workspace_path`, or invalid `include` value
   - 400 `INVALID_PATH` — `workspace_path` contains `..` path-traversal characters
   - 422 `NOT_A_GIT_REPO` — `workspace_path` is not a git repository
   - 502 `GENERATION_FAILED` — LLM generation failed or produced invalid/unsatisfiable output

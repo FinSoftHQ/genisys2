@@ -9,13 +9,27 @@ import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 
 const GENERATION_TIMEOUT_MS = 60_000;
 
-const WrapupResponseSchema = z.object({
+const WrapupResponseAllSchema = z.object({
   commit_message: z
     .string()
     .regex(
       /^(feat|fix|chore|docs|refactor|test|build|ci|perf|style|revert)(\(.+\))?!?: .+$/,
       "commit_message must follow Conventional Commits format"
     ),
+  pr_title: z.string().min(1).max(200),
+  pr_body: z.string().min(1),
+});
+
+const WrapupResponseCommitSchema = z.object({
+  commit_message: z
+    .string()
+    .regex(
+      /^(feat|fix|chore|docs|refactor|test|build|ci|perf|style|revert)(\(.+\))?!?: .+$/,
+      "commit_message must follow Conventional Commits format"
+    ),
+});
+
+const WrapupResponsePrSchema = z.object({
   pr_title: z.string().min(1).max(200),
   pr_body: z.string().min(1),
 });
@@ -80,16 +94,43 @@ function validateGitRepo(workspacePath: string): void {
   }
 }
 
-const SYSTEM_PROMPT = `You are a senior engineer preparing a commit and PR for review.
+function buildSystemPrompt(include: "all" | "commit" | "pr"): string {
+  const base = `You are a senior engineer preparing a commit and PR for review.
 
 Your task:
 1. Inspect the git state of the current workspace by running:
    - git diff --staged
    - git log --oneline -5
-2. Based on the staged changes, generate a development wrap-up.
+2. Based on the staged changes, generate the requested output.
 
 Constraints:
-- Output MUST be valid JSON only. No markdown code fences. No explanatory text before or after the JSON.
+- Output MUST be valid JSON only. No markdown code fences. No explanatory text before or after the JSON.`;
+
+  if (include === "commit") {
+    return `${base}
+- commit_message must follow Conventional Commits format: type(scope)?: description
+  Allowed types: feat, fix, chore, docs, refactor, test, build, ci, perf, style, revert
+  Must be a single line, lowercase type, concise.
+
+JSON schema:
+{
+  "commit_message": "string"
+}`;
+  }
+
+  if (include === "pr") {
+    return `${base}
+- pr_title should be a clear, descriptive title for the Pull Request.
+- pr_body should be markdown-formatted with these sections: ## Summary, ## Changes, ## Risks
+
+JSON schema:
+{
+  "pr_title": "string",
+  "pr_body": "string"
+}`;
+  }
+
+  return `${base}
 - commit_message must follow Conventional Commits format: type(scope)?: description
   Allowed types: feat, fix, chore, docs, refactor, test, build, ci, perf, style, revert
   Must be a single line, lowercase type, concise.
@@ -102,8 +143,9 @@ JSON schema:
   "pr_title": "string",
   "pr_body": "string"
 }`;
+}
 
-async function runPiSession(workspacePath: string): Promise<unknown> {
+async function runPiSession(workspacePath: string, prompt: string): Promise<unknown> {
   const { session } = await createAgentSession({
     cwd: workspacePath,
     sessionManager: SessionManager.inMemory(workspacePath),
@@ -120,7 +162,7 @@ async function runPiSession(workspacePath: string): Promise<unknown> {
   });
 
   try {
-    await session.prompt(SYSTEM_PROMPT);
+    await session.prompt(prompt);
 
     // Wait for agent_end with a polling loop (isStreaming becomes false)
     const start = Date.now();
@@ -163,13 +205,26 @@ async function runPiSession(workspacePath: string): Promise<unknown> {
   }
 }
 
+export type DevWrapupResult =
+  | { commit_message: string; pr_title: string; pr_body: string; has_staged_changes: boolean }
+  | { commit_message: string; has_staged_changes: boolean }
+  | { pr_title: string; pr_body: string; has_staged_changes: boolean };
+
 export async function generateDevWrapup(
-  workspacePath: string
-): Promise<{ commit_message: string; pr_title: string; pr_body: string; has_staged_changes: boolean }> {
+  workspacePath: string,
+  include: "all" | "commit" | "pr" = "all"
+): Promise<DevWrapupResult> {
   validateGitRepo(workspacePath);
 
+  const schema =
+    include === "commit"
+      ? WrapupResponseCommitSchema
+      : include === "pr"
+        ? WrapupResponsePrSchema
+        : WrapupResponseAllSchema;
+
   const result = await Promise.race([
-    runPiSession(workspacePath),
+    runPiSession(workspacePath, buildSystemPrompt(include)),
     new Promise<never>((_, reject) => {
       setTimeout(() => {
         reject(new TimeoutError("LLM generation timed out after 60s"));
@@ -177,7 +232,7 @@ export async function generateDevWrapup(
     }),
   ]);
 
-  const parsed = WrapupResponseSchema.safeParse(result);
+  const parsed = schema.safeParse(result);
   if (!parsed.success) {
     throw new GenerationError(
       `LLM output validation failed: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ")}`
@@ -187,5 +242,5 @@ export async function generateDevWrapup(
   return {
     ...parsed.data,
     has_staged_changes: hasStagedChanges(workspacePath),
-  };
+  } as DevWrapupResult;
 }
