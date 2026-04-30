@@ -58,6 +58,16 @@ export const callbackTokens = sqliteTable('callback_tokens', {
   created_at: text('created_at').notNull(),
 });
 
+export const cardRelationships = sqliteTable('card_relationships', {
+  parent_card_uid: text('parent_card_uid').notNull(),
+  child_card_uid: text('child_card_uid').notNull(),
+  relationship_type: text('relationship_type').notNull().default('dependency'),
+  created_at: text('created_at').notNull(),
+}, (table) => ({
+  parentIdx: index('card_relationships_parent_idx').on(table.parent_card_uid),
+  childIdx: index('card_relationships_child_idx').on(table.child_card_uid),
+}));
+
 export const consumedCallbackTokens = sqliteTable('consumed_callback_tokens', {
   token: text('token').primaryKey(),
   consumed_at: text('consumed_at').notNull(),
