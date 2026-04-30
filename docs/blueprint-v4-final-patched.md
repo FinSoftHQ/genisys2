@@ -740,7 +740,7 @@ When an async hook SLA expires, it enters the `dlq` table.
 
 ### C. Related Documents
 - OpenAPI 3.0 Specification (`openapi-spec.yaml`)
-- Database Schema (`database-schema.md`)
+- Database Schema (`db-schema-rev4-patched.md`)
 - State Machine Diagram (`state-machine.mmd`)
 - Sequence Diagram (`sequence-diagram.mmd`)
 
