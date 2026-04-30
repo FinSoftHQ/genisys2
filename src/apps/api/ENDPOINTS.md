@@ -556,7 +556,8 @@ Endpoints
   {
     "commit_message": "feat: add user authentication",
     "pr_title": "Add user authentication",
-    "pr_body": "## Summary\n\nAdds auth.\n\n## Changes\n\n- Login\n\n## Risks\n\nLow"
+    "pr_body": "## Summary\n\nAdds auth.\n\n## Changes\n\n- Login\n\n## Risks\n\nLow",
+    "has_staged_changes": true
   }
 
 - Error responses:

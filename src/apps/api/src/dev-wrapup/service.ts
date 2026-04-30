@@ -41,6 +41,20 @@ export class GenerationError extends Error {
   }
 }
 
+function hasStagedChanges(workspacePath: string): boolean {
+  try {
+    const output = execSync("git diff --cached --name-only", {
+      cwd: workspacePath,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+      timeout: 5_000,
+    });
+    return output.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function validateGitRepo(workspacePath: string): void {
   try {
     const stats = statSync(workspacePath);
@@ -151,7 +165,7 @@ async function runPiSession(workspacePath: string): Promise<unknown> {
 
 export async function generateDevWrapup(
   workspacePath: string
-): Promise<{ commit_message: string; pr_title: string; pr_body: string }> {
+): Promise<{ commit_message: string; pr_title: string; pr_body: string; has_staged_changes: boolean }> {
   validateGitRepo(workspacePath);
 
   const result = await Promise.race([
@@ -170,5 +184,8 @@ export async function generateDevWrapup(
     );
   }
 
-  return parsed.data;
+  return {
+    ...parsed.data,
+    has_staged_changes: hasStagedChanges(workspacePath),
+  };
 }

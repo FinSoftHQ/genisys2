@@ -82,6 +82,7 @@ async function runWrapWorkflow(
       commit_message: string;
       pr_title: string;
       pr_body: string;
+      has_staged_changes?: boolean;
     };
 
     if (
@@ -92,9 +93,21 @@ async function runWrapWorkflow(
       throw new Error('dev-wrapup API returned invalid response shape');
     }
 
-    // 2. Git add, commit, push
+    // 2. Git add, then verify staged changes before committing
     await execFilePromise('git', ['add', '.'], { cwd: workspacePath, timeout: 30_000 });
-    await execFilePromise('git', ['commit', '-m', wrapupData.commit_message], { cwd: workspacePath, timeout: 30_000 });
+
+    const { stdout: stagedFiles } = await execFilePromise('git', ['diff', '--cached', '--name-only'], {
+      cwd: workspacePath,
+      timeout: 10_000,
+    });
+    const hasStagedChanges = stagedFiles.trim().length > 0;
+
+    if (hasStagedChanges) {
+      await execFilePromise('git', ['commit', '-m', wrapupData.commit_message], { cwd: workspacePath, timeout: 30_000 });
+    } else {
+      console.log(`[wrap] Card ${card.display_id}: no staged changes, skipping commit`);
+    }
+
     await execFilePromise('git', ['push', 'origin', `surii/${card.display_id}`], { cwd: workspacePath, timeout: 60_000 });
 
     // 3. Verify gh auth and create PR
@@ -103,15 +116,26 @@ async function runWrapWorkflow(
     console.log(`[wrap] gh auth status:\n${authStatus}`);
 
     console.log(`[wrap] Card ${card.display_id}: creating PR via gh CLI`);
-    await execFilePromise(
-      'gh',
-      [
-        'pr', 'create',
-        '--title', wrapupData.pr_title,
-        '--body', wrapupData.pr_body,
-      ],
-      { cwd: workspacePath, timeout: 30_000 },
-    );
+    try {
+      await execFilePromise(
+        'gh',
+        [
+          'pr', 'create',
+          '--title', wrapupData.pr_title,
+          '--body', wrapupData.pr_body,
+        ],
+        { cwd: workspacePath, timeout: 30_000 },
+      );
+    } catch (prErr) {
+      const prMessage = prErr instanceof Error ? prErr.message : String(prErr);
+      const isBenignError =
+        /already exists|no commits between/i.test(prMessage);
+      if (isBenignError) {
+        console.log(`[wrap] Card ${card.display_id}: PR creation skipped — ${prMessage}`);
+      } else {
+        throw prErr;
+      }
+    }
 
     // 6. Success callback
     fireAndForgetCallback(callbackUrl, {

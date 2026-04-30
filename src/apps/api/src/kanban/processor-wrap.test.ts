@@ -22,14 +22,27 @@ vi.mock('node:child_process', () => ({
     const opts = args.length > 2 && typeof args[args.length - 2] === 'object' && args[args.length - 2] !== null
       ? (args[args.length - 2] as Record<string, unknown>)
       : {};
-    mockExecFile(args[0], ...(args.slice(1, args.length - 2) as unknown[]), opts);
+    const result = mockExecFile(args[0], ...(args.slice(1, args.length - 2) as unknown[]), opts);
     let stdout = '';
+    let stderr = '';
+    let error: Error | null = null;
     const allArgs = args.slice(1, args.length - 2).flat() as unknown[];
     const cmdArgs = allArgs.filter((a): a is string => typeof a === 'string');
-    if (cmdArgs.includes('auth') && cmdArgs.includes('status')) {
+    if (result && typeof result === 'object') {
+      if ('error' in result) {
+        const r = result as { error: Error | null; stdout?: string; stderr?: string };
+        error = r.error;
+        stdout = r.stdout ?? '';
+        stderr = r.stderr ?? '';
+      } else if ('stdout' in result) {
+        stdout = (result as { stdout: string }).stdout;
+      }
+    } else if (cmdArgs.includes('auth') && cmdArgs.includes('status')) {
       stdout = 'github.com\n  ✓ Logged in to github.com\n';
+    } else if (cmdArgs.includes('diff') && cmdArgs.includes('--cached') && cmdArgs.includes('--name-only')) {
+      stdout = 'src/index.ts\n';
     }
-    if (cb) cb(null, stdout, '');
+    if (cb) cb(error, stdout, stderr);
     return {} as any;
   },
 }));
@@ -91,6 +104,7 @@ describe('wrap processor routes', () => {
             commit_message: 'feat: add feature',
             pr_title: '[TST-1] Add feature',
             pr_body: '## Summary\n\nThis PR adds a feature.',
+            has_staged_changes: true,
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
@@ -239,10 +253,26 @@ describe('wrap processor routes', () => {
       );
     });
 
-    it('fires error callback when dev-wrapup API fails', async () => {
+    it('skips commit when there are no staged changes but still pushes and creates PR', async () => {
+      mockExecFile.mockImplementation((file, ...rest) => {
+        const args = rest.flat().filter((a): a is string => typeof a === 'string');
+        if (file === 'git' && args.includes('diff') && args.includes('--cached') && args.includes('--name-only')) {
+          return { stdout: '' };
+        }
+        return undefined;
+      });
+
       fetchSpy.mockImplementation(async (url) => {
         if (String(url).includes('/api/v1/dev-wrapup')) {
-          return new Response(JSON.stringify({ error: 'bad' }), { status: 500 });
+          return new Response(
+            JSON.stringify({
+              commit_message: 'feat: add feature',
+              pr_title: '[TST-1] Add feature',
+              pr_body: '## Summary\n\nThis PR adds a feature.',
+              has_staged_changes: false,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
         }
         return new Response(null, { status: 200 });
       });
@@ -258,6 +288,95 @@ describe('wrap processor routes', () => {
           column: mockBoard.schema.columns[0],
           callback_url: callbackUrl,
           idempotency_key: '550e8400-e29b-41d4-a716-446655440006',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const commitCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'git' && (call[1] as string[]).includes('commit')
+      );
+      expect(commitCalls).toHaveLength(0);
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['push', 'origin', 'surii/TST-1']),
+        expect.anything(),
+      );
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining([
+          'pr', 'create',
+          '--title', '[TST-1] Add feature',
+          '--body', '## Summary\n\nThis PR adds a feature.',
+        ]),
+        expect.anything(),
+      );
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+
+    it('fires success callback when gh pr create fails with benign error', async () => {
+      mockExecFile.mockImplementation((file, ...rest) => {
+        const args = rest.flat().filter((a): a is string => typeof a === 'string');
+        if (file === 'gh' && args.includes('pr') && args.includes('create')) {
+          return { error: new Error('stderr: GraphQL: No commits between main and surii/TST-1'), stdout: '', stderr: 'GraphQL: No commits between main and surii/TST-1' };
+        }
+        if (file === 'git' && args.includes('diff') && args.includes('--cached') && args.includes('--name-only')) {
+          return { stdout: 'src/index.ts\n' };
+        }
+        return undefined;
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440007';
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/wrap/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440008',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+
+    it('fires error callback when dev-wrapup API fails', async () => {
+      fetchSpy.mockImplementation(async (url) => {
+        if (String(url).includes('/api/v1/dev-wrapup')) {
+          return new Response(JSON.stringify({ error: 'bad' }), { status: 500 });
+        }
+        return new Response(null, { status: 200 });
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440009';
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/wrap/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440010',
         },
       });
 
