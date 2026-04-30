@@ -15,6 +15,8 @@ import {
   ProcessorCallbackRequestSchema,
   AuditLogQuerySchema,
   BoardStreamRequestHeadersSchema,
+  CreateCardRelationshipRequestSchema,
+  CardFamilyResponseSchema,
 } from '@repo/shared';
 import { randomUUID } from 'node:crypto';
 import {
@@ -29,6 +31,9 @@ import {
   getProcessorById,
   listBoards,
   createCallbackToken,
+  createCardRelationship,
+  deleteCardRelationship,
+  getCardFamily,
 } from './repository.js';
 import { dispatchSyncHook, dispatchOnUpdateHook, dispatchAsyncHook, dispatchFireAndForgetHook } from './hook-dispatcher.js';
 import { consumeCallback, startProcessing } from './processing-orchestrator.js';
@@ -142,6 +147,66 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     }
 
     return reply.status(200).send({ data: { card } });
+  });
+
+  instance.get('/:boardId/cards/:cardId/family', async (request, reply) => {
+    const params = CardPathParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const card = await callRepo(getCardById, params.data.boardId, params.data.cardId);
+    if (!card) {
+      return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
+    }
+
+    const family = await callRepo(getCardFamily, params.data.boardId, params.data.cardId);
+    return reply.status(200).send({ data: { card, ...family } });
+  });
+
+  instance.post('/:boardId/cards/:cardId/relationships', async (request, reply) => {
+    const params = CardPathParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const body = CreateCardRelationshipRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
+    }
+
+    try {
+      const relationship = await callRepo(createCardRelationship, params.data.boardId, params.data.cardId, body.data.child_card_uid, body.data.relationship_type ?? 'dependency');
+      const family = await callRepo(getCardFamily, params.data.boardId, params.data.cardId);
+      return reply.status(201).send({ data: { relationship, ...family } });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === 'BOARD_NOT_FOUND') {
+        return reply.status(404).send(errorResponse('BOARD_NOT_FOUND', 'Board not found'));
+      }
+      if (message === 'CARD_NOT_FOUND') {
+        return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
+      }
+      if (message === 'RELATIONSHIP_CYCLE') {
+        return reply.status(409).send(errorResponse('RELATIONSHIP_CYCLE', 'Cannot create circular card relationships'));
+      }
+      return reply.status(500).send(errorResponse('RELATIONSHIP_CREATE_FAILED', 'Failed to create relationship'));
+    }
+  });
+
+  instance.delete('/:boardId/cards/:cardId/relationships/:childCardId', async (request, reply) => {
+    const params = zodCardRelationshipParams.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const removed = await callRepo(deleteCardRelationship, params.data.boardId, params.data.cardId, params.data.childCardId);
+    if (!removed) {
+      return reply.status(404).send(errorResponse('RELATIONSHIP_NOT_FOUND', 'Relationship not found'));
+    }
+
+    const family = await callRepo(getCardFamily, params.data.boardId, params.data.cardId);
+    return reply.status(200).send({ data: { ...family } });
   });
 
   instance.patch('/:boardId/cards/:cardId', async (request, reply) => {

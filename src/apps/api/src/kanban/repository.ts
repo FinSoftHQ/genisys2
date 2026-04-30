@@ -9,7 +9,9 @@ import { DEFAULT_PROCESSOR_BASE_URL } from './config.js';
 import { resolveDb, openDb, closeDb } from './db-context.js';
 import { appendEventLog } from './event-log.js';
 import { broadcastEvent } from './board-stream.js';
+import { enrichCardFamily, getCardFamily, createCardRelationship, deleteCardRelationship, queueRollupForCard } from './family-tree.js';
 export { resolveDb, openDb, closeDb };
+export { createCardRelationship, deleteCardRelationship, getCardFamily };
 
 export function getPragmas(instance: unknown) {
   const sqlite = resolveDb(instance).sqlite;
@@ -267,7 +269,7 @@ export function getSnapshot(
   const parsedCards: CardEntity[] = [];
   for (const card of boardCards) {
     const parsed = CardEntitySchema.safeParse(card);
-    if (parsed.success) parsedCards.push(parsed.data);
+    if (parsed.success) parsedCards.push(enrichCardFamily(instance, parsed.data));
   }
   return { board: boardParsed.data, cards: parsedCards };
 }
@@ -281,7 +283,7 @@ export function getCardById(instance: unknown, boardUid: string, cardUid: string
     .get();
   if (!card) return undefined;
   const parsed = CardEntitySchema.safeParse(card);
-  return parsed.success ? parsed.data : undefined;
+  return parsed.success ? enrichCardFamily(instance, parsed.data) : undefined;
 }
 
 export function createCard(
@@ -343,7 +345,7 @@ export function createCard(
       to_column: null,
     } as Parameters<typeof appendEventLog>[1]);
 
-    const parsedCard = CardEntitySchema.parse(cardData);
+    const parsedCard = enrichCardFamily(instance, CardEntitySchema.parse(cardData));
     const createdEvent = BoardStreamSseEventSchema.parse({
       id: logEvent.event_id,
       event: 'CARD_CREATED',
@@ -426,6 +428,7 @@ export function updateCard(
 
     const parsed = CardEntitySchema.safeParse(result);
     if (parsed.success) {
+      const enriched = enrichCardFamily(instance, parsed.data);
       const changedFields: Array<'title' | 'description' | 'payload' | 'processing_state' | 'is_editable' | 'current_status' | 'version' | 'updated_at'> = ['version', 'updated_at'];
       if (input.title !== undefined) changedFields.push('title');
       if (input.description !== undefined) changedFields.push('description');
@@ -438,13 +441,15 @@ export function updateCard(
           board_uid: boardUid,
           actor,
           timestamp: logEvent.timestamp,
-          card: parsed.data,
+          card: enriched,
           changed_fields: changedFields,
         },
       });
       broadcastEvent(boardUid, updatedEvent);
+      queueRollupForCard(instance, boardUid, cardUid, actor);
+      return enriched;
     }
-    return parsed.success ? parsed.data : null;
+    return null;
   });
 }
 
@@ -519,6 +524,7 @@ export function moveCard(instance: unknown, boardUid: string, cardUid: string, t
     if (!parsed.success) {
       throw new Error('CARD_NOT_FOUND');
     }
+    const enriched = enrichCardFamily(instance, parsed.data);
     const movedEvent = BoardStreamSseEventSchema.parse({
       id: logEvent.event_id,
       event: 'CARD_MOVED',
@@ -527,13 +533,14 @@ export function moveCard(instance: unknown, boardUid: string, cardUid: string, t
         board_uid: boardUid,
         actor,
         timestamp: logEvent.timestamp,
-        card: parsed.data,
+        card: enriched,
         from_column: fromColumn,
         to_column: toColumn,
       },
     });
     broadcastEvent(boardUid, movedEvent);
-    return parsed.data;
+    queueRollupForCard(instance, boardUid, cardUid, actor);
+    return enriched;
   });
 }
 
@@ -621,7 +628,10 @@ export function updateCardProcessingState(
 
   if (!result) return null;
   const parsed = CardEntitySchema.safeParse(result);
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) return null;
+  const enriched = enrichCardFamily(instance, parsed.data);
+  queueRollupForCard(instance, boardUid, cardUid, 'system:processor');
+  return enriched;
 }
 
 export function upsertProcessorRegistry(

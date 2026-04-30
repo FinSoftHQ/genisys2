@@ -247,6 +247,16 @@ export const BoardSequenceEntitySchema = z
 
 export const CardProcessingStateSchema = z.enum(['IDLE', 'PROCESSING', 'ERROR']);
 
+export const CardFamilyMetadataSchema = z
+  .object({
+    uid: CardIdSchema,
+    display_id: DisplayIdSchema,
+    status: ColumnUidSchema,
+    title: z.string().min(1).max(200),
+    processing_state: CardProcessingStateSchema.optional(),
+  })
+  .strict();
+
 export const CardEntitySchema = z
   .object({
     uid: CardIdSchema,
@@ -261,6 +271,8 @@ export const CardEntitySchema = z
     current_status: ColumnUidSchema,
     created_at: IsoDateTimeSchema,
     updated_at: IsoDateTimeSchema,
+    parents: z.array(CardFamilyMetadataSchema).optional(),
+    children: z.array(CardFamilyMetadataSchema).optional(),
   })
   .strict()
   .superRefine((card, ctx) => {
@@ -445,6 +457,34 @@ export const MoveCardResponseSchema = z
   })
   .strict();
 
+export const CardRelationshipEntitySchema = z
+  .object({
+    parent_card_uid: CardIdSchema,
+    child_card_uid: CardIdSchema,
+    relationship_type: z.string().min(1).max(50),
+    created_at: IsoDateTimeSchema,
+  })
+  .strict();
+
+export const CreateCardRelationshipRequestSchema = z
+  .object({
+    child_card_uid: CardIdSchema,
+    relationship_type: z.string().min(1).max(50).optional(),
+  })
+  .strict();
+
+export const CardFamilyResponseSchema = z
+  .object({
+    data: z
+      .object({
+        card: CardEntitySchema,
+        parents: z.array(CardFamilyMetadataSchema),
+        children: z.array(CardFamilyMetadataSchema),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const EventIdSchema = z.string().min(1, { message: 'event_id is required' }).brand('EventId');
 
 export const EventLogCategorySchema = z.enum(['routing', 'lifecycle', 'user_action', 'system']);
@@ -601,7 +641,33 @@ export const BoardReloadEventDataSchema = z
   })
   .strict();
 
-export const BoardStreamEventTypeSchema = z.enum(['CARD_CREATED', 'CARD_UPDATED', 'CARD_MOVED', 'BOARD_RELOAD']);
+export const RollupChangedEventDataSchema = z
+  .object({
+    event_id: EventIdSchema,
+    board_uid: BoardIdSchema,
+    actor: z.string().min(1).max(200),
+    timestamp: IsoDateTimeSchema,
+    parent_card_uid: CardIdSchema,
+    parent_card: CardFamilyMetadataSchema,
+    completed_children: z.number().int().min(0),
+    total_children: z.number().int().min(0),
+    health_score: z.number().min(0).max(100),
+  })
+  .strict();
+
+export const BoardStreamEventTypeSchema = z.enum(['CARD_CREATED', 'CARD_UPDATED', 'CARD_MOVED', 'ROLLUP_CHANGED', 'BOARD_RELOAD']);
+
+export const RollupChangedSseEventSchema = z
+  .object({
+    id: EventIdSchema,
+    event: z.literal('ROLLUP_CHANGED'),
+    data: RollupChangedEventDataSchema,
+  })
+  .strict()
+  .refine((value) => value.id === value.data.event_id, {
+    path: ['data', 'event_id'],
+    message: 'data.event_id must match id',
+  });
 
 export const CardCreatedSseEventSchema = z
   .object({
@@ -655,6 +721,7 @@ export const BoardStreamSseEventSchema = z.discriminatedUnion('event', [
   CardCreatedSseEventSchema,
   CardUpdatedSseEventSchema,
   CardMovedSseEventSchema,
+  RollupChangedSseEventSchema,
   BoardReloadSseEventSchema,
 ]);
 
@@ -971,19 +1038,25 @@ export type SyncHookDispatchRequest = z.infer<typeof SyncHookDispatchRequestSche
 export type MoveCardBlockedResponse = z.infer<typeof MoveCardBlockedResponseSchema>;
 export type MoveCardRequest = z.infer<typeof MoveCardRequestSchema>;
 export type MoveCardResponse = z.infer<typeof MoveCardResponseSchema>;
+export type CardRelationshipEntity = z.infer<typeof CardRelationshipEntitySchema>;
+export type CreateCardRelationshipRequest = z.infer<typeof CreateCardRelationshipRequestSchema>;
+export type CardFamilyResponse = z.infer<typeof CardFamilyResponseSchema>;
 export type EventId = z.infer<typeof EventIdSchema>;
 export type EventLogCategory = z.infer<typeof EventLogCategorySchema>;
 export type EventLogAction = z.infer<typeof EventLogActionSchema>;
 export type EventLogLifecycleEvent = z.infer<typeof EventLogLifecycleEventSchema>;
 export type EventLogRow = z.infer<typeof EventLogRowSchema>;
+export type CardFamilyMetadata = z.infer<typeof CardFamilyMetadataSchema>;
 export type CardCreatedEventData = z.infer<typeof CardCreatedEventDataSchema>;
 export type CardUpdatedEventData = z.infer<typeof CardUpdatedEventDataSchema>;
 export type CardMovedEventData = z.infer<typeof CardMovedEventDataSchema>;
 export type BoardReloadEventData = z.infer<typeof BoardReloadEventDataSchema>;
+export type RollupChangedEventData = z.infer<typeof RollupChangedEventDataSchema>;
 export type BoardStreamEventType = z.infer<typeof BoardStreamEventTypeSchema>;
 export type CardCreatedSseEvent = z.infer<typeof CardCreatedSseEventSchema>;
 export type CardUpdatedSseEvent = z.infer<typeof CardUpdatedSseEventSchema>;
 export type CardMovedSseEvent = z.infer<typeof CardMovedSseEventSchema>;
+export type RollupChangedSseEvent = z.infer<typeof RollupChangedSseEventSchema>;
 export type BoardReloadSseEvent = z.infer<typeof BoardReloadSseEventSchema>;
 export type BoardStreamSseEvent = z.infer<typeof BoardStreamSseEventSchema>;
 export type BoardStreamRequestHeaders = z.infer<typeof BoardStreamRequestHeadersSchema>;

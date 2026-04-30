@@ -9,6 +9,7 @@ import {
   getBoardById,
   moveCard,
 } from './repository.js';
+import { queueRollupForCard, enrichCardFamily } from './family-tree.js';
 import { dispatchAsyncHook, dispatchFireAndForgetHook, dispatchSyncHook } from './hook-dispatcher.js';
 import { getDefaultProcessor } from './config.js';
 import { appendEventLog } from './event-log.js';
@@ -337,6 +338,9 @@ export async function consumeCallback(
     return { result: parsed.data, tokenRow };
   });
 
+  const enrichedResult = enrichCardFamily(db, transactionResult.result);
+  queueRollupForCard(db, transactionResult.result.board_uid, transactionResult.result.uid, 'system:processor');
+
   // After transaction: handle post-callback column transitions
   if (payload.status === 'success' && payload.move_to_column) {
     const board = database.select().from(boards).where(eq(boards.uid, transactionResult.result.board_uid)).get();
@@ -345,7 +349,7 @@ export async function consumeCallback(
     // 1. Fire on-exit for the source column
     const processor = getProcessorById(db, transactionResult.tokenRow.processor_id) ?? getDefaultProcessor(transactionResult.tokenRow.processor_id);
     dispatchFireAndForgetHook(processor, 'on-exit', {
-      card: transactionResult.result,
+      card: enrichedResult,
       next_column: targetColumn,
       actor: 'system:processor',
     });
@@ -355,7 +359,7 @@ export async function consumeCallback(
       const boardParsed = BoardEntitySchema.safeParse(board);
       if (boardParsed.success) {
         try {
-          await startProcessing(db, boardParsed.data, transactionResult.result, targetColumn as {
+          await startProcessing(db, boardParsed.data, enrichedResult, targetColumn as {
             uid: string;
             title: string;
             type: 'Processing';
@@ -382,5 +386,5 @@ export async function consumeCallback(
     }
   }
 
-  return transactionResult.result;
+  return enrichedResult;
 }
