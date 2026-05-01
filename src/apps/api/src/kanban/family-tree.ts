@@ -14,6 +14,7 @@ type CardRef = { boardUid: string; cardUid: string };
 function toFamilyMetadata(card: CardEntity): CardFamilyMetadata {
   return CardFamilyMetadataSchema.parse({
     uid: card.uid,
+    board_uid: card.board_uid,
     display_id: card.display_id,
     status: card.current_status,
     title: card.title,
