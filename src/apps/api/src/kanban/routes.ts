@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import {
   BoardPathParamsSchema,
+  BoardIdSchema,
+  CardIdSchema,
   CardPathParamsSchema,
   CreateBoardRequestSchema,
   CreateBoardSuiteRequestSchema,
@@ -206,7 +209,11 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
   });
 
   instance.delete('/:boardId/cards/:cardId/relationships/:childCardId', async (request, reply) => {
-    const params = zodCardRelationshipParams.safeParse(request.params);
+    const params = z.object({
+      boardId: BoardIdSchema,
+      cardId: CardIdSchema,
+      childCardId: CardIdSchema,
+    }).strict().safeParse(request.params);
     if (!params.success) {
       return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
     }
@@ -574,6 +581,55 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     }
 
     return reply.status(200).send({ data: { card, status: 'accepted' } });
+  });
+}
+
+export async function suiteRoutes(instance: FastifyInstance): Promise<void> {
+  instance.post('/', async (request, reply) => {
+    const body = CreateBoardSuiteRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
+    }
+    try {
+      const result = await callRepo(createSuite, body.data.template, body.data.title);
+      return reply.status(201).send(BoardSuiteResponseSchema.parse({ data: result }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send(errorResponse('SUITE_CREATE_FAILED', message || 'Failed to create suite'));
+    }
+  });
+
+  instance.get('/', async (_request, reply) => {
+    const suites = await callRepo(listSuites);
+    return reply.status(200).send(ListBoardSuitesResponseSchema.parse({ data: { suites } }));
+  });
+
+  instance.get('/:suiteId', async (request, reply) => {
+    const params = z.object({ suiteId: BoardIdSchema }).strict().safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const suite = await callRepo(getSuiteById, params.data.suiteId);
+    if (!suite) {
+      return reply.status(404).send(errorResponse('SUITE_NOT_FOUND', 'Suite not found'));
+    }
+
+    return reply.status(200).send(BoardSuiteResponseSchema.parse({ data: suite }));
+  });
+
+  instance.get('/:suiteId/snapshot', async (request, reply) => {
+    const params = z.object({ suiteId: BoardIdSchema }).strict().safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const snapshot = await callRepo(getSuiteSnapshot, params.data.suiteId);
+    if (!snapshot) {
+      return reply.status(404).send(errorResponse('SUITE_NOT_FOUND', 'Suite not found'));
+    }
+
+    return reply.status(200).send(BoardSuiteSnapshotResponseSchema.parse({ data: snapshot }));
   });
 }
 

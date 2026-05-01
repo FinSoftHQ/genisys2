@@ -141,7 +141,7 @@ async function runPrepWorkflow(
     await execFilePromise('git', ['checkout', '-b', `surii/${card.display_id}`], { cwd: workspacePath });
 
     // 4. Success callback
-    console.log(`[prep] Card ${card.display_id}: success, moving to agentic-team`);
+    console.log(`[prep] Card ${card.display_id}: success, moving to planning`);
     const updatedPayload: Record<string, unknown> = {
       ...card.payload,
       workspace_path: workspacePath,
@@ -161,7 +161,7 @@ async function runPrepWorkflow(
       payload_updates: {
         payload: updatedPayload,
       },
-      move_to_column: 'agentic-team',
+      move_to_column: 'planning',
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
