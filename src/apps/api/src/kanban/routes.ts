@@ -3,6 +3,7 @@ import {
   BoardPathParamsSchema,
   CardPathParamsSchema,
   CreateBoardRequestSchema,
+  CreateBoardSuiteRequestSchema,
   UpdateBoardRequestSchema,
   CreateCardRequestSchema,
   UpdateCardRequestSchema,
@@ -17,6 +18,9 @@ import {
   BoardStreamRequestHeadersSchema,
   CreateCardRelationshipRequestSchema,
   CardFamilyResponseSchema,
+  ListBoardSuitesResponseSchema,
+  BoardSuiteResponseSchema,
+  BoardSuiteSnapshotResponseSchema,
 } from '@repo/shared';
 import { randomUUID } from 'node:crypto';
 import {
@@ -27,9 +31,13 @@ import {
   updateCard,
   moveCard,
   createBoard,
+  createSuite,
   updateBoard,
   getProcessorById,
   listBoards,
+  listSuites,
+  getSuiteById,
+  getSuiteSnapshot,
   createCallbackToken,
   createCardRelationship,
   deleteCardRelationship,
@@ -65,7 +73,10 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
     }
     try {
-      const board = await callRepo(createBoard, body.data.template, body.data.title, body.data.prefix);
+      const query = request.query as Record<string, unknown> | undefined;
+      const suiteUid = typeof query?.suite === 'string' ? query.suite : undefined;
+      const role = typeof query?.role === 'string' ? query.role : undefined;
+      const board = await callRepo(createBoard, body.data.template, body.data.title, body.data.prefix, suiteUid ?? null, role ?? null);
       return reply.status(201).send({ data: { board } });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -176,7 +187,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     }
 
     try {
-      const relationship = await callRepo(createCardRelationship, params.data.boardId, params.data.cardId, body.data.child_card_uid, body.data.relationship_type ?? 'dependency');
+      const relationship = await callRepo(createCardRelationship, params.data.boardId, params.data.cardId, body.data.child_card_uid, body.data.relationship_type ?? 'dependency', body.data.parent_board_uid ?? params.data.boardId, body.data.child_board_uid ?? params.data.boardId);
       const family = await callRepo(getCardFamily, params.data.boardId, params.data.cardId);
       return reply.status(201).send({ data: { relationship, ...family } });
     } catch (err) {

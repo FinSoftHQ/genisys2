@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { BoardEntity, CardEntity, CardFamilyMetadata } from '@repo/shared';
 import { BoardEntitySchema, BoardStreamSseEventSchema, CardEntitySchema, CardFamilyMetadataSchema } from '@repo/shared';
 import { resolveDb } from './db-context.js';
@@ -8,6 +8,8 @@ import { broadcastEvent } from './board-stream.js';
 import { boards, cards, cardRelationships } from '../db/schema.js';
 
 const rollupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+type CardRef = { boardUid: string; cardUid: string };
 
 function toFamilyMetadata(card: CardEntity): CardFamilyMetadata {
   return CardFamilyMetadataSchema.parse({
@@ -37,6 +39,17 @@ function getCardByUid(instance: unknown, boardUid: string, cardUid: string): Car
   return parsed.success ? parsed.data : undefined;
 }
 
+function getCardAcrossBoards(instance: unknown, boardUid: string, cardUid: string): CardEntity | undefined {
+  const card = getCardByUid(instance, boardUid, cardUid);
+  if (card) return card;
+
+  const { db } = resolveDb(instance);
+  const row = db.select().from(cards).where(eq(cards.uid, cardUid)).get();
+  if (!row) return undefined;
+  const parsed = CardEntitySchema.safeParse(row);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function getBoard(instance: unknown, boardUid: string): BoardEntity | undefined {
   const { db } = resolveDb(instance);
   const row = db.select().from(boards).where(eq(boards.uid, boardUid)).get();
@@ -45,7 +58,26 @@ function getBoard(instance: unknown, boardUid: string): BoardEntity | undefined 
   return parsed.success ? parsed.data : undefined;
 }
 
-function collectRelatedCardIds(instance: unknown, boardUid: string, cardUid: string, direction: 'parents' | 'children'): string[] {
+function resolveRelatedBoardUid(
+  relation: {
+    parent_board_uid?: string | null;
+    child_board_uid?: string | null;
+  },
+  direction: 'parents' | 'children',
+  fallbackBoardUid: string,
+): string {
+  if (direction === 'parents') {
+    return relation.parent_board_uid ?? fallbackBoardUid;
+  }
+  return relation.child_board_uid ?? fallbackBoardUid;
+}
+
+function collectRelatedRefs(
+  instance: unknown,
+  boardUid: string,
+  cardUid: string,
+  direction: 'parents' | 'children',
+): CardRef[] {
   const { db } = resolveDb(instance);
   const relationRows = db
     .select()
@@ -53,65 +85,54 @@ function collectRelatedCardIds(instance: unknown, boardUid: string, cardUid: str
     .where(direction === 'parents' ? eq(cardRelationships.child_card_uid, cardUid) : eq(cardRelationships.parent_card_uid, cardUid))
     .all();
 
-  const ids = direction === 'parents'
-    ? relationRows.map((row) => row.parent_card_uid)
-    : relationRows.map((row) => row.child_card_uid);
-
-  if (ids.length === 0) return [];
-
-  const relatedRows = db
-    .select()
-    .from(cards)
-    .where(and(eq(cards.board_uid, boardUid), inArray(cards.uid, ids)))
-    .all();
-
-  const found = new Set(relatedRows.map((row) => row.uid));
-  return ids.filter((id) => found.has(id));
-}
-
-function collectDescendants(instance: unknown, boardUid: string, rootCardUid: string): Set<string> {
-  const visited = new Set<string>();
-  const queue = [rootCardUid];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const children = collectRelatedCardIds(instance, boardUid, current, 'children');
-    for (const child of children) {
-      if (!visited.has(child)) {
-        visited.add(child);
-        queue.push(child);
-      }
+  const refs: CardRef[] = [];
+  for (const relation of relationRows) {
+    const relatedCardUid = direction === 'parents' ? relation.parent_card_uid : relation.child_card_uid;
+    const relatedBoardUid = resolveRelatedBoardUid(relation, direction, boardUid);
+    const card = getCardByUid(instance, relatedBoardUid, relatedCardUid);
+    if (card) {
+      refs.push({ boardUid: relatedBoardUid, cardUid: relatedCardUid });
     }
   }
-  return visited;
+  return refs;
 }
 
-function collectAncestors(instance: unknown, boardUid: string, rootCardUid: string): Set<string> {
+function collectReachableRefs(
+  instance: unknown,
+  rootBoardUid: string,
+  rootCardUid: string,
+  direction: 'parents' | 'children',
+): CardRef[] {
   const visited = new Set<string>();
-  const queue = [rootCardUid];
+  const queue: CardRef[] = [{ boardUid: rootBoardUid, cardUid: rootCardUid }];
+  const results: CardRef[] = [];
+
   while (queue.length > 0) {
     const current = queue.shift()!;
-    const parents = collectRelatedCardIds(instance, boardUid, current, 'parents');
-    for (const parent of parents) {
-      if (!visited.has(parent)) {
-        visited.add(parent);
-        queue.push(parent);
-      }
+    const neighbors = collectRelatedRefs(instance, current.boardUid, current.cardUid, direction);
+    for (const neighbor of neighbors) {
+      const key = `${neighbor.boardUid}:${neighbor.cardUid}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      results.push(neighbor);
+      queue.push(neighbor);
     }
   }
-  return visited;
+
+  return results;
 }
 
 export function getCardFamily(instance: unknown, boardUid: string, cardUid: string): {
   parents: CardFamilyMetadata[];
   children: CardFamilyMetadata[];
 } {
-  const parents = collectRelatedCardIds(instance, boardUid, cardUid, 'parents')
-    .map((uid) => getCardByUid(instance, boardUid, uid))
+  const parents = collectRelatedRefs(instance, boardUid, cardUid, 'parents')
+    .map((ref) => getCardByUid(instance, ref.boardUid, ref.cardUid))
     .filter(Boolean)
     .map((card) => toFamilyMetadata(card as CardEntity));
 
-  const children = collectRelatedCardIds(instance, boardUid, cardUid, 'children')
-    .map((uid) => getCardByUid(instance, boardUid, uid))
+  const children = collectRelatedRefs(instance, boardUid, cardUid, 'children')
+    .map((ref) => getCardByUid(instance, ref.boardUid, ref.cardUid))
     .filter(Boolean)
     .map((card) => toFamilyMetadata(card as CardEntity));
 
@@ -133,7 +154,16 @@ export function createCardRelationship(
   parentCardUid: string,
   childCardUid: string,
   relationshipType = 'dependency',
-): { parent_card_uid: string; child_card_uid: string; relationship_type: string; created_at: string } {
+  parentBoardUid?: string | null,
+  childBoardUid?: string | null,
+): {
+  parent_card_uid: string;
+  child_card_uid: string;
+  parent_board_uid: string | null;
+  child_board_uid: string | null;
+  relationship_type: string;
+  created_at: string;
+} {
   if (parentCardUid === childCardUid) {
     throw new Error('RELATIONSHIP_CYCLE');
   }
@@ -144,14 +174,17 @@ export function createCardRelationship(
     throw new Error('BOARD_NOT_FOUND');
   }
 
-  const parent = getCardByUid(instance, boardUid, parentCardUid);
-  const child = getCardByUid(instance, boardUid, childCardUid);
+  const resolvedParentBoardUid = parentBoardUid ?? boardUid;
+  const resolvedChildBoardUid = childBoardUid ?? boardUid;
+
+  const parent = getCardByUid(instance, resolvedParentBoardUid, parentCardUid);
+  const child = getCardByUid(instance, resolvedChildBoardUid, childCardUid);
   if (!parent || !child) {
     throw new Error('CARD_NOT_FOUND');
   }
 
-  const descendants = collectDescendants(instance, boardUid, childCardUid);
-  if (descendants.has(parentCardUid)) {
+  const descendants = collectReachableRefs(instance, resolvedChildBoardUid, childCardUid, 'children');
+  if (descendants.some((ref) => ref.boardUid === resolvedParentBoardUid && ref.cardUid === parentCardUid)) {
     throw new Error('RELATIONSHIP_CYCLE');
   }
 
@@ -161,18 +194,27 @@ export function createCardRelationship(
     .where(and(eq(cardRelationships.parent_card_uid, parentCardUid), eq(cardRelationships.child_card_uid, childCardUid)))
     .get();
   if (existing) {
-    return existing;
+    return existing as {
+      parent_card_uid: string;
+      child_card_uid: string;
+      parent_board_uid: string | null;
+      child_board_uid: string | null;
+      relationship_type: string;
+      created_at: string;
+    };
   }
 
   const now = new Date().toISOString();
   const relationship = {
     parent_card_uid: parentCardUid,
     child_card_uid: childCardUid,
+    parent_board_uid: resolvedParentBoardUid,
+    child_board_uid: resolvedChildBoardUid,
     relationship_type: relationshipType,
     created_at: now,
   };
   db.insert(cardRelationships).values(relationship).run();
-  queueRollupForCard(instance, boardUid, parentCardUid, 'system:relationship');
+  queueRollupForCard(instance, resolvedParentBoardUid, parentCardUid, 'system:relationship');
   return relationship;
 }
 
@@ -208,8 +250,8 @@ function broadcastRollup(instance: unknown, boardUid: string, parentCardUid: str
   const parentCard = getCardByUid(instance, boardUid, parentCardUid);
   if (!parentCard) return;
 
-  const children = collectRelatedCardIds(instance, boardUid, parentCardUid, 'children')
-    .map((uid) => getCardByUid(instance, boardUid, uid))
+  const children = collectRelatedRefs(instance, boardUid, parentCardUid, 'children')
+    .map((ref) => getCardByUid(instance, ref.boardUid, ref.cardUid))
     .filter(Boolean) as CardEntity[];
 
   const completedChildren = children.filter((card) => isCompletedCard(board, card)).length;
@@ -269,9 +311,9 @@ function scheduleRollup(instance: unknown, boardUid: string, parentCardUid: stri
 }
 
 export function queueRollupForCard(instance: unknown, boardUid: string, cardUid: string, actor = 'system'): void {
-  const ancestors = collectAncestors(instance, boardUid, cardUid);
-  for (const parentUid of ancestors) {
-    scheduleRollup(instance, boardUid, parentUid, actor);
+  const ancestors = collectReachableRefs(instance, boardUid, cardUid, 'parents');
+  for (const parentRef of ancestors) {
+    scheduleRollup(instance, parentRef.boardUid, parentRef.cardUid, actor);
   }
 }
 

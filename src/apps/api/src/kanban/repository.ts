@@ -1,10 +1,10 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { BoardEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema, CallbackTokenEntitySchema, ProcessingStateTransitionSchema, BoardStreamSseEventSchema } from '@repo/shared';
-import { boards, boardSequences, cards, processorRegistry, callbackTokens } from '../db/schema.js';
+import { BoardEntitySchema, BoardSuiteEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema, CallbackTokenEntitySchema, ProcessingStateTransitionSchema, BoardStreamSseEventSchema } from '@repo/shared';
+import { boards, boardSuites, boardSequences, cards, processorRegistry, callbackTokens } from '../db/schema.js';
 import type { ProcessorRegistryEntity } from '@repo/shared';
 import '../db/seed.js';
-import type { BoardEntity, CardEntity } from '@repo/shared';
+import type { BoardEntity, BoardSuiteEntity, CardEntity } from '@repo/shared';
 import { DEFAULT_PROCESSOR_BASE_URL } from './config.js';
 import { resolveDb, openDb, closeDb } from './db-context.js';
 import { appendEventLog } from './event-log.js';
@@ -58,10 +58,37 @@ const BOARD_TEMPLATES: Record<string, { title: string; columns: Array<{ uid: str
     columns: [
       { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'todo' }, order: 0 },
       { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'prep' }, order: 1 },
-      { uid: 'prep', title: 'Prep', type: 'Processing', processor_id: 'prep', exit_logic: { default: 'agentic-team' }, order: 2 },
-      { uid: 'agentic-team', title: 'AI Team', type: 'Processing', processor_id: 'agentic-team', exit_logic: { default: 'wrap' }, order: 3 },
-      { uid: 'wrap', title: 'Wrap', type: 'Processing', processor_id: 'wrap', exit_logic: { default: 'done' }, order: 4 },
-      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 5 },
+      { uid: 'prep', title: 'Prep', type: 'Processing', processor_id: 'prep', exit_logic: { default: 'planning' }, order: 2 },
+      { uid: 'planning', title: 'Planning', type: 'Processing', processor_id: 'planning', exit_logic: { default: 'delegated' }, order: 3 },
+      { uid: 'delegated', title: 'Delegated', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'wrap' }, order: 4 },
+      { uid: 'wrap', title: 'Wrap', type: 'Processing', processor_id: 'wrap', exit_logic: { default: 'done' }, order: 5 },
+      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 6 },
+    ],
+  },
+  task: {
+    title: 'Task Board',
+    columns: [
+      { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'todo' }, order: 0 },
+      { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'agentic-team' }, order: 1 },
+      { uid: 'agentic-team', title: 'AI Team', type: 'Processing', processor_id: 'agentic-team', exit_logic: { default: 'done' }, order: 2 },
+      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 3 },
+    ],
+  },
+};
+
+const SUITE_TEMPLATES: Record<string, {
+  title: string;
+  boards: Array<{ role: string; template: string; title?: string }>;
+}> = {
+  default: {
+    title: 'New Suite',
+    boards: [{ role: 'primary', template: 'default' }],
+  },
+  development: {
+    title: 'Development Suite',
+    boards: [
+      { role: 'primary', template: 'development', title: 'Development Board' },
+      { role: 'tasks', template: 'task', title: 'Task Board' },
     ],
   },
 };
@@ -71,6 +98,8 @@ export function createBoard(
   template: string = 'default',
   title?: string,
   prefix?: string,
+  suiteUid?: string | null,
+  role?: string | null,
 ): BoardEntity {
   const { db } = resolveDb(instance);
   const uid = randomUUID();
@@ -104,6 +133,8 @@ export function createBoard(
     uid,
     title: title || templateConfig.title,
     prefix: finalPrefix,
+    suite_uid: suiteUid ?? null,
+    role: role ?? null,
     schema: {
       columns: templateConfig.columns,
     },
@@ -234,6 +265,90 @@ export function seedBoard(instance: unknown): BoardEntity {
   }
 
   return parsed.data;
+}
+
+export function createSuite(
+  instance: unknown,
+  template: string = 'default',
+  title?: string,
+): {
+  suite: { uid: string; title: string; created_at: string; updated_at: string };
+  boards: BoardEntity[];
+} {
+  const { db } = resolveDb(instance);
+  const now = new Date().toISOString();
+  const suiteUid = randomUUID();
+  const templateConfig = SUITE_TEMPLATES[template] ?? SUITE_TEMPLATES.default;
+
+  return db.transaction(() => {
+    const suite = {
+      uid: suiteUid,
+      title: title ?? templateConfig.title,
+      created_at: now,
+      updated_at: now,
+    };
+    db.insert(boardSuites).values(suite).run();
+
+    const createdBoards = templateConfig.boards.map((entry) =>
+      createBoard(instance, entry.template, entry.title, undefined, suiteUid, entry.role),
+    );
+
+    return { suite, boards: createdBoards };
+  });
+}
+
+export function listSuites(instance: unknown): Array<{
+  suite: { uid: string; title: string; created_at: string; updated_at: string };
+  boards: BoardEntity[];
+}> {
+  const { db } = resolveDb(instance);
+  const suites = db.select().from(boardSuites).all();
+  return suites.map((suite) => {
+    const suiteBoardsRows = db.select().from(boards).where(eq(boards.suite_uid, suite.uid)).all();
+    const suiteBoards: BoardEntity[] = [];
+    for (const row of suiteBoardsRows) {
+      const parsed = BoardEntitySchema.safeParse(row);
+      if (parsed.success) suiteBoards.push(parsed.data);
+    }
+    return { suite, boards: suiteBoards };
+  });
+}
+
+export function getSuiteById(instance: unknown, suiteUid: string): {
+  suite: { uid: string; title: string; created_at: string; updated_at: string };
+  boards: BoardEntity[];
+} | null {
+  const { db } = resolveDb(instance);
+  const suite = db.select().from(boardSuites).where(eq(boardSuites.uid, suiteUid)).get();
+  if (!suite) return null;
+  const suiteBoardsRows = db.select().from(boards).where(eq(boards.suite_uid, suiteUid)).all();
+  const suiteBoards: BoardEntity[] = [];
+  for (const row of suiteBoardsRows) {
+    const parsed = BoardEntitySchema.safeParse(row);
+    if (parsed.success) suiteBoards.push(parsed.data);
+  }
+  return { suite, boards: suiteBoards };
+}
+
+export function getSuiteSnapshot(instance: unknown, suiteUid: string): {
+  suite: { uid: string; title: string; created_at: string; updated_at: string };
+  boards: Array<{ board: BoardEntity; cards: CardEntity[] }>;
+} | null {
+  const suiteData = getSuiteById(instance, suiteUid);
+  if (!suiteData) return null;
+
+  const boardSnapshots = suiteData.boards.map((board) => {
+    const snapshot = getSnapshot(instance, board.uid);
+    return {
+      board,
+      cards: snapshot?.cards ?? [],
+    };
+  });
+
+  return {
+    suite: suiteData.suite,
+    boards: boardSnapshots,
+  };
 }
 
 export function listBoards(instance: unknown): BoardEntity[] {

@@ -23,6 +23,9 @@ export type SqlitePragmas = z.infer<typeof SqlitePragmasSchema>;
 export const BoardIdSchema = z.string().uuid({ message: 'boardId must be a valid UUID' }).brand('BoardId');
 export type BoardId = z.infer<typeof BoardIdSchema>;
 
+export const BoardSuiteIdSchema = z.string().uuid({ message: 'suiteId must be a valid UUID' }).brand('BoardSuiteId');
+export type BoardSuiteId = z.infer<typeof BoardSuiteIdSchema>;
+
 export const CardIdSchema = z.string().uuid({ message: 'cardId must be a valid UUID' }).brand('CardId');
 export type CardId = z.infer<typeof CardIdSchema>;
 
@@ -74,7 +77,8 @@ export const ProcessorRegistryAuthTypeSchema = z.enum(['bearer', 'oauth2', 'none
 
 export const BoardColumnTypeSchema = z.enum(['Normal', 'Processing']);
 
-export const BoardTemplateSchema = z.enum(['default', 'development']);
+export const BoardTemplateSchema = z.enum(['default', 'development', 'task']);
+export const BoardSuiteTemplateSchema = z.enum(['default', 'development']);
 export type BoardTemplate = z.infer<typeof BoardTemplateSchema>;
 
 export const BoardColumnSchema = z
@@ -231,8 +235,19 @@ export const BoardEntitySchema = z
     uid: BoardIdSchema,
     title: z.string().min(1).max(200),
     prefix: BoardPrefixSchema,
+    suite_uid: BoardSuiteIdSchema.nullable().optional(),
+    role: z.string().min(1).max(50).nullable().optional(),
     schema: BoardSchemaDocumentSchema,
     permissions: BoardPermissionsSchema,
+    created_at: IsoDateTimeSchema,
+    updated_at: IsoDateTimeSchema,
+  })
+  .strict();
+
+export const BoardSuiteEntitySchema = z
+  .object({
+    uid: BoardSuiteIdSchema,
+    title: z.string().min(1).max(200),
     created_at: IsoDateTimeSchema,
     updated_at: IsoDateTimeSchema,
   })
@@ -250,6 +265,7 @@ export const CardProcessingStateSchema = z.enum(['IDLE', 'PROCESSING', 'ERROR'])
 export const CardFamilyMetadataSchema = z
   .object({
     uid: CardIdSchema,
+    board_uid: BoardIdSchema,
     display_id: DisplayIdSchema,
     status: ColumnUidSchema,
     title: z.string().min(1).max(200),
@@ -461,6 +477,8 @@ export const CardRelationshipEntitySchema = z
   .object({
     parent_card_uid: CardIdSchema,
     child_card_uid: CardIdSchema,
+    parent_board_uid: BoardIdSchema.nullable().optional(),
+    child_board_uid: BoardIdSchema.nullable().optional(),
     relationship_type: z.string().min(1).max(50),
     created_at: IsoDateTimeSchema,
   })
@@ -469,6 +487,8 @@ export const CardRelationshipEntitySchema = z
 export const CreateCardRelationshipRequestSchema = z
   .object({
     child_card_uid: CardIdSchema,
+    parent_board_uid: BoardIdSchema.optional(),
+    child_board_uid: BoardIdSchema.optional(),
     relationship_type: z.string().min(1).max(50).optional(),
   })
   .strict();
@@ -991,6 +1011,46 @@ export const CreateBoardRequestSchema = z
   })
   .strict();
 
+export const CreateBoardSuiteRequestSchema = z
+  .object({
+    template: BoardSuiteTemplateSchema.optional().default('default'),
+    title: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+export const BoardSuiteWithBoardsSchema = z
+  .object({
+    suite: BoardSuiteEntitySchema,
+    boards: z.array(BoardEntitySchema),
+  })
+  .strict();
+
+export const ListBoardSuitesResponseSchema = z
+  .object({
+    data: z.object({
+      suites: z.array(BoardSuiteWithBoardsSchema),
+    }).strict(),
+  })
+  .strict();
+
+export const BoardSuiteResponseSchema = z
+  .object({
+    data: BoardSuiteWithBoardsSchema,
+  })
+  .strict();
+
+export const BoardSuiteSnapshotResponseSchema = z
+  .object({
+    data: z.object({
+      suite: BoardSuiteEntitySchema,
+      boards: z.array(z.object({
+        board: BoardEntitySchema,
+        cards: z.array(CardEntitySchema),
+      }).strict()),
+    }).strict(),
+  })
+  .strict();
+
 export const UpdateBoardRequestSchema = z
   .object({
     title: z.string().min(1).max(200).optional(),
@@ -1038,8 +1098,11 @@ export type SyncHookDispatchRequest = z.infer<typeof SyncHookDispatchRequestSche
 export type MoveCardBlockedResponse = z.infer<typeof MoveCardBlockedResponseSchema>;
 export type MoveCardRequest = z.infer<typeof MoveCardRequestSchema>;
 export type MoveCardResponse = z.infer<typeof MoveCardResponseSchema>;
+export type BoardSuiteEntity = z.infer<typeof BoardSuiteEntitySchema>;
+export type BoardSuiteWithBoards = z.infer<typeof BoardSuiteWithBoardsSchema>;
 export type CardRelationshipEntity = z.infer<typeof CardRelationshipEntitySchema>;
 export type CreateCardRelationshipRequest = z.infer<typeof CreateCardRelationshipRequestSchema>;
+export type CreateBoardSuiteRequest = z.infer<typeof CreateBoardSuiteRequestSchema>;
 export type CardFamilyResponse = z.infer<typeof CardFamilyResponseSchema>;
 export type EventId = z.infer<typeof EventIdSchema>;
 export type EventLogCategory = z.infer<typeof EventLogCategorySchema>;
@@ -1078,6 +1141,9 @@ export type ProcessorCallbackResponse = z.infer<typeof ProcessorCallbackResponse
 export type CallbackTokenRejectedResponse = z.infer<typeof CallbackTokenRejectedResponseSchema>;
 export type CreateBoardRequest = z.infer<typeof CreateBoardRequestSchema>;
 export type CreateBoardResponse = z.infer<typeof CreateBoardResponseSchema>;
+export type ListBoardSuitesResponse = z.infer<typeof ListBoardSuitesResponseSchema>;
+export type BoardSuiteResponse = z.infer<typeof BoardSuiteResponseSchema>;
+export type BoardSuiteSnapshotResponse = z.infer<typeof BoardSuiteSnapshotResponseSchema>;
 export type UpdateBoardRequest = z.infer<typeof UpdateBoardRequestSchema>;
 export type UpdateBoardResponse = z.infer<typeof UpdateBoardResponseSchema>;
 export type ApiError = z.infer<typeof ApiErrorSchema>;
