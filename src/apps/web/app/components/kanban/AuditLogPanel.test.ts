@@ -100,6 +100,25 @@ const mockEventLifecycle: EventLogRow = {
   to_column: null,
 };
 
+const mockEventRollup: EventLogRow = {
+  event_id: '550e8400-e29b-41d4-a716-446655440003',
+  card_uid: validCardId,
+  board_uid: boardId,
+  timestamp: '2026-04-27T00:02:00.000Z',
+  actor: 'system:relationship',
+  action: 'ROLLUP_CHANGED',
+  category: 'system',
+  lifecycle_event: null,
+  from_column: null,
+  to_column: null,
+  metadata: {
+    display_id: 'TST-1',
+    completed_children: 2,
+    total_children: 4,
+    health_score: 50,
+  },
+};
+
 function mountPanel(props: { open?: boolean } = {}) {
   return mount(AuditLogPanel, {
     props: { boardId, open: true, ...props },
@@ -167,6 +186,21 @@ describe('AuditLogPanel', () => {
 
     expect(wrapper.text()).toContain('PROCESSING_STARTED');
     expect(wrapper.text()).toContain('system');
+  });
+
+  it('renders rollup change summaries', async () => {
+    fetchMock.mockResolvedValue({
+      data: { events: [mockEventRollup], next_cursor: null },
+    });
+
+    const wrapper = mountPanel({ open: false });
+    await wrapper.setProps({ open: true });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('ROLLUP_CHANGED');
+    expect(wrapper.text()).toContain('rollup changed for TST-1');
+    expect(wrapper.text()).toContain('2/4 complete');
+    expect(wrapper.text()).toContain('health 50%');
   });
 
   it('shows empty state when no events', async () => {

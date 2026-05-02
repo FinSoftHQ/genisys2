@@ -275,6 +275,37 @@ describe('useBoardRealtime', () => {
       expect(onReload).toHaveBeenCalled();
       rt.disconnect();
     });
+
+    it('triggers onReload callback for ROLLUP_CHANGED events', async () => {
+      const onReload = vi.fn();
+      const rt = useBoardRealtime(mockBoardId, { onReload });
+      void rt.connect();
+      await flushPromises();
+
+      streamControllers[0].push(
+        sseChunk('550e8400-e29b-41d4-a716-446655440007', 'ROLLUP_CHANGED', {
+          event_id: '550e8400-e29b-41d4-a716-446655440007',
+          board_uid: mockBoardId,
+          actor: 'system:relationship',
+          timestamp: '2026-04-27T00:03:00.000Z',
+          parent_card_uid: mockCard.uid,
+          parent_card: {
+            uid: mockCard.uid,
+            board_uid: mockBoardId,
+            display_id: 'TST-1',
+            status: 'backlog',
+            title: 'Test Card',
+          },
+          completed_children: 2,
+          total_children: 4,
+          health_score: 50,
+        }),
+      );
+      await flushPromises();
+
+      expect(onReload).toHaveBeenCalled();
+      rt.disconnect();
+    });
   });
 
   describe('reconnect behavior', () => {
