@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
+import { execFilePromise } from './exec-helpers.js';
 import {
   OnEnterDispatchRequestSchema,
   OnUpdateRequestSchema,
@@ -14,23 +14,6 @@ import {
 } from '@repo/shared';
 import { parseProtocolFromString } from '@repo/shared';
 
-function execFilePromise(
-  file: string,
-  args: string[],
-  options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv },
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { ...options, env: { ...process.env, ...options.env } }, (err, stdout, stderr) => {
-      if (err) {
-        const stderrMsg = stderr?.trim() ? `\nstderr: ${stderr.trim()}` : '';
-        reject(new Error(`${err.message}${stderrMsg}`));
-      } else {
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '' });
-      }
-    });
-  });
-}
-
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
 }
@@ -43,8 +26,8 @@ function fireAndForgetCallback(callbackUrl: string, payload: Record<string, unkn
       Authorization: 'Bearer processor',
     },
     body: JSON.stringify(payload),
-  }).catch(() => {
-    // Fire-and-forget: failures are silently ignored.
+  }).catch((err) => {
+    console.error('[prep] Callback failed:', err instanceof Error ? err.message : String(err));
   });
 }
 
@@ -141,7 +124,7 @@ async function runPrepWorkflow(
     await execFilePromise('git', ['checkout', '-b', `surii/${card.display_id}`], { cwd: workspacePath });
 
     // 4. Success callback
-    console.log(`[prep] Card ${card.display_id}: success, moving to agentic-team`);
+    console.log(`[prep] Card ${card.display_id}: success, moving to planning`);
     const updatedPayload: Record<string, unknown> = {
       ...card.payload,
       workspace_path: workspacePath,
@@ -161,7 +144,7 @@ async function runPrepWorkflow(
       payload_updates: {
         payload: updatedPayload,
       },
-      move_to_column: 'agentic-team',
+      move_to_column: 'planning',
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -26,8 +26,8 @@ function fireAndForgetCallback(callbackUrl: string, payload: Record<string, unkn
       Authorization: 'Bearer processor',
     },
     body: JSON.stringify(payload),
-  }).catch(() => {
-    // Fire-and-forget: failures are silently ignored.
+  }).catch((err) => {
+    console.error('[agentic-team] Callback failed:', err instanceof Error ? err.message : String(err));
   });
 }
 
@@ -327,28 +327,30 @@ export async function agenticTeamProcessorRoutes(instance: FastifyInstance): Pro
             return reply.status(200).send({ status: 'acknowledged' });
           }
 
-          // 2. Move card to wrap column
-          const movedCard = moveCard(
-            {},
-            record.boardUid,
-            record.cardUid,
-            'wrap',
-            'system:room-closed',
-          );
-
-          // 3. Trigger wrap processor on-enter
           const board = getBoardById({}, record.boardUid);
           if (board) {
-            const wrapColumn = board.schema.columns.find((c) => c.uid === 'wrap');
-            if (wrapColumn && wrapColumn.type === 'Processing') {
-              await startProcessing({}, board, movedCard, wrapColumn as {
-                uid: string;
-                title: string;
-                type: 'Processing';
-                processor_id: string;
-                exit_logic: Record<string, string>;
-                order: number;
-              });
+            const currentColumn = board.schema.columns.find((c) => c.uid === idleCard.current_status);
+            const nextColumnUid = currentColumn?.exit_logic?.default;
+            if (nextColumnUid) {
+              const movedCard = moveCard(
+                {},
+                record.boardUid,
+                record.cardUid,
+                nextColumnUid,
+                'system:room-closed',
+              );
+
+              const nextColumn = board.schema.columns.find((c) => c.uid === nextColumnUid);
+              if (nextColumn && nextColumn.type === 'Processing') {
+                await startProcessing({}, board, movedCard, nextColumn as {
+                  uid: string;
+                  title: string;
+                  type: 'Processing';
+                  processor_id: string;
+                  exit_logic: Record<string, string>;
+                  order: number;
+                });
+              }
             }
           }
         } catch (moveErr) {

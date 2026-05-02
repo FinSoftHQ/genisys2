@@ -240,6 +240,30 @@ export function bootstrapPrepProcessor(instance: DbInstance): void {
   }).run();
 }
 
+export function bootstrapPlanningProcessor(instance: DbInstance): void {
+  const { db } = instance;
+  const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'planning')).get();
+  if (existing) return;
+
+  const now = new Date().toISOString();
+  db.insert(processorRegistry).values({
+    processor_id: 'planning',
+    name: 'Planning Processor',
+    base_url: `${API_BASE_URL}/api/kanban-processor/planning`,
+    health_endpoint: '/health',
+    hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+    sla_seconds: 300,
+    max_sla_seconds: 86400,
+    auth_type: 'none',
+    auth_config: null,
+    hmac_secret: 'dev-secret',
+    status: 'healthy',
+    last_health_check: now,
+    created_at: now,
+    updated_at: now,
+  }).run();
+}
+
 export function bootstrapWrapProcessor(instance: DbInstance): void {
   const { db } = instance;
   const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'wrap')).get();
@@ -250,6 +274,30 @@ export function bootstrapWrapProcessor(instance: DbInstance): void {
     processor_id: 'wrap',
     name: 'Wrap Processor',
     base_url: `${API_BASE_URL}/api/kanban-processor/wrap`,
+    health_endpoint: '/health',
+    hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+    sla_seconds: 300,
+    max_sla_seconds: 86400,
+    auth_type: 'none',
+    auth_config: null,
+    hmac_secret: 'dev-secret',
+    status: 'healthy',
+    last_health_check: now,
+    created_at: now,
+    updated_at: now,
+  }).run();
+}
+
+export function bootstrapDelegatedProcessor(instance: DbInstance): void {
+  const { db } = instance;
+  const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'delegated')).get();
+  if (existing) return;
+
+  const now = new Date().toISOString();
+  db.insert(processorRegistry).values({
+    processor_id: 'delegated',
+    name: 'Delegated Processor',
+    base_url: `${API_BASE_URL}/api/kanban-processor/delegated`,
     health_endpoint: '/health',
     hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
     sla_seconds: 300,

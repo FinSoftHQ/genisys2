@@ -14,6 +14,13 @@ const isLocked = computed(() =>
   props.card.processing_state === 'PROCESSING' || props.card.processing_state === 'ERROR'
 );
 
+const isDelegated = computed(() => props.card.current_status === 'delegated');
+
+const isTaskCard = computed(() => {
+  const payload = props.card.payload;
+  return payload && typeof payload.parent_card_uid === 'string';
+});
+
 const cardRootUi = computed(() => {
   const base = 'relative overflow-hidden';
   const cursor = isLocked.value
@@ -51,6 +58,15 @@ function onDragStart(event: DragEvent) {
       <UIcon name="i-lucide-loader-2" class="size-6 animate-spin text-info" />
     </div>
 
+    <!-- Delegated indicator -->
+    <div
+      v-if="isDelegated"
+      class="absolute top-2 right-2 z-[5]"
+      title="Delegated"
+    >
+      <UIcon name="i-lucide-git-branch" class="size-4 text-muted" />
+    </div>
+
     <div class="flex items-start justify-between gap-2">
       <div class="flex-1 min-w-0">
         <p class="font-medium text-sm text-default truncate">{{ card.title }}</p>
@@ -66,7 +82,8 @@ function onDragStart(event: DragEvent) {
         @click="emit('edit', card)"
       />
     </div>
-    <div class="flex items-center gap-2 mt-2">
+
+    <div class="flex flex-wrap items-center gap-2 mt-2">
       <UBadge variant="subtle" size="xs">{{ card.display_id }}</UBadge>
       <UBadge
         v-if="card.processing_state !== 'IDLE'"
@@ -75,6 +92,38 @@ function onDragStart(event: DragEvent) {
         size="xs"
       >
         {{ card.processing_state }}
+      </UBadge>
+      <UBadge
+        v-if="isTaskCard"
+        color="warning"
+        variant="subtle"
+        size="xs"
+      >
+        Task
+      </UBadge>
+    </div>
+
+    <!-- Family badges -->
+    <div v-if="card.parents?.length || card.children?.length" class="flex flex-wrap items-center gap-2 mt-2">
+      <UBadge
+        v-if="card.parents?.length"
+        color="neutral"
+        variant="soft"
+        size="xs"
+        class="gap-1"
+      >
+        <UIcon name="i-lucide-arrow-up" class="size-3" />
+        Parent: {{ card.parents[0].display_id }}
+      </UBadge>
+      <UBadge
+        v-if="card.children?.length"
+        color="neutral"
+        variant="soft"
+        size="xs"
+        class="gap-1"
+      >
+        <UIcon name="i-lucide-arrow-down" class="size-3" />
+        {{ card.children.length }} subtask{{ card.children.length === 1 ? '' : 's' }}
       </UBadge>
     </div>
   </UCard>

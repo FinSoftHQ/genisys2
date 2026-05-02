@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { reactive, computed, watch, ref } from 'vue';
 import { z } from 'zod';
-import type { CardEntity, UpdateCardRequest, UpdateCardResponse } from '@repo/shared';
+import type { CardEntity, UpdateCardRequest, UpdateCardResponse, CardFamilyMetadata } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
 import { parseApiError, parseConflictError } from '~/utils/api-error';
 
@@ -100,6 +100,26 @@ function onClose() {
   conflictServerCard.value = null;
   isOpen.value = false;
 }
+
+function statusColor(status: string): string {
+  if (status === 'done') return 'success';
+  if (status === 'error') return 'error';
+  if (status === 'processing' || status === 'agentic-team') return 'info';
+  return 'neutral';
+}
+
+function familyItemLabel(item: CardFamilyMetadata): string {
+  const parts = [item.display_id];
+  if (item.title) {
+    const truncated = item.title.length > 40 ? item.title.slice(0, 40) + '…' : item.title;
+    parts.push(truncated);
+  }
+  return parts.join(' — ');
+}
+
+function isExternal(item: CardFamilyMetadata): boolean {
+  return item.board_uid !== props.boardUid;
+}
 </script>
 
 <template>
@@ -113,6 +133,63 @@ function onClose() {
         <UFormField name="description" label="Description" class="mb-4">
           <UTextarea v-model="state.description" placeholder="Optional description" :rows="3" />
         </UFormField>
+
+        <!-- Family Tree Section -->
+        <div v-if="card && (card.parents?.length || card.children?.length)" class="mb-4">
+          <UCard variant="subtle" :ui="{ body: 'p-3' }">
+            <h4 class="text-xs font-semibold text-muted uppercase tracking-wide mb-2">Family</h4>
+
+            <div v-if="card.parents?.length" class="mb-2">
+              <p class="text-xs text-muted mb-1">Parents</p>
+              <div class="flex flex-col gap-1">
+                <div
+                  v-for="parent in card.parents"
+                  :key="parent.uid"
+                  class="flex items-center gap-2 text-sm"
+                >
+                  <UBadge variant="subtle" size="xs" color="neutral" class="font-mono">
+                    {{ parent.display_id }}
+                  </UBadge>
+                  <span class="truncate text-default">{{ parent.title }}</span>
+                  <UBadge :color="statusColor(parent.status)" variant="subtle" size="xs">
+                    {{ parent.status }}
+                  </UBadge>
+                  <UIcon
+                    v-if="isExternal(parent)"
+                    name="i-lucide-external-link"
+                    class="size-3 text-muted"
+                    title="On another board"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div v-if="card.children?.length">
+              <p class="text-xs text-muted mb-1">Children</p>
+              <div class="flex flex-col gap-1">
+                <div
+                  v-for="child in card.children"
+                  :key="child.uid"
+                  class="flex items-center gap-2 text-sm"
+                >
+                  <UBadge variant="subtle" size="xs" color="neutral" class="font-mono">
+                    {{ child.display_id }}
+                  </UBadge>
+                  <span class="truncate text-default">{{ child.title }}</span>
+                  <UBadge :color="statusColor(child.status)" variant="subtle" size="xs">
+                    {{ child.status }}
+                  </UBadge>
+                  <UIcon
+                    v-if="isExternal(child)"
+                    name="i-lucide-external-link"
+                    class="size-3 text-muted"
+                    title="On another board"
+                  />
+                </div>
+              </div>
+            </div>
+          </UCard>
+        </div>
 
         <UAlert
           v-if="errorMsg"

@@ -1,14 +1,25 @@
 import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
 
+export const boardSuites = sqliteTable('board_suites', {
+  uid: text('uid').primaryKey(),
+  title: text('title').notNull(),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});
+
 export const boards = sqliteTable('boards', {
   uid: text('uid').primaryKey(),
   title: text('title').notNull(),
   prefix: text('prefix').notNull().unique(),
+  suite_uid: text('suite_uid'),
+  role: text('role'),
   schema: text('schema', { mode: 'json' }).notNull(),
   permissions: text('permissions', { mode: 'json' }).notNull(),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
-});
+}, (table) => ({
+  suiteIdx: index('boards_suite_idx').on(table.suite_uid),
+}));
 
 export const boardSequences = sqliteTable('board_sequences', {
   prefix: text('prefix').primaryKey(),
@@ -61,11 +72,15 @@ export const callbackTokens = sqliteTable('callback_tokens', {
 export const cardRelationships = sqliteTable('card_relationships', {
   parent_card_uid: text('parent_card_uid').notNull(),
   child_card_uid: text('child_card_uid').notNull(),
+  parent_board_uid: text('parent_board_uid'),
+  child_board_uid: text('child_board_uid'),
   relationship_type: text('relationship_type').notNull().default('dependency'),
   created_at: text('created_at').notNull(),
 }, (table) => ({
   parentIdx: index('card_relationships_parent_idx').on(table.parent_card_uid),
   childIdx: index('card_relationships_child_idx').on(table.child_card_uid),
+  parentBoardIdx: index('card_relationships_parent_board_idx').on(table.parent_board_uid, table.parent_card_uid),
+  childBoardIdx: index('card_relationships_child_board_idx').on(table.child_board_uid, table.child_card_uid),
 }));
 
 export const consumedCallbackTokens = sqliteTable('consumed_callback_tokens', {

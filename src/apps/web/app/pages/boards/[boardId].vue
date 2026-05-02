@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, computed, ref, nextTick } from 'vue';
+import { onMounted, computed, ref, nextTick, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import type { SnapshotResponse, UpdateBoardResponse } from '@repo/shared';
+import type { SnapshotResponse, UpdateBoardResponse, BoardSuiteWithBoards } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
 import { useBoardsList } from '~/composables/useBoardsList';
 import BoardView from '~/components/kanban/BoardView.vue';
@@ -19,7 +19,17 @@ const isEditingTitle = ref(false);
 const editTitle = ref('');
 const titleInputRef = ref<HTMLInputElement | null>(null);
 
+const suite = ref<BoardSuiteWithBoards | null>(null);
+const isLoadingSuite = ref(false);
+
 const boardTitle = computed(() => store.value.board?.title ?? 'Board');
+const boardRole = computed(() => store.value.board?.role);
+const boardRoleColor = computed(() => {
+  const role = boardRole.value;
+  if (role === 'primary') return 'primary';
+  if (role === 'tasks') return 'info';
+  return 'neutral';
+});
 
 async function loadSnapshot() {
   resetStore();
@@ -34,6 +44,31 @@ async function loadSnapshot() {
     setLoading(false);
   }
 }
+
+async function loadSuite() {
+  const suiteUid = store.value.board?.suite_uid;
+  if (!suiteUid) {
+    suite.value = null;
+    return;
+  }
+  isLoadingSuite.value = true;
+  try {
+    const response = await $fetch<{ data: BoardSuiteWithBoards }>(`/api/board-suites/${suiteUid}`);
+    suite.value = response.data;
+  } catch (err: any) {
+    // Silently fail — suite nav is optional enhancement
+    suite.value = null;
+  } finally {
+    isLoadingSuite.value = false;
+  }
+}
+
+watch(
+  () => store.value.board?.suite_uid,
+  () => {
+    loadSuite();
+  }
+);
 
 function startEditingTitle() {
   if (!store.value.board) return;
@@ -94,27 +129,60 @@ onMounted(() => {
           />
         </template>
         <template #default>
-          <div v-if="isEditingTitle" class="flex items-center gap-2">
-            <UInput
-              ref="titleInputRef"
-              v-model="editTitle"
-              size="lg"
-              class="w-64"
-              @blur="saveTitle"
-              @keydown="onTitleKeydown"
-            />
+          <div class="flex items-center gap-2">
+            <div v-if="isEditingTitle" class="flex items-center gap-2">
+              <UInput
+                ref="titleInputRef"
+                v-model="editTitle"
+                size="lg"
+                class="w-64"
+                @blur="saveTitle"
+                @keydown="onTitleKeydown"
+              />
+            </div>
+            <h1
+              v-else
+              class="text-lg font-semibold cursor-pointer hover:text-primary transition-colors"
+              :title="'Click to rename'"
+              @click="startEditingTitle"
+            >
+              {{ boardTitle }}
+              <UIcon name="i-lucide-pencil" class="size-3.5 ml-1 text-muted inline" />
+            </h1>
+            <UBadge
+              v-if="boardRole"
+              :color="boardRoleColor"
+              variant="subtle"
+              size="sm"
+            >
+              {{ boardRole }}
+            </UBadge>
           </div>
-          <h1
-            v-else
-            class="text-lg font-semibold cursor-pointer hover:text-primary transition-colors"
-            :title="'Click to rename'"
-            @click="startEditingTitle"
-          >
-            {{ boardTitle }}
-            <UIcon name="i-lucide-pencil" class="size-3.5 ml-1 text-muted inline" />
-          </h1>
         </template>
       </UDashboardNavbar>
+
+      <!-- Suite Navigation Bar -->
+      <div
+        v-if="suite && suite.boards.length > 1"
+        class="px-4 py-2 border-b border-default/10 bg-elevated/50"
+      >
+        <div class="flex items-center gap-2">
+          <UIcon name="i-lucide-layers" class="size-4 text-muted" />
+          <span class="text-xs text-muted font-medium">Suite:</span>
+          <div class="flex items-center gap-1.5">
+            <UButton
+              v-for="sb in suite.boards"
+              :key="sb.uid"
+              :to="`/boards/${sb.uid}`"
+              :variant="sb.uid === boardId ? 'solid' : 'ghost'"
+              :color="sb.uid === boardId ? 'primary' : 'neutral'"
+              size="xs"
+            >
+              {{ sb.title }}
+            </UButton>
+          </div>
+        </div>
+      </div>
     </template>
 
     <template #body>

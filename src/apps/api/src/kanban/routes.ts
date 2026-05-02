@@ -1,8 +1,12 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import {
   BoardPathParamsSchema,
+  BoardIdSchema,
+  CardIdSchema,
   CardPathParamsSchema,
   CreateBoardRequestSchema,
+  CreateBoardSuiteRequestSchema,
   UpdateBoardRequestSchema,
   CreateCardRequestSchema,
   UpdateCardRequestSchema,
@@ -17,6 +21,9 @@ import {
   BoardStreamRequestHeadersSchema,
   CreateCardRelationshipRequestSchema,
   CardFamilyResponseSchema,
+  ListBoardSuitesResponseSchema,
+  BoardSuiteResponseSchema,
+  BoardSuiteSnapshotResponseSchema,
 } from '@repo/shared';
 import { randomUUID } from 'node:crypto';
 import {
@@ -27,9 +34,13 @@ import {
   updateCard,
   moveCard,
   createBoard,
+  createSuite,
   updateBoard,
   getProcessorById,
   listBoards,
+  listSuites,
+  getSuiteById,
+  getSuiteSnapshot,
   createCallbackToken,
   createCardRelationship,
   deleteCardRelationship,
@@ -65,7 +76,10 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
     }
     try {
-      const board = await callRepo(createBoard, body.data.template, body.data.title, body.data.prefix);
+      const query = request.query as Record<string, unknown> | undefined;
+      const suiteUid = typeof query?.suite === 'string' ? query.suite : undefined;
+      const role = typeof query?.role === 'string' ? query.role : undefined;
+      const board = await callRepo(createBoard, body.data.template, body.data.title, body.data.prefix, suiteUid ?? null, role ?? null);
       return reply.status(201).send({ data: { board } });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -176,7 +190,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     }
 
     try {
-      const relationship = await callRepo(createCardRelationship, params.data.boardId, params.data.cardId, body.data.child_card_uid, body.data.relationship_type ?? 'dependency');
+      const relationship = await callRepo(createCardRelationship, params.data.boardId, params.data.cardId, body.data.child_card_uid, body.data.relationship_type ?? 'dependency', body.data.parent_board_uid ?? params.data.boardId, body.data.child_board_uid ?? params.data.boardId);
       const family = await callRepo(getCardFamily, params.data.boardId, params.data.cardId);
       return reply.status(201).send({ data: { relationship, ...family } });
     } catch (err) {
@@ -195,7 +209,11 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
   });
 
   instance.delete('/:boardId/cards/:cardId/relationships/:childCardId', async (request, reply) => {
-    const params = zodCardRelationshipParams.safeParse(request.params);
+    const params = z.object({
+      boardId: BoardIdSchema,
+      cardId: CardIdSchema,
+      childCardId: CardIdSchema,
+    }).strict().safeParse(request.params);
     if (!params.success) {
       return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
     }
@@ -530,7 +548,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     const idempotencyKey = randomUUID();
     const callbackBaseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 8080}`;
     const callbackUrl = `${callbackBaseUrl.replace(/\/$/, '')}/api/callbacks/${token}`;
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + (processor.max_sla_seconds ?? 600) * 1000).toISOString();
 
     createCallbackToken({}, {
       token,
@@ -563,6 +581,55 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     }
 
     return reply.status(200).send({ data: { card, status: 'accepted' } });
+  });
+}
+
+export async function suiteRoutes(instance: FastifyInstance): Promise<void> {
+  instance.post('/', async (request, reply) => {
+    const body = CreateBoardSuiteRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send(errorResponse('INVALID_BODY', 'Invalid request body', { issues: body.error.issues }));
+    }
+    try {
+      const result = await callRepo(createSuite, body.data.template, body.data.title);
+      return reply.status(201).send(BoardSuiteResponseSchema.parse({ data: result }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send(errorResponse('SUITE_CREATE_FAILED', message || 'Failed to create suite'));
+    }
+  });
+
+  instance.get('/', async (_request, reply) => {
+    const suites = await callRepo(listSuites);
+    return reply.status(200).send(ListBoardSuitesResponseSchema.parse({ data: { suites } }));
+  });
+
+  instance.get('/:suiteId', async (request, reply) => {
+    const params = z.object({ suiteId: BoardIdSchema }).strict().safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const suite = await callRepo(getSuiteById, params.data.suiteId);
+    if (!suite) {
+      return reply.status(404).send(errorResponse('SUITE_NOT_FOUND', 'Suite not found'));
+    }
+
+    return reply.status(200).send(BoardSuiteResponseSchema.parse({ data: suite }));
+  });
+
+  instance.get('/:suiteId/snapshot', async (request, reply) => {
+    const params = z.object({ suiteId: BoardIdSchema }).strict().safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const snapshot = await callRepo(getSuiteSnapshot, params.data.suiteId);
+    if (!snapshot) {
+      return reply.status(404).send(errorResponse('SUITE_NOT_FOUND', 'Suite not found'));
+    }
+
+    return reply.status(200).send(BoardSuiteSnapshotResponseSchema.parse({ data: snapshot }));
   });
 }
 

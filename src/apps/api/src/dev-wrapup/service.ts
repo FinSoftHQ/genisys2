@@ -94,55 +94,129 @@ function validateGitRepo(workspacePath: string): void {
   }
 }
 
+/**
+ * Delimiter-based output avoids JSON escaping issues entirely.
+ * Models frequently emit literal newlines inside JSON strings,
+ * which breaks JSON.parse at the first unescaped '\n' character.
+ * Plain section markers are trivial for models to follow and
+ * trivial for us to parse.
+ */
 function buildSystemPrompt(include: "all" | "commit" | "pr"): string {
   const base = `You are a senior engineer preparing a commit and PR for review.
 
 Your task:
-1. Inspect the git state of the current workspace by running:
-   - git diff --staged
-   - git log --oneline -5
-2. Based on the staged changes, generate the requested output.
+1. Run: git diff --staged
+2. Run: git log --oneline -5
+3. Based on the staged changes, write the sections requested below.
 
-Constraints:
-- Output MUST be valid JSON only. No markdown code fences. No explanatory text before or after the JSON.`;
+Output ONLY the delimited sections. Do not add any preamble, explanation, or extra text.`;
 
   if (include === "commit") {
     return `${base}
-- commit_message must follow Conventional Commits format: type(scope)?: description
-  Allowed types: feat, fix, chore, docs, refactor, test, build, ci, perf, style, revert
-  Must be a single line, lowercase type, concise.
 
-JSON schema:
-{
-  "commit_message": "string"
-}`;
+<<<COMMIT_MESSAGE>>>
+feat(scope): concise description of the change
+<<<END>>>
+
+Rules for commit_message:
+- Conventional Commits format: type(scope)?: description
+- Allowed types: feat, fix, chore, docs, refactor, test, build, ci, perf, style, revert
+- Single line, lowercase type, no trailing period`;
   }
 
   if (include === "pr") {
     return `${base}
-- pr_title should be a clear, descriptive title for the Pull Request.
-- pr_body should be markdown-formatted with these sections: ## Summary, ## Changes, ## Risks
 
-JSON schema:
-{
-  "pr_title": "string",
-  "pr_body": "string"
-}`;
+<<<PR_TITLE>>>
+A clear, one-line title for the Pull Request
+<<<PR_BODY>>>
+## Summary
+
+Brief description of what this PR does.
+
+## Changes
+
+- Key change one
+- Key change two
+
+## Risks
+
+Risk assessment (e.g. Low — unit tests added).
+<<<END>>>
+
+Rules:
+- pr_title: single line, clear and descriptive
+- pr_body: well-structured markdown`;
   }
 
   return `${base}
-- commit_message must follow Conventional Commits format: type(scope)?: description
-  Allowed types: feat, fix, chore, docs, refactor, test, build, ci, perf, style, revert
-  Must be a single line, lowercase type, concise.
-- pr_title should be a clear, descriptive title for the Pull Request.
-- pr_body should be markdown-formatted with these sections: ## Summary, ## Changes, ## Risks
 
-JSON schema:
-{
-  "commit_message": "string",
-  "pr_title": "string",
-  "pr_body": "string"
-}`;
+<<<COMMIT_MESSAGE>>>
+feat(scope): concise description of the change
+<<<PR_TITLE>>>
+A clear, one-line title for the Pull Request
+<<<PR_BODY>>>
+## Summary
+
+Brief description of what this PR does.
+
+## Changes
+
+- Key change one
+- Key change two
+
+## Risks
+
+Risk assessment (e.g. Low — unit tests added).
+<<<END>>>
+
+Rules:
+- commit_message: Conventional Commits format, single line, lowercase type
+- pr_title: single line, clear and descriptive
+- pr_body: well-structured markdown`;
+}
+
+/**
+ * Parses the delimiter-based output produced by the model.
+ * Each field sits between its opening <<<FIELD>>> marker and
+ * either the next marker or <<<END>>>.
+ */
+function parseDelimitedResponse(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const markers = [
+    { marker: "<<<COMMIT_MESSAGE>>>", key: "commit_message" },
+    { marker: "<<<PR_TITLE>>>", key: "pr_title" },
+    { marker: "<<<PR_BODY>>>", key: "pr_body" },
+  ];
+  const terminator = "<<<END>>>";
+
+  for (let i = 0; i < markers.length; i++) {
+    const { marker, key } = markers[i];
+    const start = text.indexOf(marker);
+    if (start === -1) continue;
+
+    const contentStart = start + marker.length;
+
+    // End is the next known marker, <<<END>>>, or end of string — whichever comes first.
+    let end = text.length;
+    for (let j = i + 1; j < markers.length; j++) {
+      const nextPos = text.indexOf(markers[j].marker);
+      if (nextPos !== -1 && nextPos < end) end = nextPos;
+    }
+    const termPos = text.indexOf(terminator);
+    if (termPos !== -1 && termPos < end) end = termPos;
+
+    let value = text.slice(contentStart, end).trim();
+
+    // Commit messages must be a single line; take only the first non-empty line.
+    if (key === "commit_message") {
+      value = value.split("\n").map((l) => l.trim()).filter(Boolean)[0] ?? value;
+    }
+
+    result[key] = value;
+  }
+
+  return result;
 }
 
 async function runPiSession(workspacePath: string, prompt: string): Promise<unknown> {
@@ -185,16 +259,11 @@ async function runPiSession(workspacePath: string, prompt: string): Promise<unkn
       throw new GenerationError("Agent produced no assistant text");
     }
 
-    // Try to extract JSON if the agent wrapped it in markdown fences despite instructions
-    const jsonMatch = lastText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    const rawJson = jsonMatch ? jsonMatch[1].trim() : lastText.trim();
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawJson);
-    } catch (parseErr) {
+    // Parse the delimiter-based response (no JSON escaping hazards).
+    const parsed = parseDelimitedResponse(lastText);
+    if (Object.keys(parsed).length === 0) {
       throw new GenerationError(
-        `Agent output is not valid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
+        `Agent output did not contain expected delimiters (<<<COMMIT_MESSAGE>>>, <<<PR_TITLE>>>, or <<<PR_BODY>>>). Raw output: ${lastText.slice(0, 200)}`
       );
     }
 
