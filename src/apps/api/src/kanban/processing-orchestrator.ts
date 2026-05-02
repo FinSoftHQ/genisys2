@@ -270,6 +270,24 @@ export async function consumeCallback(
         if ('is_editable' in payload.payload_updates && payload.payload_updates.is_editable !== undefined) {
           updateData.is_editable = payload.payload_updates.is_editable as boolean;
         }
+
+        const extraPayloadUpdates: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(payload.payload_updates)) {
+          if (value === undefined) continue;
+          if (key === 'title' || key === 'description' || key === 'payload' || key === 'is_editable') continue;
+          extraPayloadUpdates[key] = value;
+        }
+
+        if (Object.keys(extraPayloadUpdates).length > 0) {
+          const basePayload =
+            'payload' in payload.payload_updates && payload.payload_updates.payload !== undefined
+              ? (payload.payload_updates.payload as Record<string, unknown>)
+              : (card.payload as Record<string, unknown>);
+          updateData.payload = {
+            ...basePayload,
+            ...extraPayloadUpdates,
+          };
+        }
       }
 
       if (payload.move_to_column) {

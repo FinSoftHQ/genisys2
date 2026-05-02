@@ -226,7 +226,7 @@ describe('delegated processor routes', () => {
       const init = callbackCall![1] as { body: string };
       const payload = JSON.parse(init.body);
       expect(payload.status).toBe('success');
-      expect(payload.move_to_column).toBe('wrap');
+      expect(payload.move_to_column).toBeUndefined();
     });
 
     it('does not move an unrelated todo card', async () => {

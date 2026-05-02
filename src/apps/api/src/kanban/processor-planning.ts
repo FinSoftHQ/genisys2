@@ -11,7 +11,6 @@ import {
   HealthCheckResponseSchema,
 } from '@repo/shared';
 import { createCard, createCardRelationship, getBoardById, listBoards } from './repository.js';
-import { moveCardToNextColumn } from './processing-orchestrator.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
@@ -84,21 +83,13 @@ function delegatePlanning(card: {
       taskBoard.uid,
     );
 
-    // Kickstart the task-board pipeline: pull oldest IDLE card from todo → agentic-team
-    moveCardToNextColumn({}, taskBoard, 'todo').catch((err) => {
-      console.error('[planning] Auto-pull from todo failed:', err instanceof Error ? err.message : String(err));
-    });
-
     fireAndForgetCallback(callbackUrl, {
       status: 'success',
       move_to_column: 'delegated',
       payload_updates: {
-        payload: {
-          ...card.payload,
-          delegated: true,
-          task_card_uid: taskCard.uid,
-          task_board_uid: taskBoard.uid,
-        },
+        delegated: true,
+        task_card_uid: taskCard.uid,
+        task_board_uid: taskBoard.uid,
       },
     });
   } catch (err) {

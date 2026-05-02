@@ -97,7 +97,7 @@ async function delegateTask(card: {
       console.error('[delegated] Auto-pull from todo failed:', err instanceof Error ? err.message : String(err));
     });
 
-    fireAndForgetCallback(callbackUrl, { status: 'success', move_to_column: 'wrap' });
+    fireAndForgetCallback(callbackUrl, { status: 'success' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     fireAndForgetCallback(callbackUrl, {

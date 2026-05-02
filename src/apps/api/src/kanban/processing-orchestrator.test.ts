@@ -279,6 +279,44 @@ describe('processing orchestrator', () => {
       expect(result.payload).toEqual({ reviewed: true });
     });
 
+    it('merges arbitrary payload_updates fields into card payload on callback success', async () => {
+      const board = seedBoard(db);
+      const card = createCard(db, board.uid, {
+        title: 'Delegated Card',
+        current_status: 'in-review',
+        payload: { existing: 'value' },
+      });
+
+      updateCardProcessingState(db, board.uid, card.uid, 'IDLE', 'PROCESSING', { is_editable: false });
+
+      const token = '550e8400-e29b-41d4-a716-446655440030';
+      createCallbackToken(db, {
+        token,
+        card_uid: card.uid,
+        processor_id: 'manager-approval',
+        hook: 'on-enter',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440031',
+        context: {},
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      });
+
+      const result = await consumeCallback(db, token, 'Bearer some-auth-token', {
+        status: 'success',
+        payload_updates: {
+          delegated: true,
+          task_card_uid: 'task-card-uid',
+          task_board_uid: 'task-board-uid',
+        },
+      });
+
+      expect(result.payload).toEqual({
+        existing: 'value',
+        delegated: true,
+        task_card_uid: 'task-card-uid',
+        task_board_uid: 'task-board-uid',
+      });
+    });
+
     it('transitions to ERROR state when callback status is error', async () => {
       const board = seedBoard(db);
       const card = createCard(db, board.uid, {
