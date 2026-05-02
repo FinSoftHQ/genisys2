@@ -165,6 +165,59 @@ describe('KanbanCard', () => {
     });
   });
 
+  describe('family and task indicators', () => {
+    it('shows parent and child badges when family metadata exists', () => {
+      const wrapper = mountCard({
+        ...baseCard,
+        parents: [
+          {
+            uid: '11111111-1111-1111-1111-111111111111',
+            board_uid: '22222222-2222-2222-2222-222222222222',
+            display_id: 'DEV-12',
+            status: 'delegated',
+            title: 'Parent task',
+            processing_state: 'IDLE',
+          },
+        ],
+        children: [
+          {
+            uid: '33333333-3333-3333-3333-333333333333',
+            board_uid: '22222222-2222-2222-2222-222222222222',
+            display_id: 'DEV-13',
+            status: 'todo',
+            title: 'Child task',
+            processing_state: 'PROCESSING',
+          },
+          {
+            uid: '44444444-4444-4444-4444-444444444444',
+            board_uid: '22222222-2222-2222-2222-222222222222',
+            display_id: 'DEV-14',
+            status: 'done',
+            title: 'Child task 2',
+            processing_state: 'IDLE',
+          },
+        ],
+      });
+
+      const badges = wrapper.findAll('[data-testid="u-badge"]');
+      expect(badges.some((b) => b.text().includes('Parent: DEV-12'))).toBe(true);
+      expect(badges.some((b) => b.text().includes('2 subtasks'))).toBe(true);
+    });
+
+    it('shows Task badge when payload references a parent card', () => {
+      const wrapper = mountCard({
+        ...baseCard,
+        payload: {
+          parent_card_uid: '11111111-1111-1111-1111-111111111111',
+          parent_board_uid: '22222222-2222-2222-2222-222222222222',
+        },
+      });
+
+      const badges = wrapper.findAll('[data-testid="u-badge"]');
+      expect(badges.some((b) => b.text() === 'Task')).toBe(true);
+    });
+  });
+
   describe('edit emission', () => {
     it('emits edit event when edit button clicked', async () => {
       const wrapper = mountCard(baseCard);

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, computed, ref, nextTick, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import type { SnapshotResponse, UpdateBoardResponse, BoardSuiteWithBoards } from '@repo/shared';
+import type { BoardSuiteWithBoards, SnapshotResponse, UpdateBoardResponse } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
 import { useBoardsList } from '~/composables/useBoardsList';
 import BoardView from '~/components/kanban/BoardView.vue';
@@ -9,7 +9,7 @@ import BoardView from '~/components/kanban/BoardView.vue';
 definePageMeta({ layout: 'default' });
 
 const route = useRoute();
-const boardId = route.params.boardId as string;
+const boardId = computed(() => route.params.boardId as string);
 const toast = useToast();
 
 const { store, setLoading, setError, hydrate, resetStore } = useBoardStore();
@@ -21,6 +21,8 @@ const titleInputRef = ref<HTMLInputElement | null>(null);
 
 const suite = ref<BoardSuiteWithBoards | null>(null);
 const isLoadingSuite = ref(false);
+let snapshotRequestId = 0;
+let suiteRequestId = 0;
 
 const boardTitle = computed(() => store.value.board?.title ?? 'Board');
 const boardRole = computed(() => store.value.board?.role);
@@ -31,17 +33,36 @@ const boardRoleColor = computed(() => {
   return 'neutral';
 });
 
+function formatRoleLabel(role: string | null | undefined): string {
+  if (!role) return '';
+  if (role === 'primary') return 'Primary';
+  if (role === 'tasks') return 'Tasks';
+  return role
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 async function loadSnapshot() {
+  const requestId = ++snapshotRequestId;
   resetStore();
+  suite.value = null;
+  isEditingTitle.value = false;
+  editTitle.value = '';
   setLoading(true);
   setError(null);
   try {
-    const response = await $fetch<SnapshotResponse>(`/api/boards/${boardId}/snapshot`);
+    const response = await $fetch<SnapshotResponse>(`/api/boards/${boardId.value}/snapshot`);
+    if (requestId !== snapshotRequestId) return;
     hydrate(response.data);
   } catch (err: any) {
+    if (requestId !== snapshotRequestId) return;
     setError(err?.data?.error?.message || 'Failed to load board');
   } finally {
-    setLoading(false);
+    if (requestId === snapshotRequestId) {
+      setLoading(false);
+    }
   }
 }
 
@@ -51,23 +72,38 @@ async function loadSuite() {
     suite.value = null;
     return;
   }
+
+  const requestId = ++suiteRequestId;
   isLoadingSuite.value = true;
   try {
     const response = await $fetch<{ data: BoardSuiteWithBoards }>(`/api/board-suites/${suiteUid}`);
+    if (requestId !== suiteRequestId) return;
     suite.value = response.data;
-  } catch (err: any) {
+  } catch {
     // Silently fail — suite nav is optional enhancement
-    suite.value = null;
+    if (requestId === suiteRequestId) {
+      suite.value = null;
+    }
   } finally {
-    isLoadingSuite.value = false;
+    if (requestId === suiteRequestId) {
+      isLoadingSuite.value = false;
+    }
   }
 }
 
 watch(
   () => store.value.board?.suite_uid,
   () => {
-    loadSuite();
+    void loadSuite();
   }
+);
+
+watch(
+  boardId,
+  () => {
+    void loadSnapshot();
+  },
+  { immediate: true }
 );
 
 function startEditingTitle() {
@@ -87,7 +123,7 @@ async function saveTitle() {
   if (!newTitle || newTitle === store.value.board.title) return;
 
   try {
-    const response = await $fetch<UpdateBoardResponse>(`/api/boards/${boardId}`, {
+    const response = await $fetch<UpdateBoardResponse>(`/api/boards/${boardId.value}`, {
       method: 'PATCH',
       body: { title: newTitle },
     });
@@ -110,10 +146,6 @@ function onTitleKeydown(e: KeyboardEvent) {
     isEditingTitle.value = false;
   }
 }
-
-onMounted(() => {
-  loadSnapshot();
-});
 </script>
 
 <template>
@@ -155,7 +187,7 @@ onMounted(() => {
               variant="subtle"
               size="sm"
             >
-              {{ boardRole }}
+              {{ formatRoleLabel(boardRole) }}
             </UBadge>
           </div>
         </template>
@@ -163,7 +195,7 @@ onMounted(() => {
 
       <!-- Suite Navigation Bar -->
       <div
-        v-if="suite && suite.boards.length > 1"
+        v-if="suite"
         class="px-4 py-2 border-b border-default/10 bg-elevated/50"
       >
         <div class="flex items-center gap-2">
@@ -206,6 +238,7 @@ onMounted(() => {
 
       <BoardView
         v-else-if="store.board"
+        :key="boardId"
         :board-uid="boardId"
       />
     </template>

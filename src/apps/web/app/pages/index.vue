@@ -126,6 +126,17 @@ async function onCreateSuite() {
   }
 }
 
+function formatRoleLabel(role: string | null | undefined): string {
+  if (!role) return '';
+  if (role === 'primary') return 'Primary';
+  if (role === 'tasks') return 'Tasks';
+  return role
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 const standaloneBoards = computed(() => boards.value.filter((b) => !b.suite_uid));
 
 onMounted(() => {
@@ -305,7 +316,7 @@ onMounted(() => {
                                   variant="subtle"
                                   size="xs"
                                 >
-                                  {{ board.role }}
+                                  {{ formatRoleLabel(board.role) }}
                                 </UBadge>
                               </div>
                               <p class="text-xs text-muted">{{ board.prefix }} &middot; {{ board.schema.columns.length }} columns</p>
