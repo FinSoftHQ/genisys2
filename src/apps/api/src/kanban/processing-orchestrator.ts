@@ -127,7 +127,12 @@ export async function startProcessing(
   const idempotencyKey = randomUUID();
   const callbackBaseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 8080}`;
   const callbackUrl = `${callbackBaseUrl.replace(/\/$/, '')}/api/callbacks/${token}`;
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const processor = getProcessorById(db, processingColumn.processor_id);
+  if (!processor) {
+    throw new Error('PROCESSOR_NOT_FOUND');
+  }
+
+  const expiresAt = new Date(Date.now() + (processor.max_sla_seconds ?? 600) * 1000).toISOString();
 
   createCallbackToken(db, {
     token,
@@ -138,11 +143,6 @@ export async function startProcessing(
     context: { previous_status: card.current_status },
     expires_at: expiresAt,
   });
-
-  const processor = getProcessorById(db, processingColumn.processor_id);
-  if (!processor) {
-    throw new Error('PROCESSOR_NOT_FOUND');
-  }
 
   await dispatchAsyncHook(processor, 'on-enter', {
     card: updated,
@@ -367,8 +367,13 @@ export async function consumeCallback(
             exit_logic: Record<string, string>;
             order: number;
           });
-        } catch (_err) {
-          // Log but don't fail — the callback was already processed
+        } catch (err) {
+          console.error(
+            `[orchestrator] startProcessing failed when moving card ${
+              enrichedResult.uid
+            } into column ${targetColumn.uid} (processor: ${targetColumn.processor_id}):`,
+            err instanceof Error ? err.message : String(err),
+          );
         }
       }
     }

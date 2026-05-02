@@ -548,7 +548,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
     const idempotencyKey = randomUUID();
     const callbackBaseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 8080}`;
     const callbackUrl = `${callbackBaseUrl.replace(/\/$/, '')}/api/callbacks/${token}`;
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + (processor.max_sla_seconds ?? 600) * 1000).toISOString();
 
     createCallbackToken({}, {
       token,

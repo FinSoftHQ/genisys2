@@ -25,8 +25,8 @@ function fireAndForgetCallback(callbackUrl: string, payload: Record<string, unkn
       Authorization: 'Bearer processor',
     },
     body: JSON.stringify(payload),
-  }).catch(() => {
-    // Fire-and-forget: failures are silently ignored.
+  }).catch((err) => {
+    console.error('[done] Callback failed:', err instanceof Error ? err.message : String(err));
   });
 }
 
@@ -61,7 +61,7 @@ async function wakeParentIfAllChildrenDone(card: { payload: Record<string, unkno
 
   const allDone = family.children.every((childMeta) => {
     const child = findCardByUidAcrossBoards(childMeta.uid);
-    return Boolean(child && child.processing_state === 'IDLE' && child.current_status === 'done');
+    return Boolean(child && child.current_status === 'done' && child.processing_state !== 'ERROR');
   });
 
   if (!allDone) {

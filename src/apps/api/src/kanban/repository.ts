@@ -60,7 +60,7 @@ const BOARD_TEMPLATES: Record<string, { title: string; columns: Array<{ uid: str
       { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'prep' }, order: 1 },
       { uid: 'prep', title: 'Prep', type: 'Processing', processor_id: 'prep', exit_logic: { default: 'planning' }, order: 2 },
       { uid: 'planning', title: 'Planning', type: 'Processing', processor_id: 'planning', exit_logic: { default: 'delegated' }, order: 3 },
-      { uid: 'delegated', title: 'Delegated', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'wrap' }, order: 4 },
+      { uid: 'delegated', title: 'Delegated', type: 'Processing', processor_id: 'delegated', exit_logic: { default: 'wrap' }, order: 4 },
       { uid: 'wrap', title: 'Wrap', type: 'Processing', processor_id: 'wrap', exit_logic: { default: 'done' }, order: 5 },
       { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 6 },
     ],
@@ -68,10 +68,9 @@ const BOARD_TEMPLATES: Record<string, { title: string; columns: Array<{ uid: str
   task: {
     title: 'Task Board',
     columns: [
-      { uid: 'backlog', title: 'Backlog', type: 'Normal', processor_id: 'default-manual', exit_logic: { default: 'todo' }, order: 0 },
-      { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'agentic-team' }, order: 1 },
-      { uid: 'agentic-team', title: 'AI Team', type: 'Processing', processor_id: 'agentic-team', exit_logic: { default: 'done' }, order: 2 },
-      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 3 },
+      { uid: 'todo', title: 'TODO', type: 'Normal', processor_id: 'todo', exit_logic: { default: 'agentic-team' }, order: 0 },
+      { uid: 'agentic-team', title: 'AI Team', type: 'Processing', processor_id: 'agentic-team', exit_logic: { default: 'done' }, order: 1 },
+      { uid: 'done', title: 'Done', type: 'Processing', processor_id: 'done', exit_logic: { default: 'done' }, order: 2 },
     ],
   },
 };

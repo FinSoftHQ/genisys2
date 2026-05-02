@@ -41,6 +41,10 @@ vi.mock('node:child_process', () => ({
       stdout = 'github.com\n  ✓ Logged in to github.com\n';
     } else if (cmdArgs.includes('diff') && cmdArgs.includes('--cached') && cmdArgs.includes('--name-only')) {
       stdout = 'src/index.ts\n';
+    } else if (cmdArgs.includes('status') && cmdArgs.includes('--porcelain')) {
+      stdout = 'src/index.ts\n';
+    } else if (cmdArgs.includes('pr') && cmdArgs.includes('view')) {
+      error = new Error('no PR found');
     }
     if (cb) cb(error, stdout, stderr);
     return {} as any;
@@ -259,6 +263,9 @@ describe('wrap processor routes', () => {
         if (file === 'git' && args.includes('diff') && args.includes('--cached') && args.includes('--name-only')) {
           return { stdout: '' };
         }
+        if (file === 'git' && args.includes('rev-list') && args.includes('--count')) {
+          return { stdout: '1' };
+        }
         return undefined;
       });
 
@@ -314,6 +321,266 @@ describe('wrap processor routes', () => {
         expect.anything(),
       );
 
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+
+    it('short-circuits to done when workspace is clean and PR exists', async () => {
+      mockExecFile.mockImplementation((file, ...rest) => {
+        const args = rest.flat().filter((a): a is string => typeof a === 'string');
+        if (file === 'git' && args.includes('status') && args.includes('--porcelain')) {
+          return { stdout: '' };
+        }
+        if (file === 'git' && args.includes('show-ref') && args.includes('--verify')) {
+          return { stdout: 'refs/heads/surii/TST-1\n' };
+        }
+        if (file === 'git' && args.includes('rev-list') && args.includes('--count')) {
+          return { stdout: '0' };
+        }
+        if (file === 'gh' && args.includes('pr') && args.includes('view')) {
+          return { stdout: 'https://github.com/test-org/test-repo/pull/42\n' };
+        }
+        return undefined;
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440005';
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/wrap/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440006',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // dev-wrapup should NOT be called when short-circuiting
+      const devWrapupCalls = fetchSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('/api/v1/dev-wrapup')
+      );
+      expect(devWrapupCalls).toHaveLength(0);
+
+      const commitCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'git' && (call[1] as string[]).includes('commit')
+      );
+      expect(commitCalls).toHaveLength(0);
+
+      const pushCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'git' && (call[1] as string[]).includes('push')
+      );
+      expect(pushCalls).toHaveLength(0);
+
+      const prCreateCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'gh' && (call[1] as string[]).includes('create')
+      );
+      expect(prCreateCalls).toHaveLength(0);
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+
+    it('runs full flow when workspace is clean but PR does not exist', async () => {
+      mockExecFile.mockImplementation((file, ...rest) => {
+        const args = rest.flat().filter((a): a is string => typeof a === 'string');
+        if (file === 'git' && args.includes('status') && args.includes('--porcelain')) {
+          return { stdout: '' };
+        }
+        if (file === 'git' && args.includes('show-ref') && args.includes('--verify')) {
+          return { stdout: 'refs/heads/surii/TST-1\n' };
+        }
+        if (file === 'git' && args.includes('rev-list') && args.includes('--count')) {
+          return { stdout: '0' };
+        }
+        if (file === 'gh' && args.includes('pr') && args.includes('view')) {
+          return { error: new Error('no PR found') };
+        }
+        return undefined;
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440005';
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/wrap/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440006',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // dev-wrapup SHOULD be called because PR does not exist
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/dev-wrapup'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['push', 'origin', 'surii/TST-1']),
+        expect.anything(),
+      );
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining([
+          'pr', 'create',
+          '--title', '[TST-1] Add feature',
+          '--body', '## Summary\n\nThis PR adds a feature.',
+        ]),
+        expect.anything(),
+      );
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+
+    it('skips wrap and moves to Done when no branch was ever created and workspace is clean', async () => {
+      mockExecFile.mockImplementation((file: string, ...rest: unknown[]) => {
+        const args = (rest.flat() as unknown[]).filter((a): a is string => typeof a === 'string');
+        if (file === 'git' && args.includes('status') && args.includes('--porcelain')) {
+          return { stdout: '' }; // no working-tree changes
+        }
+        if (file === 'git' && args.includes('show-ref') && args.includes('--verify')) {
+          return { error: new Error('not a valid ref'), stdout: '', stderr: '' }; // branch never created
+        }
+        if (file === 'git' && args.includes('rev-list')) {
+          return { error: new Error('unknown revision'), stdout: '', stderr: '' };
+        }
+        if (file === 'git' && args.includes('rev-parse') && args.includes('--abbrev-ref')) {
+          return { error: new Error('unknown ref'), stdout: '', stderr: '' };
+        }
+        if (file === 'gh' && args.includes('pr') && args.includes('view')) {
+          return { error: new Error('no PR found'), stdout: '', stderr: '' }; // no PR either
+        }
+        return undefined;
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440011';
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/wrap/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440012',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // dev-wrapup must NOT be called
+      const devWrapupCalls = fetchSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('/api/v1/dev-wrapup')
+      );
+      expect(devWrapupCalls).toHaveLength(0);
+
+      // No git write operations
+      const commitCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'git' && (call[1] as string[]).includes('commit')
+      );
+      expect(commitCalls).toHaveLength(0);
+
+      const pushCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'git' && (call[1] as string[]).includes('push')
+      );
+      expect(pushCalls).toHaveLength(0);
+
+      // Should not query PR at all in this branch-missing no-op path
+      const prViewCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'gh' && (call[1] as string[]).includes('view')
+      );
+      expect(prViewCalls).toHaveLength(0);
+
+      // Must succeed, not error
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+
+    it('does not query PR when no branch exists and workspace is clean', async () => {
+      mockExecFile.mockImplementation((file: string, ...rest: unknown[]) => {
+        const args = (rest.flat() as unknown[]).filter((a): a is string => typeof a === 'string');
+        if (file === 'git' && args.includes('status') && args.includes('--porcelain')) {
+          return { stdout: '' }; // no working-tree changes
+        }
+        if (file === 'git' && args.includes('show-ref') && args.includes('--verify')) {
+          return { error: new Error('not a valid ref'), stdout: '', stderr: '' }; // no local branch
+        }
+        if (file === 'git' && args.includes('rev-list')) {
+          return { error: new Error('unknown revision'), stdout: '', stderr: '' };
+        }
+        if (file === 'git' && args.includes('rev-parse') && args.includes('--abbrev-ref')) {
+          return { error: new Error('unknown ref'), stdout: '', stderr: '' };
+        }
+        if (file === 'gh' && args.includes('pr') && args.includes('view')) {
+          return { stdout: 'https://github.com/test-org/test-repo/pull/42\n' }; // PR exists
+        }
+        return undefined;
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440013';
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/wrap/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440014',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // dev-wrapup must NOT be called
+      const devWrapupCalls = fetchSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('/api/v1/dev-wrapup')
+      );
+      expect(devWrapupCalls).toHaveLength(0);
+
+      // No git write operations
+      const pushCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'git' && (call[1] as string[]).includes('push')
+      );
+      expect(pushCalls).toHaveLength(0);
+
+      // Should not query PR in this no-op path, even if gh pr view would succeed
+      const prViewCalls = mockExecFile.mock.calls.filter((call) =>
+        call[0] === 'gh' && (call[1] as string[]).includes('view')
+      );
+      expect(prViewCalls).toHaveLength(0);
+
+      // Must succeed
       expect(fetchSpy).toHaveBeenCalledWith(
         callbackUrl,
         expect.objectContaining({
@@ -404,7 +671,7 @@ describe('wrap processor routes', () => {
   });
 
   describe('POST /api/kanban-processor/wrap/on-action', () => {
-    it('returns 202 accepted and fires callback', async () => {
+    it('returns 202 accepted and re-runs wrap workflow on retry', async () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
       const response = await app.inject({
         method: 'POST',
@@ -426,6 +693,18 @@ describe('wrap processor routes', () => {
       expect(body.status).toBe('accepted');
 
       await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Should re-run the wrap workflow (dev-wrapup, git, gh)
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/dev-wrapup'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['auth', 'status']),
+        expect.anything(),
+      );
 
       expect(fetchSpy).toHaveBeenCalledWith(
         callbackUrl,

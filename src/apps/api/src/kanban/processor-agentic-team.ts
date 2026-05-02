@@ -26,8 +26,8 @@ function fireAndForgetCallback(callbackUrl: string, payload: Record<string, unkn
       Authorization: 'Bearer processor',
     },
     body: JSON.stringify(payload),
-  }).catch(() => {
-    // Fire-and-forget: failures are silently ignored.
+  }).catch((err) => {
+    console.error('[agentic-team] Callback failed:', err instanceof Error ? err.message : String(err));
   });
 }
 

@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-import { execFile } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import {
   OnEnterDispatchRequestSchema,
@@ -12,23 +11,7 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   HealthCheckResponseSchema,
 } from '@repo/shared';
-
-function execFilePromise(
-  file: string,
-  args: string[],
-  options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv },
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { ...options, env: { ...process.env, ...options.env } }, (err, stdout, stderr) => {
-      if (err) {
-        const stderrMsg = stderr?.trim() ? `\nstderr: ${stderr.trim()}` : '';
-        reject(new Error(`${err.message}${stderrMsg}`));
-      } else {
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '' });
-      }
-    });
-  });
-}
+import * as git from './git-helpers.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
@@ -42,13 +25,76 @@ function fireAndForgetCallback(callbackUrl: string, payload: Record<string, unkn
       Authorization: 'Bearer processor',
     },
     body: JSON.stringify(payload),
-  }).catch(() => {
-    // Fire-and-forget: failures are silently ignored.
+  }).catch((err) => {
+    console.error('[wrap] Callback failed:', err instanceof Error ? err.message : String(err));
   });
 }
 
 function getDevWrapupBaseUrl(): string {
   return (process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 8080}`).replace(/\/$/, '');
+}
+
+function sendDone(callbackUrl: string, displayId: string): void {
+  console.log(`[wrap] Card ${displayId}: success, moving to done`);
+  fireAndForgetCallback(callbackUrl, { status: 'success', move_to_column: 'done' });
+}
+
+function sendError(callbackUrl: string, displayId: string, message: string): void {
+  console.error(`[wrap] Card ${displayId}: ${message}`);
+  fireAndForgetCallback(callbackUrl, { status: 'error', error_message: message.slice(0, 500) });
+}
+
+async function fetchDevWrapup(workspacePath: string) {
+  const url = `${getDevWrapupBaseUrl()}/api/v1/dev-wrapup`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_path: workspacePath }),
+  });
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => 'unknown');
+    throw new Error(`dev-wrapup API returned ${response.status}: ${bodyText}`);
+  }
+  const data = await response.json() as {
+    commit_message: string;
+    pr_title: string;
+    pr_body: string;
+  };
+  if (
+    typeof data.commit_message !== 'string' ||
+    typeof data.pr_title !== 'string' ||
+    typeof data.pr_body !== 'string'
+  ) {
+    throw new Error('dev-wrapup API returned invalid response shape');
+  }
+  return {
+    commitMessage: data.commit_message,
+    prTitle: data.pr_title,
+    prBody: data.pr_body,
+  };
+}
+
+async function createPR(
+  workspacePath: string,
+  title: string,
+  body: string,
+  displayId: string,
+) {
+  console.log(
+    `[wrap] Card ${displayId}: creating PR via gh CLI (title=${JSON.stringify(title)}, bodyLength=${body.length})`,
+  );
+  try {
+    await git.createPullRequest(workspacePath, title, body);
+    console.log(`[wrap] Card ${displayId}: PR created successfully`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/already exists|no commits between/i.test(message)) {
+      console.log(`[wrap] Card ${displayId}: PR creation skipped — ${message}`);
+    } else {
+      console.error(`[wrap] Card ${displayId}: PR creation failed — ${message}`);
+      throw err;
+    }
+  }
 }
 
 async function runWrapWorkflow(
@@ -57,98 +103,77 @@ async function runWrapWorkflow(
 ) {
   const workspacePath = card.payload?.workspace_path;
   if (!workspacePath || typeof workspacePath !== 'string') {
-    fireAndForgetCallback(callbackUrl, {
-      status: 'error',
-      error_message: 'Wrap failed: missing workspace_path in card payload',
-    });
-    return;
+    return sendError(callbackUrl, card.display_id, 'Wrap failed: missing workspace_path in card payload');
   }
 
+  const branch = `surii/${card.display_id}`;
+
   try {
-    // 1. Fetch dev-wrapup metadata
-    const devWrapupUrl = `${getDevWrapupBaseUrl()}/api/v1/dev-wrapup`;
-    const wrapupResponse = await fetch(devWrapupUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace_path: workspacePath }),
-    });
+    // Phase 1: Detect if there's anything to wrap
+    const hasChanges = await git.hasWorkingTreeChanges(workspacePath);
+    const branchExists = await git.branchExists(workspacePath, branch);
+    console.log(
+      `[wrap] Card ${card.display_id}: preflight state hasChanges=${hasChanges} branchExists=${branchExists} branch=${branch}`,
+    );
 
-    if (!wrapupResponse.ok) {
-      const bodyText = await wrapupResponse.text().catch(() => 'unknown');
-      throw new Error(`dev-wrapup API returned ${wrapupResponse.status}: ${bodyText}`);
+    // Early exit: no local branch + no working-tree changes → nothing to commit,
+    // push, or PR from this workspace. Skip PR lookup entirely to avoid turning
+    // a no-op into a network/auth failure.
+    if (!hasChanges && !branchExists) {
+      console.log(`[wrap] Card ${card.display_id}: no branch and no changes, nothing to wrap`);
+      return sendDone(callbackUrl, card.display_id);
     }
 
-    const wrapupData = await wrapupResponse.json() as {
-      commit_message: string;
-      pr_title: string;
-      pr_body: string;
-      has_staged_changes?: boolean;
-    };
+    // Always call countUnpushedCommits for remaining paths — it returns -1 when
+    // the answer is unknown. -1 !== 0 is truthy, preserving "might have commits"
+    // semantics without special-casing.
+    const unpushedCount = await git.countUnpushedCommits(workspacePath, branch);
+    const hasUnpushed = unpushedCount !== 0; // -1 means unknown → treat as truthy
+    console.log(
+      `[wrap] Card ${card.display_id}: commit state unpushedCount=${unpushedCount} hasUnpushed=${hasUnpushed}`,
+    );
 
-    if (
-      typeof wrapupData.commit_message !== 'string' ||
-      typeof wrapupData.pr_title !== 'string' ||
-      typeof wrapupData.pr_body !== 'string'
-    ) {
-      throw new Error('dev-wrapup API returned invalid response shape');
+    if (!hasChanges && !hasUnpushed) {
+      console.log(`[wrap] Card ${card.display_id}: checking for existing PR on ${branch}`);
+      const prLookup = await git.lookupPullRequest(workspacePath, branch);
+      if (prLookup.exists) {
+        console.log(`[wrap] Card ${card.display_id}: clean workspace, PR exists, nothing to wrap`);
+        return sendDone(callbackUrl, card.display_id);
+      }
+      console.log(`[wrap] Card ${card.display_id}: no existing PR found (${prLookup.reason})`);
     }
 
-    // 2. Git add, then verify staged changes before committing
-    await execFilePromise('git', ['add', '.'], { cwd: workspacePath, timeout: 30_000 });
+    console.log(
+      `[wrap] Card ${card.display_id}: proceeding with wrap workflow (hasChanges=${hasChanges}, hasUnpushed=${hasUnpushed})`,
+    );
 
-    const { stdout: stagedFiles } = await execFilePromise('git', ['diff', '--cached', '--name-only'], {
-      cwd: workspacePath,
-      timeout: 10_000,
-    });
-    const hasStagedChanges = stagedFiles.trim().length > 0;
+    // Phase 2: Fetch wrapup metadata
+    const wrapup = await fetchDevWrapup(workspacePath);
 
-    if (hasStagedChanges) {
-      await execFilePromise('git', ['commit', '-m', wrapupData.commit_message], { cwd: workspacePath, timeout: 30_000 });
+    // Phase 3: Commit changes
+    await git.stageAll(workspacePath);
+    const stagedFiles = await git.getStagedFiles(workspacePath);
+    if (stagedFiles.length > 0) {
+      await git.commit(workspacePath, wrapup.commitMessage);
     } else {
       console.log(`[wrap] Card ${card.display_id}: no staged changes, skipping commit`);
     }
 
-    await execFilePromise('git', ['push', 'origin', `surii/${card.display_id}`], { cwd: workspacePath, timeout: 60_000 });
+    // Phase 4: Push and create PR
+    console.log(`[wrap] Card ${card.display_id}: pushing branch ${branch}`);
+    await git.pushBranch(workspacePath, branch);
+    console.log(`[wrap] Card ${card.display_id}: push completed for ${branch}`);
 
-    // 3. Verify gh auth and create PR
     console.log(`[wrap] Card ${card.display_id}: checking gh auth status`);
-    const { stdout: authStatus } = await execFilePromise('gh', ['auth', 'status'], { cwd: workspacePath, timeout: 10_000 });
+    const authStatus = await git.verifyGhAuth(workspacePath);
     console.log(`[wrap] gh auth status:\n${authStatus}`);
 
-    console.log(`[wrap] Card ${card.display_id}: creating PR via gh CLI`);
-    try {
-      await execFilePromise(
-        'gh',
-        [
-          'pr', 'create',
-          '--title', wrapupData.pr_title,
-          '--body', wrapupData.pr_body,
-        ],
-        { cwd: workspacePath, timeout: 30_000 },
-      );
-    } catch (prErr) {
-      const prMessage = prErr instanceof Error ? prErr.message : String(prErr);
-      const isBenignError =
-        /already exists|no commits between/i.test(prMessage);
-      if (isBenignError) {
-        console.log(`[wrap] Card ${card.display_id}: PR creation skipped — ${prMessage}`);
-      } else {
-        throw prErr;
-      }
-    }
+    await createPR(workspacePath, wrapup.prTitle, wrapup.prBody, card.display_id);
 
-    // 6. Success callback
-    fireAndForgetCallback(callbackUrl, {
-      status: 'success',
-      move_to_column: 'done',
-    });
+    return sendDone(callbackUrl, card.display_id);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[wrap] Card ${card.display_id}: ${message}`);
-    fireAndForgetCallback(callbackUrl, {
-      status: 'error',
-      error_message: `Wrap failed: ${message}`.slice(0, 500),
-    });
+    return sendError(callbackUrl, card.display_id, `Wrap failed: ${message}`);
   }
 }
 
@@ -199,7 +224,7 @@ export async function wrapProcessorRoutes(instance: FastifyInstance): Promise<vo
 
     const response = OnEnterDispatchAcceptedResponseSchema.parse({ status: 'accepted' });
 
-    fireAndForgetCallback(body.data.callback_url, { status: 'success' });
+    runWrapWorkflow(body.data.card, body.data.callback_url);
 
     return reply.status(202).send(response);
   });
