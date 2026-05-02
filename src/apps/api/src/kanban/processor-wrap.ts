@@ -133,14 +133,12 @@ async function runWrapWorkflow(
       `[wrap] Card ${card.display_id}: commit state unpushedCount=${unpushedCount} hasUnpushed=${hasUnpushed}`,
     );
 
+    // Nothing to stage, commit, or push — no point calling dev-wrapup (the AI
+    // agent would have nothing to analyse and the call would fail). Skip straight
+    // to Done.
     if (!hasChanges && !hasUnpushed) {
-      console.log(`[wrap] Card ${card.display_id}: checking for existing PR on ${branch}`);
-      const prLookup = await git.lookupPullRequest(workspacePath, branch);
-      if (prLookup.exists) {
-        console.log(`[wrap] Card ${card.display_id}: clean workspace, PR exists, nothing to wrap`);
-        return sendDone(callbackUrl, card.display_id);
-      }
-      console.log(`[wrap] Card ${card.display_id}: no existing PR found (${prLookup.reason})`);
+      console.log(`[wrap] Card ${card.display_id}: no changes and no unpushed commits, nothing to wrap`);
+      return sendDone(callbackUrl, card.display_id);
     }
 
     console.log(

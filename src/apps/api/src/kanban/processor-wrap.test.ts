@@ -392,7 +392,7 @@ describe('wrap processor routes', () => {
       );
     });
 
-    it('runs full flow when workspace is clean but PR does not exist', async () => {
+    it('skips dev-wrapup and sends Done when workspace is clean and no unpushed commits, even if no PR', async () => {
       mockExecFile.mockImplementation((file, ...rest) => {
         const args = rest.flat().filter((a): a is string => typeof a === 'string');
         if (file === 'git' && args.includes('status') && args.includes('--porcelain')) {
@@ -426,28 +426,24 @@ describe('wrap processor routes', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      // dev-wrapup SHOULD be called because PR does not exist
-      expect(fetchSpy).toHaveBeenCalledWith(
-        expect.stringContaining('/api/v1/dev-wrapup'),
-        expect.objectContaining({ method: 'POST' }),
+      // dev-wrapup must NOT be called — nothing to generate content for
+      const devWrapupCalls = fetchSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('/api/v1/dev-wrapup')
       );
+      expect(devWrapupCalls).toHaveLength(0);
 
-      expect(mockExecFile).toHaveBeenCalledWith(
-        'git',
-        expect.arrayContaining(['push', 'origin', 'surii/TST-1']),
-        expect.anything(),
+      // No push or PR create
+      const pushCalls = mockExecFile.mock.calls.filter(
+        (call) => call[0] === 'git' && (call[1] as string[]).includes('push'),
       );
+      expect(pushCalls).toHaveLength(0);
 
-      expect(mockExecFile).toHaveBeenCalledWith(
-        'gh',
-        expect.arrayContaining([
-          'pr', 'create',
-          '--title', '[TST-1] Add feature',
-          '--body', '## Summary\n\nThis PR adds a feature.',
-        ]),
-        expect.anything(),
+      const prCreateCalls = mockExecFile.mock.calls.filter(
+        (call) => call[0] === 'gh' && (call[1] as string[]).includes('create'),
       );
+      expect(prCreateCalls).toHaveLength(0);
 
+      // Must succeed
       expect(fetchSpy).toHaveBeenCalledWith(
         callbackUrl,
         expect.objectContaining({
@@ -581,6 +577,70 @@ describe('wrap processor routes', () => {
       expect(prViewCalls).toHaveLength(0);
 
       // Must succeed
+      expect(fetchSpy).toHaveBeenCalledWith(
+        callbackUrl,
+        expect.objectContaining({
+          body: expect.stringContaining('"status":"success"'),
+        }),
+      );
+    });
+
+    it('skips dev-wrapup and moves to Done when branch exists but workspace is clean with no unpushed commits', async () => {
+      mockExecFile.mockImplementation((file: string, ...rest: unknown[]) => {
+        const args = (rest.flat() as unknown[]).filter((a): a is string => typeof a === 'string');
+        if (file === 'git' && args.includes('status') && args.includes('--porcelain')) {
+          return { stdout: '' }; // no working-tree changes
+        }
+        if (file === 'git' && args.includes('show-ref') && args.includes('--verify')) {
+          return { stdout: 'abc123 refs/heads/surii/TST-1\n' }; // branch exists
+        }
+        if (file === 'git' && args.includes('rev-list')) {
+          return { stdout: '0\n' }; // 0 unpushed commits
+        }
+        // gh pr view and all write ops should never be called
+        return undefined;
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440015';
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/wrap/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440016',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // dev-wrapup must NOT be called
+      const devWrapupCalls = fetchSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('/api/v1/dev-wrapup')
+      );
+      expect(devWrapupCalls).toHaveLength(0);
+
+      // No commit or push
+      const commitCalls = mockExecFile.mock.calls.filter(
+        (call) => call[0] === 'git' && (call[1] as string[]).includes('commit'),
+      );
+      expect(commitCalls).toHaveLength(0);
+
+      const pushCalls = mockExecFile.mock.calls.filter(
+        (call) => call[0] === 'git' && (call[1] as string[]).includes('push'),
+      );
+      expect(pushCalls).toHaveLength(0);
+
+      // No PR lookup (gh pr view) either
+      const prViewCalls = mockExecFile.mock.calls.filter(
+        (call) => call[0] === 'gh' && (call[1] as string[]).includes('view'),
+      );
+      expect(prViewCalls).toHaveLength(0);
+
+      // Must succeed, not error
       expect(fetchSpy).toHaveBeenCalledWith(
         callbackUrl,
         expect.objectContaining({
