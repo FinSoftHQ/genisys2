@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, computed, ref, nextTick, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import type { SnapshotResponse, UpdateBoardResponse, BoardSuiteWithBoards } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
@@ -9,8 +9,9 @@ import BoardView from '~/components/kanban/BoardView.vue';
 definePageMeta({ layout: 'default' });
 
 const route = useRoute();
-const boardId = route.params.boardId as string;
 const toast = useToast();
+
+const boardId = computed(() => route.params.boardId as string);
 
 const { store, setLoading, setError, hydrate, resetStore } = useBoardStore();
 const { refreshBoards } = useBoardsList();
@@ -31,12 +32,18 @@ const boardRoleColor = computed(() => {
   return 'neutral';
 });
 
+function formatRoleLabel(role?: string | null) {
+  if (!role) return '';
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
 async function loadSnapshot() {
   resetStore();
+  suite.value = null;
   setLoading(true);
   setError(null);
   try {
-    const response = await $fetch<SnapshotResponse>(`/api/boards/${boardId}/snapshot`);
+    const response = await $fetch<SnapshotResponse>(`/api/boards/${boardId.value}/snapshot`);
     hydrate(response.data);
   } catch (err: any) {
     setError(err?.data?.error?.message || 'Failed to load board');
@@ -55,13 +62,21 @@ async function loadSuite() {
   try {
     const response = await $fetch<{ data: BoardSuiteWithBoards }>(`/api/board-suites/${suiteUid}`);
     suite.value = response.data;
-  } catch (err: any) {
+  } catch (_err) {
     // Silently fail — suite nav is optional enhancement
     suite.value = null;
   } finally {
     isLoadingSuite.value = false;
   }
 }
+
+watch(
+  () => route.params.boardId,
+  () => {
+    loadSnapshot();
+  },
+  { immediate: true }
+);
 
 watch(
   () => store.value.board?.suite_uid,
@@ -87,7 +102,7 @@ async function saveTitle() {
   if (!newTitle || newTitle === store.value.board.title) return;
 
   try {
-    const response = await $fetch<UpdateBoardResponse>(`/api/boards/${boardId}`, {
+    const response = await $fetch<UpdateBoardResponse>(`/api/boards/${boardId.value}`, {
       method: 'PATCH',
       body: { title: newTitle },
     });
@@ -110,10 +125,6 @@ function onTitleKeydown(e: KeyboardEvent) {
     isEditingTitle.value = false;
   }
 }
-
-onMounted(() => {
-  loadSnapshot();
-});
 </script>
 
 <template>
@@ -155,7 +166,7 @@ onMounted(() => {
               variant="subtle"
               size="sm"
             >
-              {{ boardRole }}
+              {{ formatRoleLabel(boardRole) }}
             </UBadge>
           </div>
         </template>
@@ -163,7 +174,7 @@ onMounted(() => {
 
       <!-- Suite Navigation Bar -->
       <div
-        v-if="suite && suite.boards.length > 1"
+        v-if="suite && suite.boards.length > 0"
         class="px-4 py-2 border-b border-default/10 bg-elevated/50"
       >
         <div class="flex items-center gap-2">
@@ -210,4 +221,6 @@ onMounted(() => {
       />
     </template>
   </UDashboardPanel>
+</template>
+nel>
 </template>

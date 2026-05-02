@@ -128,6 +128,11 @@ async function onCreateSuite() {
 
 const standaloneBoards = computed(() => boards.value.filter((b) => !b.suite_uid));
 
+function formatRoleLabel(role?: string | null) {
+  if (!role) return '';
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
 onMounted(() => {
   refreshBoards();
   refreshSuites();
@@ -305,7 +310,7 @@ onMounted(() => {
                                   variant="subtle"
                                   size="xs"
                                 >
-                                  {{ board.role }}
+                                  {{ formatRoleLabel(board.role) }}
                                 </UBadge>
                               </div>
                               <p class="text-xs text-muted">{{ board.prefix }} &middot; {{ board.schema.columns.length }} columns</p>
@@ -335,7 +340,17 @@ onMounted(() => {
                       <div class="flex items-center gap-3">
                         <UIcon name="i-lucide-layout-kanban" class="size-5 text-primary" />
                         <div>
-                          <p class="font-semibold">{{ board.title }}</p>
+                          <div class="flex items-center gap-2">
+                            <p class="font-semibold">{{ board.title }}</p>
+                            <UBadge
+                              v-if="board.role"
+                              :color="board.role === 'primary' ? 'primary' : board.role === 'tasks' ? 'info' : 'neutral'"
+                              variant="subtle"
+                              size="xs"
+                            >
+                              {{ formatRoleLabel(board.role) }}
+                            </UBadge>
+                          </div>
                           <p class="text-xs text-muted">{{ board.prefix }} &middot; {{ board.schema.columns.length }} columns</p>
                         </div>
                       </div>
@@ -345,6 +360,13 @@ onMounted(() => {
                 </NuxtLink>
               </div>
             </div>
+          </div>
+        </UCard>
+      </div>
+    </template>
+  </UDashboardPanel>
+</template>
+           </div>
           </div>
         </UCard>
       </div>
