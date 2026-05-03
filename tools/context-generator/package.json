@@ -17,9 +17,9 @@
   },
   
   "dependencies": {
-    "commander": "^12.1.0",
-    "fast-glob": "^3.3.2",
-    "ignore": "^7.0.0",
+    "commander": "catalog:legacy",
+    "fast-glob": "catalog:",
+    "ignore": "catalog:",
     "typescript": "catalog:"
   },
   "devDependencies": {

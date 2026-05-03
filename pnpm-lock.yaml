@@ -18,6 +18,15 @@ catalogs:
     '@fastify/websocket':
       specifier: ^11.0.1
       version: 11.2.0
+    '@iconify-json/lucide':
+      specifier: ^1.2.103
+      version: 1.2.104
+    '@mariozechner/pi-ai':
+      specifier: ^0.72.1
+      version: 0.72.1
+    '@mariozechner/pi-coding-agent':
+      specifier: ^0.72.1
+      version: 0.72.1
     '@mastra/core':
       specifier: ^1.24.1
       version: 1.28.0
@@ -39,6 +48,12 @@ catalogs:
     '@mastra/observability':
       specifier: ^1.9.0
       version: 1.10.0
+    '@nuxt/ui':
+      specifier: ^4.7.0
+      version: 4.7.0
+    '@octokit/rest':
+      specifier: ^21.1.1
+      version: 21.1.1
     '@playwright/test':
       specifier: ^1.49.0
       version: 1.59.1
@@ -48,6 +63,9 @@ catalogs:
     '@rivet-dev/agent-os-pi':
       specifier: ^0.1.1
       version: 0.1.1
+    '@types/better-sqlite3':
+      specifier: ^7.6.13
+      version: 7.6.13
     '@types/node':
       specifier: 22.19.15
       version: 22.19.15
@@ -57,18 +75,45 @@ catalogs:
     '@typescript-eslint/parser':
       specifier: ^8.18.0
       version: 8.59.0
+    '@vitejs/plugin-vue':
+      specifier: ^5.2.4
+      version: 5.2.4
     '@vitest/coverage-v8':
       specifier: ^2.1.8
       version: 2.1.9
+    '@vue/test-utils':
+      specifier: ^2.4.8
+      version: 2.4.9
+    better-sqlite3:
+      specifier: ^12.9.0
+      version: 12.9.0
+    commander:
+      specifier: ^14.0.3
+      version: 14.0.3
+    drizzle-kit:
+      specifier: ^0.31.10
+      version: 0.31.10
+    drizzle-orm:
+      specifier: ^0.45.2
+      version: 0.45.2
     eslint:
       specifier: ^9.17.0
       version: 9.39.4
+    fast-glob:
+      specifier: ^3.3.2
+      version: 3.3.3
     fastify:
       specifier: ^5.1.0
       version: 5.8.5
     fastify-type-provider-zod:
       specifier: ^5.1.0
       version: 5.1.0
+    happy-dom:
+      specifier: ^15.11.7
+      version: 15.11.7
+    ignore:
+      specifier: ^7.0.0
+      version: 7.0.5
     mastra:
       specifier: ^1.5.0
       version: 1.6.3
@@ -81,9 +126,15 @@ catalogs:
     rivetkit:
       specifier: ^2.2.1
       version: 2.2.1
+    tailwindcss:
+      specifier: ^4.2.4
+      version: 4.2.4
     tsup:
       specifier: ^8.3.5
       version: 8.5.1
+    tsx:
+      specifier: ^4.21.0
+      version: 4.21.0
     typescript:
       specifier: 5.9.3
       version: 5.9.3
@@ -93,9 +144,16 @@ catalogs:
     vitest:
       specifier: 2.1.9
       version: 2.1.9
+    vue:
+      specifier: ^3.5.31
+      version: 3.5.33
     zod:
       specifier: 4.3.6
       version: 4.3.6
+  legacy:
+    commander:
+      specifier: ^12.1.0
+      version: 12.1.0
 
 importers:
 
@@ -196,13 +254,13 @@ importers:
         specifier: 'catalog:'
         version: 11.2.0
       '@mariozechner/pi-ai':
-        specifier: ^0.72.1
+        specifier: 'catalog:'
         version: 0.72.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.72.1
+        specifier: 'catalog:'
         version: 0.72.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@octokit/rest':
-        specifier: ^21.1.1
+        specifier: 'catalog:'
         version: 21.1.1
       '@repo/logger':
         specifier: workspace:*
@@ -211,10 +269,10 @@ importers:
         specifier: workspace:*
         version: link:../../libs/shared
       better-sqlite3:
-        specifier: ^12.9.0
+        specifier: 'catalog:'
         version: 12.9.0
       drizzle-orm:
-        specifier: ^0.45.2
+        specifier: 'catalog:'
         version: 0.45.2(@libsql/client@0.15.15)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.9.0)
       fastify:
         specifier: 'catalog:'
@@ -230,19 +288,19 @@ importers:
         version: 4.3.6
     devDependencies:
       '@types/better-sqlite3':
-        specifier: ^7.6.13
+        specifier: 'catalog:'
         version: 7.6.13
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.15
       drizzle-kit:
-        specifier: ^0.31.10
+        specifier: 'catalog:'
         version: 0.31.10
       tsup:
         specifier: 'catalog:'
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.12)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
       tsx:
-        specifier: ^4.21.0
+        specifier: 'catalog:'
         version: 4.21.0
       typescript:
         specifier: 'catalog:'
@@ -251,10 +309,10 @@ importers:
   src/apps/web:
     dependencies:
       '@iconify-json/lucide':
-        specifier: ^1.2.103
+        specifier: 'catalog:'
         version: 1.2.104
       '@nuxt/ui':
-        specifier: ^4.7.0
+        specifier: 'catalog:'
         version: 4.7.0(@internationalized/date@3.12.1)(@internationalized/number@3.6.6)(@tiptap/extensions@3.22.4(@tiptap/core@3.22.4(@tiptap/pm@3.22.4))(@tiptap/pm@3.22.4))(@tiptap/y-tiptap@3.0.3(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.30))(yjs@13.6.30))(db0@0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.9.0)(drizzle-orm@0.45.2(@libsql/client@0.15.15)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.9.0)))(embla-carousel@8.6.0)(ioredis@5.10.1)(magicast@0.5.2)(tailwindcss@4.2.4)(typescript@5.9.3)(vite@7.3.2(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.21.0)(yaml@2.8.3))(vue-router@5.0.6(@vue/compiler-sfc@3.5.33)(vue@3.5.33(typescript@5.9.3)))(vue@3.5.33(typescript@5.9.3))(yjs@13.6.30)(zod@4.3.6)
       '@repo/logger':
         specifier: workspace:*
@@ -266,7 +324,7 @@ importers:
         specifier: 'catalog:'
         version: 4.4.2(@babel/core@7.29.0)(@babel/plugin-syntax-jsx@7.28.6(@babel/core@7.29.0))(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(@parcel/watcher@2.5.6)(@types/node@22.19.15)(@vue/compiler-sfc@3.5.33)(better-sqlite3@12.9.0)(cac@6.7.14)(db0@0.3.4(@libsql/client@0.15.15)(better-sqlite3@12.9.0)(drizzle-orm@0.45.2(@libsql/client@0.15.15)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.9.0)))(drizzle-orm@0.45.2(@libsql/client@0.15.15)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.9.0))(eslint@9.39.4(jiti@2.6.1))(ioredis@5.10.1)(lightningcss@1.32.0)(magicast@0.5.2)(optionator@0.9.4)(rollup-plugin-visualizer@7.0.1(rollup@4.60.2))(rollup@4.60.2)(srvx@0.11.15)(terser@5.46.2)(tsx@4.21.0)(typescript@5.9.3)(vite@7.3.2(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.21.0)(yaml@2.8.3))(yaml@2.8.3)
       tailwindcss:
-        specifier: ^4.2.4
+        specifier: 'catalog:'
         version: 4.2.4
       zod:
         specifier: 'catalog:'
@@ -276,13 +334,13 @@ importers:
         specifier: 'catalog:'
         version: 22.19.15
       '@vitejs/plugin-vue':
-        specifier: ^5.2.4
+        specifier: 'catalog:'
         version: 5.2.4(vite@7.3.2(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.21.0)(yaml@2.8.3))(vue@3.5.33(typescript@5.9.3))
       '@vue/test-utils':
-        specifier: ^2.4.8
+        specifier: 'catalog:'
         version: 2.4.9(@vue/compiler-dom@3.5.33)(@vue/server-renderer@3.5.33(vue@3.5.33(typescript@5.9.3)))(vue@3.5.33(typescript@5.9.3))
       happy-dom:
-        specifier: ^15.11.7
+        specifier: 'catalog:'
         version: 15.11.7
       typescript:
         specifier: 'catalog:'
@@ -291,7 +349,7 @@ importers:
         specifier: 'catalog:'
         version: 2.1.9(@types/node@22.19.15)(happy-dom@15.11.7)(lightningcss@1.32.0)(terser@5.46.2)
       vue:
-        specifier: ^3.5.31
+        specifier: 'catalog:'
         version: 3.5.33(typescript@5.9.3)
 
   src/libs/logger:
@@ -346,7 +404,7 @@ importers:
   tools/context-extractor:
     dependencies:
       commander:
-        specifier: ^14.0.3
+        specifier: 'catalog:'
         version: 14.0.3
     devDependencies:
       '@repo/typescript-config':
@@ -368,13 +426,13 @@ importers:
   tools/context-generator:
     dependencies:
       commander:
-        specifier: ^12.1.0
+        specifier: catalog:legacy
         version: 12.1.0
       fast-glob:
-        specifier: ^3.3.2
+        specifier: 'catalog:'
         version: 3.3.3
       ignore:
-        specifier: ^7.0.0
+        specifier: 'catalog:'
         version: 7.0.5
       typescript:
         specifier: 'catalog:'

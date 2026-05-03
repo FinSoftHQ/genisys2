@@ -10,21 +10,21 @@
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
-    "@iconify-json/lucide": "^1.2.103",
-    "@nuxt/ui": "^4.7.0",
+    "@iconify-json/lucide": "catalog:",
+    "@nuxt/ui": "catalog:",
     "@repo/logger": "workspace:*",
     "@repo/shared": "workspace:*",
     "nuxt": "catalog:",
-    "tailwindcss": "^4.2.4",
+    "tailwindcss": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "@vitejs/plugin-vue": "^5.2.4",
-    "@vue/test-utils": "^2.4.8",
-    "happy-dom": "^15.11.7",
+    "@vitejs/plugin-vue": "catalog:",
+    "@vue/test-utils": "catalog:",
+    "happy-dom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "vue": "^3.5.31"
+    "vue": "catalog:"
   }
 }

@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "commander": "^14.0.3"
+    "commander": "catalog:"
   },
   "devDependencies": {
     "@repo/typescript-config": "workspace:*",
