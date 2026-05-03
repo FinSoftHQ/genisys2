@@ -513,9 +513,23 @@ export function buildPiArgs(
 }
 
 function spawnAgentProcess(room: Room, agent: AgentState): void {
+	// When the API runs under pnpm / tsx, local node_modules/.bin is
+	// prepended to PATH. This shadows the global `pi` binary with a local
+	// wrapper that points to an older version of pi-coding-agent (e.g. 0.60.0),
+	// which lacks newer models. Remove local node_modules/.bin entries so
+	// the globally-installed `pi` (with the user's current models/settings)
+	// is resolved instead.
+	const originalPath = process.env.PATH ?? "";
+	const filteredPath = originalPath
+		.split(":")
+		.filter((segment) => !segment.endsWith("node_modules/.bin"))
+		.join(":");
+
+	const env = { ...process.env, PATH: filteredPath };
+
 	const proc = spawn("pi", agent.piArgs, {
 		stdio: ["pipe", "pipe", "inherit"],
-		env: process.env,
+		env,
 		...(room.workingDir ? { cwd: room.workingDir } : {}),
 	});
 	agent.proc = proc;

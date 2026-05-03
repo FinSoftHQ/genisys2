@@ -136,9 +136,18 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 	};
 
 	for (const [name, role] of Object.entries(protocol.team)) {
+		// When the API runs under pnpm / tsx, local node_modules/.bin shadows
+		// the global `pi` binary with an older local version. Remove local
+		// node_modules/.bin entries from PATH so the global `pi` is resolved.
+		const originalPath = process.env.PATH ?? "";
+		const filteredPath = originalPath
+			.split(":")
+			.filter((segment) => !segment.endsWith("node_modules/.bin"))
+			.join(":");
+
 		const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
 			stdio: ["pipe", "pipe", "inherit"],
-			env: process.env,
+			env: { ...process.env, PATH: filteredPath },
 		});
 
 		const logger = new SquadLogger(name);

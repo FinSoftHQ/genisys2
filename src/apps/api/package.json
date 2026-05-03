@@ -14,6 +14,9 @@
     "@fastify/helmet": "catalog:",
     "@fastify/rate-limit": "catalog:",
     "@fastify/websocket": "catalog:",
+    "@mariozechner/pi-ai": "^0.72.1",
+    "@mariozechner/pi-coding-agent": "^0.72.1",
+    "@octokit/rest": "^21.1.1",
     "@repo/logger": "workspace:*",
     "@repo/shared": "workspace:*",
     "better-sqlite3": "^12.9.0",
@@ -21,8 +24,6 @@
     "fastify": "catalog:",
     "fastify-type-provider-zod": "catalog:",
     "pino": "catalog:",
-    "@mariozechner/pi-coding-agent": "^0.60.0",
-    "@octokit/rest": "^21.1.1",
     "zod": "catalog:"
   },
   "devDependencies": {

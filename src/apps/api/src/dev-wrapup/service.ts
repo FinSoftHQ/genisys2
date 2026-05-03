@@ -5,6 +5,7 @@ import {
   createAgentSession,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { getModel } from "@mariozechner/pi-ai";
 import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 
 const GENERATION_TIMEOUT_MS = 60_000;
@@ -220,9 +221,13 @@ function parseDelimitedResponse(text: string): Record<string, string> {
 }
 
 async function runPiSession(workspacePath: string, prompt: string): Promise<unknown> {
+  // Attempt to use the github-copilot/gpt-5-mini model if available in the registry.
+  const preferredModel = getModel("github-copilot", "gpt-5-mini");
+
   const { session } = await createAgentSession({
     cwd: workspacePath,
     sessionManager: SessionManager.inMemory(workspacePath),
+    ...(preferredModel ? { model: preferredModel } : {}),
   });
 
   let agentError: Error | undefined;
