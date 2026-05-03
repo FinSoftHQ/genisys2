@@ -515,6 +515,7 @@ export function buildPiArgs(
 function spawnAgentProcess(room: Room, agent: AgentState): void {
 	const proc = spawn("pi", agent.piArgs, {
 		stdio: ["pipe", "pipe", "inherit"],
+		env: process.env,
 		...(room.workingDir ? { cwd: room.workingDir } : {}),
 	});
 	agent.proc = proc;

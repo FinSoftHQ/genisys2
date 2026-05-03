@@ -154,6 +154,7 @@ function isExternal(item: CardFamilyMetadata): boolean {
                   <UBadge :color="statusColor(parent.status)" variant="subtle" size="xs">
                     {{ parent.status }}
                   </UBadge>
+                  <span v-if="isExternal(parent)" class="text-xs text-muted font-mono">[EXT]</span>
                   <UIcon
                     v-if="isExternal(parent)"
                     name="i-lucide-external-link"
@@ -179,6 +180,7 @@ function isExternal(item: CardFamilyMetadata): boolean {
                   <UBadge :color="statusColor(child.status)" variant="subtle" size="xs">
                     {{ child.status }}
                   </UBadge>
+                  <span v-if="isExternal(child)" class="text-xs text-muted font-mono">[EXT]</span>
                   <UIcon
                     v-if="isExternal(child)"
                     name="i-lucide-external-link"

@@ -9,7 +9,7 @@ import BoardView from '~/components/kanban/BoardView.vue';
 definePageMeta({ layout: 'default' });
 
 const route = useRoute();
-const boardId = route.params.boardId as string;
+const boardId = computed(() => route.params.boardId as string);
 const toast = useToast();
 
 const { store, setLoading, setError, hydrate, resetStore } = useBoardStore();
@@ -36,7 +36,7 @@ async function loadSnapshot() {
   setLoading(true);
   setError(null);
   try {
-    const response = await $fetch<SnapshotResponse>(`/api/boards/${boardId}/snapshot`);
+    const response = await $fetch<SnapshotResponse>(`/api/boards/${boardId.value}/snapshot`);
     hydrate(response.data);
   } catch (err: any) {
     setError(err?.data?.error?.message || 'Failed to load board');
@@ -70,6 +70,10 @@ watch(
   }
 );
 
+watch(boardId, () => {
+  loadSnapshot();
+});
+
 function startEditingTitle() {
   if (!store.value.board) return;
   editTitle.value = store.value.board.title;
@@ -87,7 +91,7 @@ async function saveTitle() {
   if (!newTitle || newTitle === store.value.board.title) return;
 
   try {
-    const response = await $fetch<UpdateBoardResponse>(`/api/boards/${boardId}`, {
+    const response = await $fetch<UpdateBoardResponse>(`/api/boards/${boardId.value}`, {
       method: 'PATCH',
       body: { title: newTitle },
     });

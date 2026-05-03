@@ -138,6 +138,7 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 	for (const [name, role] of Object.entries(protocol.team)) {
 		const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
 			stdio: ["pipe", "pipe", "inherit"],
+			env: process.env,
 		});
 
 		const logger = new SquadLogger(name);
