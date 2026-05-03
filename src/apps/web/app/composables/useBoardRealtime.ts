@@ -84,6 +84,9 @@ export function useBoardRealtime(boardId: string, opts?: { onReload?: () => void
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         boardStore.updateCard(event.data.card);
         break;
+      case 'ROLLUP_CHANGED':
+        opts?.onReload?.();
+        break;
       case 'BOARD_RELOAD':
         opts?.onReload?.();
         break;
