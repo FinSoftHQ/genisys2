@@ -60,7 +60,7 @@ const mockCard = {
   version: 1,
   processing_state: 'IDLE' as const,
   is_editable: true,
-  payload: { repository_url: 'https://github.com/test-org/test-repo.git', tailor_shop: '/workspace/teams/dev' },
+  payload: { repository_url: 'https://github.com/test-org/test-repo.git', tailor_shop: '/workspace/teams/dev', workspace_path: '/workspace/TST-1' },
   current_status: 'agentic-team',
   created_at: '2026-04-26T08:30:00.000Z',
   updated_at: '2026-04-26T08:30:00.000Z',

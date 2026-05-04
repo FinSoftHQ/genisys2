@@ -543,11 +543,17 @@ function spawnAgentProcess(room: Room, agent: AgentState): void {
 
 	const env = { ...process.env, PATH: filteredPath };
 
+	const spawnCwd = room.workingDir ?? process.cwd();
+	console.log(`[agent-rooms] Spawning agent "${agent.name}" in room ${room.id} with cwd: ${spawnCwd}`);
+	if (!room.workingDir) {
+		console.warn(`[agent-rooms] WARNING: room ${room.id} has no workingDir; falling back to process.cwd()`);
+	}
+
 	const proc = spawn("pi", agent.piArgs, {
 		stdio: ["pipe", "pipe", "inherit"],
 		env,
 		detached: true,
-		...(room.workingDir ? { cwd: room.workingDir } : {}),
+		cwd: spawnCwd,
 	});
 	agent.proc = proc;
 	attachAgentEventHandlers(room, agent);

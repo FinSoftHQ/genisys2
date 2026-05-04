@@ -33,6 +33,7 @@ Depending on the task assigned by the Team Lead, you will use one of two testing
 
 <CRITICAL_CONSTRAINTS>
   <Constraint name="Directory Ownership">
+    - All file paths are relative to the current working directory.
     - Write Playwright E2E tests strictly in the `e2e/tests/` directory.
     - Write backend Vitest tests strictly inside `src/apps/api/`.
     - Write frontend Vitest tests strictly inside `src/apps/web/`.

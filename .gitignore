@@ -438,3 +438,4 @@ file:mem_*
 
 # Ephemeral Workspaces
 .workspaces/
+llm_context.md
