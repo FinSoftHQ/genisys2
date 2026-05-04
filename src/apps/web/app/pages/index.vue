@@ -432,8 +432,6 @@ onMounted(() => {
                 />
               </div>
             </div>
-          </UCard>
-        </section>
 
             <div v-if="visibleStandaloneBoards.length" class="space-y-3">
               <div class="flex items-center justify-between gap-3">
@@ -449,17 +447,6 @@ onMounted(() => {
                   @navigate="navigateToBoard"
                 />
               </div>
-            </template>
-
-            <div v-if="uuidFallbackOpen" class="flex flex-col gap-4">
-              <UForm :state="{ boardId: uuidBoardId }" @submit="goToBoard" class="flex flex-col gap-4">
-                <UFormField name="boardId" label="Board ID" required>
-                  <UInput v-model="uuidBoardId" placeholder="Enter board UUID" class="w-full" />
-                </UFormField>
-                <UButton type="submit" icon="i-lucide-layout-kanban" block>
-                  Open Board
-                </UButton>
-              </UForm>
             </div>
           </div>
         </section>
