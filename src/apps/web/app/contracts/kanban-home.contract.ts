@@ -1,6 +1,8 @@
 import type { BoardEntity, BoardSuiteWithBoards, BoardTemplate } from '@repo/shared';
 
 export type HomeSectionId = 'quick-actions' | 'browse' | 'uuid-fallback';
+export type HomeQuickActionId = 'create-suite' | 'create-board';
+export type HomeBrowseGroupId = 'suite-groups' | 'standalone-boards';
 
 export type HomeBoardTemplateOption = Extract<BoardTemplate, 'default' | 'development'>;
 export type HomeSuiteTemplateOption = Extract<BoardTemplate, 'default' | 'development'>;
@@ -42,6 +44,8 @@ export type HomeUuidFallbackState = {
 
 export type KanbanHomePageState = {
   sectionOrder: readonly HomeSectionId[];
+  quickActionOrder: readonly HomeQuickActionId[];
+  browseGroupOrder: readonly HomeBrowseGroupId[];
   quickActions: HomeQuickActionsState;
   browseData: HomeBrowseDataState;
   browseUi: HomeBrowseUiState;
@@ -53,6 +57,42 @@ export const KANBAN_HOME_SECTION_ORDER: readonly HomeSectionId[] = [
   'browse',
   'uuid-fallback',
 ] as const;
+
+export const KANBAN_HOME_QUICK_ACTION_ORDER: readonly HomeQuickActionId[] = [
+  'create-suite',
+  'create-board',
+] as const;
+
+export const KANBAN_HOME_BROWSE_GROUP_ORDER: readonly HomeBrowseGroupId[] = [
+  'suite-groups',
+  'standalone-boards',
+] as const;
+
+export const KANBAN_HOME_SECTION_META = {
+  'quick-actions': {
+    ariaLabel: 'Quick Actions',
+    title: 'Quick Actions',
+    description: 'Create a suite first, then create standalone boards when needed.',
+    aboveFold: true,
+  },
+  browse: {
+    ariaLabel: 'Browse',
+    title: 'Browse',
+    description: 'Search and open existing suites and boards.',
+    aboveFold: true,
+  },
+  'uuid-fallback': {
+    ariaLabel: 'UUID Fallback',
+    title: 'UUID Fallback',
+    description: 'Advanced access only for direct board ID navigation.',
+    aboveFold: false,
+  },
+} as const;
+
+export const KANBAN_HOME_COMPONENT_CONTRACT = {
+  suiteQuickAccessCard: 'HomeSuiteQuickAccessCard',
+  boardQuickAccessCard: 'HomeBoardQuickAccessCard',
+} as const;
 
 export const KANBAN_HOME_UI_CONSTRAINTS = {
   boardTitle: {
@@ -67,6 +107,9 @@ export const KANBAN_HOME_UI_CONSTRAINTS = {
     trimBeforeSubmit: true,
     fallback: 'New Suite',
   },
+  templates: {
+    allowed: ['default', 'development'] as const,
+  },
   boardPrefix: {
     pattern: /^[A-Z][A-Z0-9]{0,9}$/,
     optional: true,
@@ -79,5 +122,16 @@ export const KANBAN_HOME_UI_CONSTRAINTS = {
   uuidFallback: {
     defaultOpen: false,
     placement: 'last-section',
+    primaryUx: false,
+  },
+  quickActions: {
+    primaryCta: 'create-suite',
+    secondaryCta: 'create-board',
+  },
+  visualTone: {
+    primaryButtonColor: 'primary',
+    secondaryButtonColor: 'neutral',
+    destructiveButtonColor: 'error',
+    avoidLegacyPalette: true,
   },
 } as const;
