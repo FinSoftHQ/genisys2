@@ -11,6 +11,7 @@ import {
   HealthCheckResponseSchema,
 } from '@repo/shared';
 import { execFilePromise } from './exec-helpers.js';
+import * as git from './git-helpers.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
@@ -75,7 +76,7 @@ async function runCommitWorkflow(
   try {
     // Phase 1: Stage all changes
     console.log(`[commit] Card ${card.display_id}: staging changes with git add -A`);
-    await execFilePromise('git', ['add', '-A'], { cwd: workspacePath, timeout: 30_000 });
+    await git.stageAll(workspacePath);
 
     // Phase 2: Check if anything was staged
     const { stdout: stagedStdout } = await execFilePromise(

@@ -45,6 +45,8 @@ vi.mock('node:child_process', () => ({
       stdout = 'src/index.ts\n';
     } else if (cmdArgs.includes('pr') && cmdArgs.includes('view')) {
       error = new Error('no PR found');
+    } else if (cmdArgs.includes('rev-parse') && cmdArgs.includes('--abbrev-ref')) {
+      stdout = 'surii/TST-1\n';
     }
     if (cb) cb(error, stdout, stderr);
     return {} as any;

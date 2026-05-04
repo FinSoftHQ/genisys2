@@ -67,7 +67,7 @@ export async function hasPullRequest(workspacePath: string, branch: string): Pro
 }
 
 export async function stageAll(workspacePath: string): Promise<void> {
-  await execFilePromise('git', ['add', '.'], { cwd: workspacePath, timeout: 30_000 });
+  await execFilePromise('git', ['add', '-A'], { cwd: workspacePath, timeout: 30_000 });
 }
 
 export async function getStagedFiles(workspacePath: string): Promise<string[]> {
