@@ -11,6 +11,9 @@ import type {
 } from '@repo/shared';
 import { useBoardsList } from '~/composables/useBoardsList';
 import { useSuitesList } from '~/composables/useSuitesList';
+import { KANBAN_HOME_UI_CONSTRAINTS } from '~/contracts/kanban-home.contract';
+import HomeSuiteQuickAccessCard from '~/components/home/HomeSuiteQuickAccessCard.vue';
+import HomeBoardQuickAccessCard from '~/components/home/HomeBoardQuickAccessCard.vue';
 
 definePageMeta({ layout: 'default' });
 
@@ -33,7 +36,7 @@ const createForm = ref<{
 }>({
   title: '',
   prefix: '',
-  template: 'default',
+  template: 'default' as 'default' | 'development',
 });
 
 const createSuiteForm = ref<{
@@ -41,7 +44,7 @@ const createSuiteForm = ref<{
   template: 'default' | 'development';
 }>({
   title: '',
-  template: 'default',
+  template: 'default' as 'default' | 'development',
 });
 
 const normalizedSearch = computed(() => searchQuery.value.trim().toLowerCase());
@@ -100,6 +103,16 @@ async function onCreateBoard() {
   const title = createForm.value.title.trim() || 'New Board';
   const prefix = createForm.value.prefix.trim() || undefined;
 
+  if (title.length > KANBAN_HOME_UI_CONSTRAINTS.boardTitle.maxLength) {
+    toast.add({
+      title: 'Title too long',
+      description: `Board title must not exceed ${KANBAN_HOME_UI_CONSTRAINTS.boardTitle.maxLength} characters.`,
+      color: 'error',
+      icon: 'i-lucide-alert-circle',
+    });
+    return;
+  }
+
   if (prefix && !prefixRegex.test(prefix)) {
     toast.add({
       title: 'Invalid prefix',
@@ -139,6 +152,16 @@ async function onCreateBoard() {
 
 async function onCreateSuite() {
   const title = createSuiteForm.value.title.trim() || 'New Suite';
+
+  if (title.length > KANBAN_HOME_UI_CONSTRAINTS.suiteTitle.maxLength) {
+    toast.add({
+      title: 'Title too long',
+      description: `Suite title must not exceed ${KANBAN_HOME_UI_CONSTRAINTS.suiteTitle.maxLength} characters.`,
+      color: 'error',
+      icon: 'i-lucide-alert-circle',
+    });
+    return;
+  }
 
   isCreatingSuite.value = true;
   try {
@@ -409,6 +432,8 @@ onMounted(() => {
                 />
               </div>
             </div>
+          </UCard>
+        </section>
 
             <div v-if="visibleStandaloneBoards.length" class="space-y-3">
               <div class="flex items-center justify-between gap-3">
@@ -424,6 +449,17 @@ onMounted(() => {
                   @navigate="navigateToBoard"
                 />
               </div>
+            </template>
+
+            <div v-if="uuidFallbackOpen" class="flex flex-col gap-4">
+              <UForm :state="{ boardId: uuidBoardId }" @submit="goToBoard" class="flex flex-col gap-4">
+                <UFormField name="boardId" label="Board ID" required>
+                  <UInput v-model="uuidBoardId" placeholder="Enter board UUID" class="w-full" />
+                </UFormField>
+                <UButton type="submit" icon="i-lucide-layout-kanban" block>
+                  Open Board
+                </UButton>
+              </UForm>
             </div>
           </div>
         </section>
