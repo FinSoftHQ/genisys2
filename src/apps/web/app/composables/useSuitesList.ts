@@ -1,5 +1,5 @@
 import { ref } from 'vue';
-import type { BoardSuiteWithBoards } from '@repo/shared';
+import type { BoardSuiteWithBoards, ListBoardSuitesResponse } from '@repo/shared';
 
 const suites = ref<BoardSuiteWithBoards[]>([]);
 const isLoading = ref(false);
@@ -10,7 +10,7 @@ export function useSuitesList() {
     isLoading.value = true;
     error.value = null;
     try {
-      const response = await $fetch<{ data: { suites: BoardSuiteWithBoards[] } }>('/api/board-suites');
+      const response = await $fetch<ListBoardSuitesResponse>('/api/board-suites');
       suites.value = response.data.suites;
     } catch (err: any) {
       error.value = err?.data?.error?.message || 'Failed to load suites';

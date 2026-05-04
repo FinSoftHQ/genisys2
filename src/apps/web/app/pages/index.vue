@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import type { CreateBoardRequest, CreateBoardResponse, CreateBoardSuiteRequest, BoardSuiteWithBoards } from '@repo/shared';
+import type { CreateBoardRequest, CreateBoardResponse, CreateBoardSuiteRequest, BoardSuiteResponse } from '@repo/shared';
 import { useBoardsList } from '~/composables/useBoardsList';
 import { useSuitesList } from '~/composables/useSuitesList';
 
@@ -103,7 +103,7 @@ async function onCreateSuite() {
       template: createSuiteForm.value.template,
       title,
     };
-    const response = await $fetch<{ data: BoardSuiteWithBoards }>('/api/board-suites', {
+    const response = await $fetch<BoardSuiteResponse>('/api/board-suites', {
       method: 'POST',
       body,
     });

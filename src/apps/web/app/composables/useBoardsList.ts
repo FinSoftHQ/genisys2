@@ -1,5 +1,5 @@
 import { ref } from 'vue';
-import type { BoardEntity } from '@repo/shared';
+import type { BoardEntity, ListBoardsResponse } from '@repo/shared';
 
 const boards = ref<BoardEntity[]>([]);
 const isLoading = ref(false);
@@ -10,7 +10,7 @@ export function useBoardsList() {
     isLoading.value = true;
     error.value = null;
     try {
-      const response = await $fetch<{ data: { boards: BoardEntity[] } }>('/api/boards');
+      const response = await $fetch<ListBoardsResponse>('/api/boards');
       boards.value = response.data.boards;
     } catch (err: any) {
       error.value = err?.data?.error?.message || 'Failed to load boards';
