@@ -24,6 +24,22 @@ const IDLE_COMPLETION_GRACE_MS = Number.isFinite(idleCompletionGraceMsRaw)
 	? Math.max(1000, idleCompletionGraceMsRaw)
 	: 60_000;
 
+function killAgentProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+	try {
+		if (proc.pid !== undefined && process.platform !== "win32") {
+			process.kill(-proc.pid, signal);
+			return;
+		}
+	} catch {
+		// process may have already exited
+	}
+	try {
+		proc.kill(signal);
+	} catch {
+		// ignore
+	}
+}
+
 type StoredEventBase = { id: number; from: string; at: string };
 
 export type StoredEvent =
@@ -530,6 +546,7 @@ function spawnAgentProcess(room: Room, agent: AgentState): void {
 	const proc = spawn("pi", agent.piArgs, {
 		stdio: ["pipe", "pipe", "inherit"],
 		env,
+		detached: true,
 		...(room.workingDir ? { cwd: room.workingDir } : {}),
 	});
 	agent.proc = proc;
@@ -815,7 +832,7 @@ function terminateSingleShotAgent(agent: AgentState): void {
 	try {
 		procToKill.stdin!.write(`${JSON.stringify({ type: "abort" })}\n`);
 		procToKill.stdin!.end();
-		procToKill.kill("SIGTERM");
+		killAgentProcess(procToKill);
 	} catch {
 		// ignore — process may have already exited
 	}
@@ -1075,7 +1092,7 @@ export function destroyRoom(id: string, reason: Exclude<RoomCloseReason, "comple
 		try {
 			sendToAgent(agent, { type: "abort" });
 			agent.proc.stdin!.end();
-			agent.proc.kill("SIGTERM");
+			killAgentProcess(agent.proc);
 		} catch {
 			// ignore
 		}
@@ -1124,7 +1141,7 @@ export function completeRoom(id: string): void {
 		try {
 			sendToAgent(agent, { type: "abort" });
 			agent.proc.stdin!.end();
-			agent.proc.kill("SIGTERM");
+			killAgentProcess(agent.proc);
 		} catch {
 			// ignore
 		}
