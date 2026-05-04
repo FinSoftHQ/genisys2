@@ -13,6 +13,10 @@ install:
     fi
     @echo "Install complete!"
 
+stage:
+    git add -A
+    @echo "Staged all changes"
+
 dev:
     @echo "Starting API (Bun hot reload) and Web (Nuxt dev)..."
     pnpm --filter api dev & pnpm --filter web dev & wait
