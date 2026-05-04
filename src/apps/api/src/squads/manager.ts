@@ -14,6 +14,22 @@ export type SquadStatus =
 	| "error"
 	| "completed";
 
+function killAgentProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+	try {
+		if (proc.pid !== undefined && process.platform !== "win32") {
+			process.kill(-proc.pid, signal);
+			return;
+		}
+	} catch {
+		// process may have already exited
+	}
+	try {
+		proc.kill(signal);
+	} catch {
+		// ignore
+	}
+}
+
 const EVENT_BUFFER_CAP = 2500;
 
 type StoredEventBase = { id: number; from: string; at: string };
@@ -148,6 +164,7 @@ export function createSquad(protocol: Protocol): { squadId: string } {
 		const proc = spawn("pi", ["--mode", "rpc", "--no-session"], {
 			stdio: ["pipe", "pipe", "inherit"],
 			env: { ...process.env, PATH: filteredPath },
+			detached: true,
 		});
 
 		const logger = new SquadLogger(name);
@@ -484,7 +501,7 @@ export function destroySquad(id: string, reason = "manual"): void {
 		try {
 			sendToAgent(agent, { type: "abort" });
 			agent.proc.stdin!.end();
-			agent.proc.kill("SIGTERM");
+			killAgentProcess(agent.proc);
 		} catch {
 			// ignore
 		}
