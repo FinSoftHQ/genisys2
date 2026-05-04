@@ -4,44 +4,65 @@ import { useRouter } from 'vue-router';
 import type { CreateBoardRequest, CreateBoardResponse, CreateBoardSuiteRequest, BoardSuiteResponse } from '@repo/shared';
 import { useBoardsList } from '~/composables/useBoardsList';
 import { useSuitesList } from '~/composables/useSuitesList';
+import { KANBAN_HOME_UI_CONSTRAINTS } from '~/contracts/kanban-home.contract';
+import HomeSuiteQuickAccessCard from '~/components/home/HomeSuiteQuickAccessCard.vue';
+import HomeBoardQuickAccessCard from '~/components/home/HomeBoardQuickAccessCard.vue';
 
 definePageMeta({ layout: 'default' });
 
 const router = useRouter();
 const toast = useToast();
 
-const boardId = ref('');
-const isCreating = ref(false);
-const isCreatingSuite = ref(false);
-const { boards, isLoading: isLoadingBoards, refreshBoards } = useBoardsList();
-const { suites, isLoading: isLoadingSuites, refreshSuites } = useSuitesList();
+const { boards, isLoading: isLoadingBoards, error: boardsError, refreshBoards } = useBoardsList();
+const { suites, isLoading: isLoadingSuites, error: suitesError, refreshSuites } = useSuitesList();
 
 // Create board form state
-const createForm = ref<{
-  title: string;
-  prefix: string;
-  template: 'default' | 'development';
-}>({
+const createForm = ref({
   title: '',
   prefix: '',
-  template: 'default',
+  template: 'default' as 'default' | 'development',
 });
 
 // Create suite form state
-const createSuiteForm = ref<{
-  title: string;
-  template: 'default' | 'development';
-}>({
+const createSuiteForm = ref({
   title: '',
-  template: 'default',
+  template: 'default' as 'default' | 'development',
 });
 
-function goToBoard() {
-  const id = boardId.value.trim();
-  if (id) {
-    router.push(`/boards/${id}`);
-  }
-}
+const isCreating = ref(false);
+const isCreatingSuite = ref(false);
+
+// UUID fallback
+const uuidFallbackOpen = ref(false);
+const uuidBoardId = ref('');
+
+// Browse search
+const searchQuery = ref('');
+
+const normalizedSearch = computed(() => searchQuery.value.trim().toLowerCase());
+
+const standaloneBoards = computed(() => boards.value.filter((b) => !b.suite_uid));
+
+const filteredSuites = computed(() => {
+  if (!normalizedSearch.value) return suites.value;
+  return suites.value.filter((suite) => {
+    if (suite.suite.title.toLowerCase().includes(normalizedSearch.value)) return true;
+    return suite.boards.some(
+      (board) =>
+        board.title.toLowerCase().includes(normalizedSearch.value) ||
+        board.prefix?.toLowerCase().includes(normalizedSearch.value)
+    );
+  });
+});
+
+const filteredStandaloneBoards = computed(() => {
+  if (!normalizedSearch.value) return standaloneBoards.value;
+  return standaloneBoards.value.filter(
+    (board) =>
+      board.title.toLowerCase().includes(normalizedSearch.value) ||
+      board.prefix?.toLowerCase().includes(normalizedSearch.value)
+  );
+});
 
 function resetCreateForm() {
   createForm.value = { title: '', prefix: '', template: 'default' };
@@ -56,6 +77,16 @@ const prefixRegex = /^[A-Z][A-Z0-9]{0,9}$/;
 async function onCreateBoard() {
   const title = createForm.value.title.trim() || 'New Board';
   const prefix = createForm.value.prefix.trim() || undefined;
+
+  if (title.length > KANBAN_HOME_UI_CONSTRAINTS.boardTitle.maxLength) {
+    toast.add({
+      title: 'Title too long',
+      description: `Board title must not exceed ${KANBAN_HOME_UI_CONSTRAINTS.boardTitle.maxLength} characters.`,
+      color: 'error',
+      icon: 'i-lucide-alert-circle',
+    });
+    return;
+  }
 
   if (prefix && !prefixRegex.test(prefix)) {
     toast.add({
@@ -97,6 +128,16 @@ async function onCreateBoard() {
 async function onCreateSuite() {
   const title = createSuiteForm.value.title.trim() || 'New Suite';
 
+  if (title.length > KANBAN_HOME_UI_CONSTRAINTS.suiteTitle.maxLength) {
+    toast.add({
+      title: 'Title too long',
+      description: `Suite title must not exceed ${KANBAN_HOME_UI_CONSTRAINTS.suiteTitle.maxLength} characters.`,
+      color: 'error',
+      icon: 'i-lucide-alert-circle',
+    });
+    return;
+  }
+
   isCreatingSuite.value = true;
   try {
     const body: CreateBoardSuiteRequest = {
@@ -126,7 +167,12 @@ async function onCreateSuite() {
   }
 }
 
-const standaloneBoards = computed(() => boards.value.filter((b) => !b.suite_uid));
+function goToBoard() {
+  const id = uuidBoardId.value.trim();
+  if (id) {
+    router.push(`/boards/${id}`);
+  }
+}
 
 onMounted(() => {
   refreshBoards();
@@ -142,211 +188,180 @@ onMounted(() => {
 
     <template #body>
       <div class="flex flex-col gap-8 p-4">
-        <!-- Open Board -->
-        <UCard>
-          <template #header>
-            <h2 class="text-lg font-semibold">Open Board</h2>
-          </template>
-          <UForm :state="{ boardId }" @submit="goToBoard" class="flex flex-col gap-4">
-            <UFormField name="boardId" label="Board ID" required>
-              <UInput v-model="boardId" placeholder="Enter board UUID" class="w-full" />
-            </UFormField>
-            <UButton type="submit" icon="i-lucide-layout-kanban" block>
-              Open Board
-            </UButton>
-          </UForm>
-        </UCard>
+        <!-- Quick Actions -->
+        <section aria-label="Quick Actions">
+          <UCard>
+            <template #header>
+              <h2 class="text-lg font-semibold">Quick Actions</h2>
+            </template>
 
-        <!-- Create Board -->
-        <UCard>
-          <template #header>
-            <h2 class="text-lg font-semibold">Create New Board</h2>
-          </template>
-          <UForm :state="createForm" @submit="onCreateBoard" class="flex flex-col gap-4">
-            <UFormField name="title" label="Title">
-              <UInput
-                v-model="createForm.title"
-                placeholder="New Board"
-                class="w-full"
-              />
-            </UFormField>
+            <div class="flex flex-col gap-6">
+              <!-- Create Suite -->
+              <UForm :state="createSuiteForm" @submit="onCreateSuite" class="flex flex-col gap-4">
+                <h3 class="text-sm font-medium">Create Suite</h3>
+                <UFormField name="title" label="Title">
+                  <UInput v-model="createSuiteForm.title" placeholder="New Suite" :maxlength="KANBAN_HOME_UI_CONSTRAINTS.suiteTitle.maxLength" class="w-full" />
+                </UFormField>
 
-            <UFormField name="prefix" label="Prefix (optional)">
-              <UInput
-                v-model="createForm.prefix"
-                placeholder="Auto-generated"
-                class="w-full"
-              />
-              <template #hint>
-                <span class="text-xs text-muted">1–10 uppercase letters/numbers, starting with a letter</span>
-              </template>
-            </UFormField>
-
-            <UFormField name="template" label="Template">
-              <div class="grid grid-cols-2 gap-2">
-                <UButton
-                  type="button"
-                  :variant="createForm.template === 'default' ? 'solid' : 'subtle'"
-                  color="neutral"
-                  block
-                  @click="createForm.template = 'default'"
-                >
-                  Default
-                </UButton>
-                <UButton
-                  type="button"
-                  :variant="createForm.template === 'development' ? 'solid' : 'subtle'"
-                  color="neutral"
-                  block
-                  @click="createForm.template = 'development'"
-                >
-                  Development
-                </UButton>
-              </div>
-            </UFormField>
-
-            <UButton
-              type="submit"
-              icon="i-lucide-plus"
-              block
-              :loading="isCreating"
-            >
-              Create Board
-            </UButton>
-          </UForm>
-        </UCard>
-
-        <!-- Create Suite -->
-        <UCard>
-          <template #header>
-            <h2 class="text-lg font-semibold">Create Suite</h2>
-          </template>
-          <UForm :state="createSuiteForm" @submit="onCreateSuite" class="flex flex-col gap-4">
-            <UFormField name="title" label="Title">
-              <UInput
-                v-model="createSuiteForm.title"
-                placeholder="New Suite"
-                class="w-full"
-              />
-            </UFormField>
-
-            <UFormField name="template" label="Template">
-              <div class="grid grid-cols-2 gap-2">
-                <UButton
-                  type="button"
-                  :variant="createSuiteForm.template === 'default' ? 'solid' : 'subtle'"
-                  color="neutral"
-                  block
-                  @click="createSuiteForm.template = 'default'"
-                >
-                  Default Suite
-                </UButton>
-                <UButton
-                  type="button"
-                  :variant="createSuiteForm.template === 'development' ? 'solid' : 'subtle'"
-                  color="neutral"
-                  block
-                  @click="createSuiteForm.template = 'development'"
-                >
-                  Development Suite
-                </UButton>
-              </div>
-            </UFormField>
-
-            <UButton
-              type="submit"
-              icon="i-lucide-layers"
-              block
-              :loading="isCreatingSuite"
-            >
-              Create Suite
-            </UButton>
-          </UForm>
-        </UCard>
-
-        <!-- Boards List -->
-        <UCard>
-          <template #header>
-            <h2 class="text-lg font-semibold">Boards</h2>
-          </template>
-
-          <div v-if="isLoadingBoards || isLoadingSuites" class="flex items-center justify-center py-8">
-            <UIcon name="i-lucide-loader-2" class="size-6 animate-spin text-muted" />
-          </div>
-
-          <div v-else-if="suites.length === 0 && standaloneBoards.length === 0" class="text-center py-8 text-muted">
-            No boards yet. Create one above!
-          </div>
-
-          <div v-else class="flex flex-col gap-6">
-            <!-- Suites -->
-            <div v-if="suites.length > 0">
-              <h3 class="text-sm font-semibold text-muted mb-3 uppercase tracking-wide">Suites</h3>
-              <div class="flex flex-col gap-4">
-                <div v-for="suite in suites" :key="suite.suite.uid">
-                  <p class="font-medium text-sm mb-2">{{ suite.suite.title }}</p>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <NuxtLink
-                      v-for="board in suite.boards"
-                      :key="board.uid"
-                      :to="`/boards/${board.uid}`"
-                      class="group"
+                <UFormField name="template" label="Template">
+                  <div class="grid grid-cols-2 gap-2">
+                    <UButton
+                      type="button"
+                      :variant="createSuiteForm.template === 'default' ? 'solid' : 'subtle'"
+                      color="neutral"
+                      block
+                      @click="createSuiteForm.template = 'default'"
                     >
-                      <UCard class="hover:bg-elevated transition-colors">
-                        <div class="flex items-center justify-between">
-                          <div class="flex items-center gap-3">
-                            <UIcon name="i-lucide-layout-kanban" class="size-5 text-primary" />
-                            <div>
-                              <div class="flex items-center gap-2">
-                                <p class="font-semibold">{{ board.title }}</p>
-                                <UBadge
-                                  v-if="board.role"
-                                  :color="board.role === 'primary' ? 'primary' : board.role === 'tasks' ? 'info' : 'neutral'"
-                                  variant="subtle"
-                                  size="xs"
-                                >
-                                  {{ board.role }}
-                                </UBadge>
-                              </div>
-                              <p class="text-xs text-muted">{{ board.prefix }} &middot; {{ board.schema.columns.length }} columns</p>
-                            </div>
-                          </div>
-                          <UIcon name="i-lucide-chevron-right" class="size-4 text-muted group-hover:text-default transition-colors" />
-                        </div>
-                      </UCard>
-                    </NuxtLink>
+                      Default Suite
+                    </UButton>
+                    <UButton
+                      type="button"
+                      :variant="createSuiteForm.template === 'development' ? 'solid' : 'subtle'"
+                      color="neutral"
+                      block
+                      @click="createSuiteForm.template = 'development'"
+                    >
+                      Development Suite
+                    </UButton>
+                  </div>
+                </UFormField>
+
+                <UButton type="submit" icon="i-lucide-layers" block :loading="isCreatingSuite">
+                  Create Suite
+                </UButton>
+              </UForm>
+
+              <div class="border-t border-default" />
+
+              <!-- Create Board -->
+              <UForm :state="createForm" @submit="onCreateBoard" class="flex flex-col gap-4">
+                <h3 class="text-sm font-medium">Create Board</h3>
+                <UFormField name="title" label="Title">
+                  <UInput v-model="createForm.title" placeholder="New Board" :maxlength="KANBAN_HOME_UI_CONSTRAINTS.boardTitle.maxLength" class="w-full" />
+                </UFormField>
+
+                <UFormField name="prefix" label="Prefix (optional)">
+                  <UInput v-model="createForm.prefix" placeholder="Auto-generated" class="w-full" />
+                  <template #hint>
+                    <span class="text-xs text-muted">1–10 uppercase letters/numbers, starting with a letter</span>
+                  </template>
+                </UFormField>
+
+                <UFormField name="template" label="Template">
+                  <div class="grid grid-cols-2 gap-2">
+                    <UButton
+                      type="button"
+                      :variant="createForm.template === 'default' ? 'solid' : 'subtle'"
+                      color="neutral"
+                      block
+                      @click="createForm.template = 'default'"
+                    >
+                      Default
+                    </UButton>
+                    <UButton
+                      type="button"
+                      :variant="createForm.template === 'development' ? 'solid' : 'subtle'"
+                      color="neutral"
+                      block
+                      @click="createForm.template = 'development'"
+                    >
+                      Development
+                    </UButton>
+                  </div>
+                </UFormField>
+
+                <UButton type="submit" icon="i-lucide-plus" block :loading="isCreating">
+                  Create Board
+                </UButton>
+              </UForm>
+            </div>
+          </UCard>
+        </section>
+
+        <!-- Browse -->
+        <section aria-label="Browse">
+          <UCard>
+            <template #header>
+              <h2 class="text-lg font-semibold">Browse</h2>
+            </template>
+
+            <div class="flex flex-col gap-4">
+              <UInput
+                v-model="searchQuery"
+                placeholder="Search suites and boards..."
+                aria-label="Search"
+                class="w-full"
+              />
+
+              <div v-if="isLoadingBoards || isLoadingSuites" class="flex items-center justify-center py-8" role="status" aria-label="Loading">
+                <UIcon name="i-lucide-loader-2" class="size-6 animate-spin text-muted" />
+              </div>
+
+              <div v-else-if="boardsError || suitesError" class="text-center py-8 text-error" role="alert">
+                {{ boardsError || suitesError }}
+              </div>
+
+              <div v-else-if="filteredSuites.length === 0 && filteredStandaloneBoards.length === 0" class="text-center py-8 text-muted">
+                No boards yet. Create one above!
+              </div>
+
+              <div v-else class="flex flex-col gap-6">
+                <!-- Suites -->
+                <div v-if="filteredSuites.length > 0">
+                  <h3 class="text-sm font-semibold text-muted mb-3 uppercase tracking-wide">Suites</h3>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <HomeSuiteQuickAccessCard
+                      v-for="suite in filteredSuites"
+                      :key="suite.suite.uid"
+                      :suite="suite"
+                    />
+                  </div>
+                </div>
+
+                <!-- Standalone Boards -->
+                <div v-if="filteredStandaloneBoards.length > 0">
+                  <h3 class="text-sm font-semibold text-muted mb-3 uppercase tracking-wide">Standalone Boards</h3>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <HomeBoardQuickAccessCard
+                      v-for="board in filteredStandaloneBoards"
+                      :key="board.uid"
+                      :board="board"
+                    />
                   </div>
                 </div>
               </div>
             </div>
+          </UCard>
+        </section>
 
-            <!-- Standalone Boards -->
-            <div v-if="standaloneBoards.length > 0">
-              <h3 class="text-sm font-semibold text-muted mb-3 uppercase tracking-wide">Standalone Boards</h3>
-              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                <NuxtLink
-                  v-for="board in standaloneBoards"
-                  :key="board.uid"
-                  :to="`/boards/${board.uid}`"
-                  class="group"
-                >
-                  <UCard class="hover:bg-elevated transition-colors">
-                    <div class="flex items-center justify-between">
-                      <div class="flex items-center gap-3">
-                        <UIcon name="i-lucide-layout-kanban" class="size-5 text-primary" />
-                        <div>
-                          <p class="font-semibold">{{ board.title }}</p>
-                          <p class="text-xs text-muted">{{ board.prefix }} &middot; {{ board.schema.columns.length }} columns</p>
-                        </div>
-                      </div>
-                      <UIcon name="i-lucide-chevron-right" class="size-4 text-muted group-hover:text-default transition-colors" />
-                    </div>
-                  </UCard>
-                </NuxtLink>
+        <!-- UUID Fallback -->
+        <section aria-label="UUID Fallback">
+          <UCard>
+            <template #header>
+              <div class="flex items-center justify-between">
+                <h2 class="text-lg font-semibold">Open Board by UUID</h2>
+                <UButton
+                  type="button"
+                  variant="ghost"
+                  color="neutral"
+                  icon="i-lucide-chevron-down"
+                  @click="uuidFallbackOpen = !uuidFallbackOpen"
+                />
               </div>
+            </template>
+
+            <div v-if="uuidFallbackOpen" class="flex flex-col gap-4">
+              <UForm :state="{ boardId: uuidBoardId }" @submit="goToBoard" class="flex flex-col gap-4">
+                <UFormField name="boardId" label="Board ID" required>
+                  <UInput v-model="uuidBoardId" placeholder="Enter board UUID" class="w-full" />
+                </UFormField>
+                <UButton type="submit" icon="i-lucide-layout-kanban" block>
+                  Open Board
+                </UButton>
+              </UForm>
             </div>
-          </div>
-        </UCard>
+          </UCard>
+        </section>
       </div>
     </template>
   </UDashboardPanel>

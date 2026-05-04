@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { defineComponent, h } from 'vue';
 import { BoardEntitySchema } from '@repo/shared';
 import type { BoardEntity } from '@repo/shared';
+import HomeBoardQuickAccessCard from './HomeBoardQuickAccessCard.vue';
 
 const pushMock = vi.fn();
 
@@ -58,19 +59,6 @@ const UBadgeStub = defineComponent({
   },
 });
 
-// Lazy-load the component under test (may not exist yet)
-let HomeBoardQuickAccessCard: any;
-let loadError: any;
-
-beforeAll(async () => {
-  try {
-    const mod = await import('./HomeBoardQuickAccessCard.vue');
-    HomeBoardQuickAccessCard = mod.default;
-  } catch (err) {
-    loadError = err;
-  }
-});
-
 function createMockBoard(overrides?: Partial<BoardEntity>): BoardEntity {
   return BoardEntitySchema.parse({
     uid: '550e8400-e29b-41d4-a716-446655440000',
@@ -110,16 +98,7 @@ function mountCard(board: BoardEntity) {
 }
 
 describe('HomeBoardQuickAccessCard', () => {
-  if (!HomeBoardQuickAccessCard) {
-    it('component file must exist at HomeBoardQuickAccessCard.vue', () => {
-      throw new Error(
-        'HomeBoardQuickAccessCard.vue does not exist yet. The Nuxt Developer must create this component.'
-      );
-    });
-    return;
-  }
-
-  beforeAll(() => {
+  beforeEach(() => {
     vi.clearAllMocks();
   });
 

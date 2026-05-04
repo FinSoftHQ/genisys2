@@ -1,5 +1,51 @@
 # Changelog
 
+## [PFRV-1] — 2026-05-04
+
+### Changed
+
+#### Frontend — Kanban Home Page Polish
+
+- **New home page hierarchy** (`src/apps/web/app/pages/index.vue`)
+  - Replaced the plain UUID-only landing page with a full dashboard home.
+  - Three sections in priority order:
+    1. **Quick Actions** — Create Suite (primary CTA) and Create Board.
+    2. **Browse** — Searchable grid of existing suites and standalone boards.
+    3. **UUID Fallback** — Collapsible by default; de-emphasized manual UUID entry.
+  - Suite creation is now the first and most prominent action, reflecting real-world usage where suites are created more frequently than standalone boards.
+
+- **Quick-access card components** (`src/apps/web/app/components/home/`)
+  - `HomeSuiteQuickAccessCard.vue` — Clickable card for a board suite. Renders suite title and board count. Navigates to the suite's primary board on click (falls back to the first board if no primary exists).
+  - `HomeBoardQuickAccessCard.vue` — Clickable card for a standalone board. Renders board title, prefix, and column count. Navigates directly to the board on click.
+  - Both cards use `UCard` with `hover:bg-elevated` transition, `i-lucide-layers` / `i-lucide-layout-kanban` icons, and a chevron-right indicator.
+
+- **Title max-length constraints** (`src/apps/web/app/contracts/kanban-home.contract.ts`)
+  - `KANBAN_HOME_UI_CONSTRAINTS.boardTitle.maxLength = 200`
+  - `KANBAN_HOME_UI_CONSTRAINTS.suiteTitle.maxLength = 200`
+  - Enforced client-side before API calls with toast errors (`color: 'error'`, `icon: 'i-lucide-alert-circle'`).
+  - Input fields bound with `:maxlength="..."` to prevent overflow at the UI level.
+
+- **UUID navigation de-emphasized**
+  - The "Open Board by UUID" section is now the last section on the page and collapsed by default (`uuidFallbackOpen = false`).
+  - It serves as a fallback for edge-case navigation rather than the primary home flow.
+
+- **Browse search**
+  - Real-time, case-insensitive filtering across suite titles, board titles, and board prefixes.
+  - Search query is normalized (`trim().toLowerCase()`) before matching.
+  - Results grouped into "Suites" and "Standalone Boards" subsections.
+
+- **Template selection**
+  - Both Create Suite and Create Board forms offer `default` and `development` templates only.
+  - Rendered as a two-column grid of toggle buttons (`variant="solid"` vs `variant="subtle"`).
+
+### Test Status
+
+- **Home page suite:** 50/50 passing
+- **HomeSuiteQuickAccessCard suite:** 4/4 passing
+- **HomeBoardQuickAccessCard suite:** 3/3 passing
+
+---
+
 ## [1.3.0-slice4] — 2026-04-27
 
 ### Added
