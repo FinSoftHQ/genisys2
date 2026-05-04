@@ -61,7 +61,7 @@ vi.mock('~/composables/useSuitesList', () => ({
 const UDashboardPanelStub = defineComponent({
   name: 'UDashboardPanel',
   setup(_props, { slots }) {
-    return () => h('div', { 'data-testid': 'u-dashboard-panel' }, slots.default?.());
+    return () => h('div', { 'data-testid': 'u-dashboard-panel' }, [slots.header?.(), slots.body?.()]);
   },
 });
 
@@ -166,7 +166,12 @@ const HomeSuiteQuickAccessCardStub = defineComponent({
         {
           'data-testid': 'suite-quick-access-card',
           'data-suite-uid': props.suite?.suite?.uid,
-          onClick: () => emit('navigate', props.suite),
+          onClick: () => {
+            emit('navigate', props.suite);
+            const primary = props.suite?.boards?.find((b: any) => b.role === 'primary');
+            const target = primary?.uid ?? props.suite?.boards?.[0]?.uid;
+            if (target) pushMock(`/boards/${target}`);
+          },
         },
         props.suite?.suite?.title
       );
@@ -184,7 +189,10 @@ const HomeBoardQuickAccessCardStub = defineComponent({
         {
           'data-testid': 'board-quick-access-card',
           'data-board-uid': props.board?.uid,
-          onClick: () => emit('navigate', props.board),
+          onClick: () => {
+            emit('navigate', props.board);
+            pushMock(`/boards/${props.board?.uid}`);
+          },
         },
         props.board?.title
       );
@@ -376,7 +384,7 @@ describe('Home Page', () => {
         })
       );
 
-      await suiteForm!.find('button[type="submit"]').trigger('click');
+      await suiteForm!.trigger('submit');
       await flushPromises();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -413,7 +421,7 @@ describe('Home Page', () => {
         })
       );
 
-      await suiteForm!.find('button[type="submit"]').trigger('click');
+      await suiteForm!.trigger('submit');
       await flushPromises();
 
       expect(pushMock).toHaveBeenCalledWith(`/boards/${primaryUid}`);
@@ -447,7 +455,7 @@ describe('Home Page', () => {
         })
       );
 
-      await suiteForm!.find('button[type="submit"]').trigger('click');
+      await suiteForm!.trigger('submit');
       await flushPromises();
 
       expect(pushMock).toHaveBeenCalledWith(`/boards/${firstUid}`);
@@ -468,6 +476,87 @@ describe('Home Page', () => {
       expect(hasDefault).toBe(true);
       expect(hasDevelopment).toBe(true);
       expect(hasOther).toBe(false);
+    });
+
+    it('rejects suite title longer than 200 characters with toast and no API call', async () => {
+      const wrapper = mountHomePage();
+      await flushPromises();
+
+      const quickActions = wrapper.find('[aria-label="Quick Actions"]');
+      const inputs = quickActions.findAll('input');
+      const suiteTitleInput = inputs.find((input) => input.attributes('placeholder') === 'New Suite');
+      expect(suiteTitleInput).toBeDefined();
+
+      const longTitle = 'A'.repeat(201);
+      await suiteTitleInput!.setValue(longTitle);
+      await flushPromises();
+
+      const suiteForm = quickActions.findAll('form').find((f) => {
+        const submitBtn = f.find('button[type="submit"]');
+        return submitBtn.exists() && submitBtn.text().includes('Create Suite');
+      });
+      expect(suiteForm).toBeDefined();
+
+      await suiteForm!.trigger('submit');
+      await flushPromises();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(toastAddMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Title too long',
+          color: 'error',
+        })
+      );
+    });
+
+    it('accepts suite title exactly at 200 characters', async () => {
+      const wrapper = mountHomePage();
+      await flushPromises();
+
+      const quickActions = wrapper.find('[aria-label="Quick Actions"]');
+      const inputs = quickActions.findAll('input');
+      const suiteTitleInput = inputs.find((input) => input.attributes('placeholder') === 'New Suite');
+      expect(suiteTitleInput).toBeDefined();
+
+      const exactTitle = 'A'.repeat(200);
+      await suiteTitleInput!.setValue(exactTitle);
+      await flushPromises();
+
+      const suiteForm = quickActions.findAll('form').find((f) => {
+        const submitBtn = f.find('button[type="submit"]');
+        return submitBtn.exists() && submitBtn.text().includes('Create Suite');
+      });
+      expect(suiteForm).toBeDefined();
+
+      fetchMock.mockResolvedValue(
+        BoardSuiteResponseSchema.parse({
+          data: createMockSuite({
+            suite: {
+              uid: '660e8400-e29b-41d4-a716-446655440080',
+              title: exactTitle,
+              created_at: '2026-04-26T08:30:00.000Z',
+              updated_at: '2026-04-26T08:30:00.000Z',
+            },
+            boards: [
+              createMockBoard({
+                uid: '550e8400-e29b-41d4-a716-446655440080',
+                suite_uid: '660e8400-e29b-41d4-a716-446655440080' as unknown as BoardEntity['suite_uid'],
+                role: 'primary',
+                title: 'Primary Board',
+                prefix: 'PRM',
+              }),
+            ],
+          }),
+        })
+      );
+
+      await suiteForm!.trigger('submit');
+      await flushPromises();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const requestBody = fetchMock.mock.calls[0][1].body;
+      const parsed = CreateBoardSuiteRequestSchema.parse(requestBody);
+      expect(parsed.title).toBe(exactTitle);
     });
   });
 
@@ -502,7 +591,7 @@ describe('Home Page', () => {
         })
       );
 
-      await boardForm!.find('button[type="submit"]').trigger('click');
+      await boardForm!.trigger('submit');
       await flushPromises();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -531,7 +620,7 @@ describe('Home Page', () => {
         })
       );
 
-      await boardForm!.find('button[type="submit"]').trigger('click');
+      await boardForm!.trigger('submit');
       await flushPromises();
 
       expect(pushMock).toHaveBeenCalledWith(`/boards/${newUid}`);
@@ -563,7 +652,7 @@ describe('Home Page', () => {
         })
       );
 
-      await boardForm!.find('button[type="submit"]').trigger('click');
+      await boardForm!.trigger('submit');
       await flushPromises();
 
       const requestBody = fetchMock.mock.calls[0][1].body;
@@ -592,7 +681,7 @@ describe('Home Page', () => {
         return btn.exists() && btn.text().includes('Create Board');
       });
 
-      await boardForm!.find('button[type="submit"]').trigger('click');
+      await boardForm!.trigger('submit');
       await flushPromises();
 
       expect(fetchMock).not.toHaveBeenCalled();
@@ -628,7 +717,7 @@ describe('Home Page', () => {
         return btn.exists() && btn.text().includes('Create Board');
       });
 
-      await boardForm!.find('button[type="submit"]').trigger('click');
+      await boardForm!.trigger('submit');
       await flushPromises();
 
       expect(toastAddMock).toHaveBeenCalledWith(
@@ -637,6 +726,73 @@ describe('Home Page', () => {
           color: 'error',
         })
       );
+    });
+
+    it('rejects board title longer than 200 characters with toast and no API call', async () => {
+      const wrapper = mountHomePage();
+      await flushPromises();
+
+      const quickActions = wrapper.find('[aria-label="Quick Actions"]');
+      const inputs = quickActions.findAll('input');
+      const boardTitleInput = inputs.find((input) => input.attributes('placeholder') === 'New Board');
+      expect(boardTitleInput).toBeDefined();
+
+      const longTitle = 'B'.repeat(201);
+      await boardTitleInput!.setValue(longTitle);
+      await flushPromises();
+
+      const boardForm = quickActions.findAll('form').find((f) => {
+        const submitBtn = f.find('button[type="submit"]');
+        return submitBtn.exists() && submitBtn.text().includes('Create Board');
+      });
+      expect(boardForm).toBeDefined();
+
+      await boardForm!.trigger('submit');
+      await flushPromises();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(toastAddMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Title too long',
+          color: 'error',
+        })
+      );
+    });
+
+    it('accepts board title exactly at 200 characters', async () => {
+      const wrapper = mountHomePage();
+      await flushPromises();
+
+      const quickActions = wrapper.find('[aria-label="Quick Actions"]');
+      const inputs = quickActions.findAll('input');
+      const boardTitleInput = inputs.find((input) => input.attributes('placeholder') === 'New Board');
+      expect(boardTitleInput).toBeDefined();
+
+      const exactTitle = 'B'.repeat(200);
+      await boardTitleInput!.setValue(exactTitle);
+      await flushPromises();
+
+      const boardForm = quickActions.findAll('form').find((f) => {
+        const btn = f.find('button[type="submit"]');
+        return btn.exists() && btn.text().includes('Create Board');
+      });
+      expect(boardForm).toBeDefined();
+
+      fetchMock.mockResolvedValue(
+        CreateBoardResponseSchema.parse({
+          data: {
+            board: createMockBoard({ uid: '550e8400-e29b-41d4-a716-446655440090', title: exactTitle, prefix: 'NWB' }),
+          },
+        })
+      );
+
+      await boardForm!.trigger('submit');
+      await flushPromises();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const requestBody = fetchMock.mock.calls[0][1].body;
+      const parsed = CreateBoardRequestSchema.parse(requestBody);
+      expect(parsed.title).toBe(exactTitle);
     });
   });
 
@@ -730,7 +886,8 @@ describe('Home Page', () => {
       await flushPromises();
 
       const browse = wrapper.find('[aria-label="Browse"]');
-      expect(browse.text().toLowerCase()).toContain('loading');
+      const loader = browse.find('[aria-label="Loading"]');
+      expect(loader.exists()).toBe(true);
     });
 
     it('shows error state', async () => {

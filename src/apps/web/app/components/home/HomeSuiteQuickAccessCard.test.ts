@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { defineComponent, h } from 'vue';
 import { BoardSuiteWithBoardsSchema } from '@repo/shared';
 import type { BoardSuiteWithBoards } from '@repo/shared';
+import HomeSuiteQuickAccessCard from './HomeSuiteQuickAccessCard.vue';
 
 const pushMock = vi.fn();
 
@@ -48,19 +49,6 @@ const UIconStub = defineComponent({
   setup() {
     return () => h('span');
   },
-});
-
-// Lazy-load the component under test (may not exist yet)
-let HomeSuiteQuickAccessCard: any;
-let loadError: any;
-
-beforeAll(async () => {
-  try {
-    const mod = await import('./HomeSuiteQuickAccessCard.vue');
-    HomeSuiteQuickAccessCard = mod.default;
-  } catch (err) {
-    loadError = err;
-  }
 });
 
 function createMockSuite(overrides?: Partial<BoardSuiteWithBoards>): BoardSuiteWithBoards {
@@ -113,16 +101,7 @@ function mountCard(suite: BoardSuiteWithBoards) {
 }
 
 describe('HomeSuiteQuickAccessCard', () => {
-  if (!HomeSuiteQuickAccessCard) {
-    it('component file must exist at HomeSuiteQuickAccessCard.vue', () => {
-      throw new Error(
-        'HomeSuiteQuickAccessCard.vue does not exist yet. The Nuxt Developer must create this component.'
-      );
-    });
-    return;
-  }
-
-  beforeAll(() => {
+  beforeEach(() => {
     vi.clearAllMocks();
   });
 

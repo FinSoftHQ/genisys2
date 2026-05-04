@@ -12,6 +12,7 @@ import {
   HealthCheckResponseSchema,
 } from '@repo/shared';
 import * as git from './git-helpers.js';
+import { execFilePromise } from './exec-helpers.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
@@ -145,11 +146,20 @@ async function runWrapWorkflow(
       `[wrap] Card ${card.display_id}: proceeding with wrap workflow (hasChanges=${hasChanges}, hasUnpushed=${hasUnpushed})`,
     );
 
-    // Phase 2: Fetch wrapup metadata
+    // Phase 2: Stage all changes so the AI sees them
+    await git.stageAll(workspacePath);
+
+    // Phase 3: Fetch wrapup metadata
+    const currentBranch = await execFilePromise('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: workspacePath,
+      timeout: 10_000,
+    }).then((r) => r.stdout.trim()).catch(() => 'unknown');
+    console.log(
+      `[wrap] Card ${card.display_id}: calling dev-wrapup for workspace=${workspacePath}, currentBranch=${currentBranch}`,
+    );
     const wrapup = await fetchDevWrapup(workspacePath);
 
-    // Phase 3: Commit changes
-    await git.stageAll(workspacePath);
+    // Phase 4: Commit changes
     const stagedFiles = await git.getStagedFiles(workspacePath);
     if (stagedFiles.length > 0) {
       await git.commit(workspacePath, wrapup.commitMessage);
