@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import * as schema from './schema.js';
-import { bootstrapDefaultProcessor, bootstrapTodoProcessor, bootstrapDoneProcessor, bootstrapPlanningProcessor, bootstrapPrepProcessor, bootstrapWrapProcessor, bootstrapAgenticTeamProcessor, bootstrapDelegatedProcessor } from './seed.js';
+import { bootstrapDefaultProcessor, bootstrapTodoProcessor, bootstrapDoneProcessor, bootstrapPlanningProcessor, bootstrapPrepProcessor, bootstrapWrapProcessor, bootstrapAgenticTeamProcessor, bootstrapDelegatedProcessor, bootstrapCommitProcessor } from './seed.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -41,5 +41,6 @@ export function createClient(path: string): DbInstance {
   bootstrapWrapProcessor({ sqlite, db });
   bootstrapDelegatedProcessor({ sqlite, db });
   bootstrapAgenticTeamProcessor({ sqlite, db });
+  bootstrapCommitProcessor({ sqlite, db });
   return { sqlite, db };
 }

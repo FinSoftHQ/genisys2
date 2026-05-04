@@ -57,8 +57,9 @@ const mockTaskBoard = {
   schema: {
     columns: [
       { uid: 'todo', title: 'TODO', type: 'Normal' as const, processor_id: 'todo', exit_logic: { default: 'agentic-team' }, order: 0 },
-      { uid: 'agentic-team', title: 'AI Team', type: 'Processing' as const, processor_id: 'agentic-team', exit_logic: { default: 'done' }, order: 1 },
-      { uid: 'done', title: 'Done', type: 'Processing' as const, processor_id: 'done', exit_logic: { default: 'done' }, order: 2 },
+      { uid: 'agentic-team', title: 'AI Team', type: 'Processing' as const, processor_id: 'agentic-team', exit_logic: { default: 'commit' }, order: 1 },
+      { uid: 'commit', title: 'Commit', type: 'Processing' as const, processor_id: 'commit', exit_logic: { default: 'done' }, order: 2 },
+      { uid: 'done', title: 'Done', type: 'Processing' as const, processor_id: 'done', exit_logic: { default: 'done' }, order: 3 },
     ],
   },
   permissions: { read: [] as string[], write: [] as string[] },
