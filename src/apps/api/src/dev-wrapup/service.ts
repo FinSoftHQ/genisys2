@@ -224,6 +224,8 @@ async function runPiSession(workspacePath: string, prompt: string): Promise<unkn
   // Attempt to use the github-copilot/gpt-5-mini model if available in the registry.
   const preferredModel = getModel("github-copilot", "gpt-5-mini");
 
+  console.log(`[dev-wrapup] Starting AI session in workspace: ${workspacePath}`);
+
   const { session } = await createAgentSession({
     cwd: workspacePath,
     sessionManager: SessionManager.inMemory(workspacePath),
@@ -288,6 +290,8 @@ export async function generateDevWrapup(
   workspacePath: string,
   include: "all" | "commit" | "pr" = "all"
 ): Promise<DevWrapupResult> {
+  console.log(`[dev-wrapup] Generating wrapup for workspace: ${workspacePath}, include: ${include}`);
+
   validateGitRepo(workspacePath);
 
   const schema =
