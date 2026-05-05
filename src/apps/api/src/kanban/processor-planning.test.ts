@@ -1,26 +1,36 @@
 import fastify, { type FastifyInstance } from 'fastify';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const mockCreateCard = vi.fn();
-const mockCreateCardRelationship = vi.fn();
-const mockGetBoardById = vi.fn();
-const mockListBoards = vi.fn();
-const mockParseProtocolFromString = vi.fn();
-
-const mockSession = {
-  prompt: vi.fn(),
-  subscribe: vi.fn(() => vi.fn()),
-  abort: vi.fn(),
-  dispose: vi.fn(),
-  isStreaming: false,
-  getLastAssistantText: vi.fn(),
-};
-
-const mockCreateAgentSession = vi.fn();
-const mockSessionManager = {
-  inMemory: vi.fn(() => ({})),
-};
-const mockGetModel = vi.fn();
+const {
+  mockCreateCard,
+  mockCreateCardRelationship,
+  mockGetBoardById,
+  mockListBoards,
+  mockParseProtocolFromString,
+  mockSession,
+  mockCreateAgentSession,
+  mockSessionManager,
+  mockGetModel,
+} = vi.hoisted(() => ({
+  mockCreateCard: vi.fn(),
+  mockCreateCardRelationship: vi.fn(),
+  mockGetBoardById: vi.fn(),
+  mockListBoards: vi.fn(),
+  mockParseProtocolFromString: vi.fn(),
+  mockSession: {
+    prompt: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+    abort: vi.fn(),
+    dispose: vi.fn(),
+    isStreaming: false,
+    getLastAssistantText: vi.fn(),
+  },
+  mockCreateAgentSession: vi.fn(),
+  mockSessionManager: {
+    inMemory: vi.fn(() => ({})),
+  },
+  mockGetModel: vi.fn(),
+}));
 
 vi.mock('./repository.js', () => ({
   createCard: (...args: unknown[]) => mockCreateCard(...args),
@@ -128,6 +138,7 @@ describe('planning processor routes', () => {
         (fn as ReturnType<typeof vi.fn>).mockReset();
       }
     });
+    mockSession.subscribe.mockImplementation(() => vi.fn());
   });
 
   afterEach(async () => {
@@ -188,7 +199,7 @@ describe('planning processor routes', () => {
   });
 
   describe('POST /api/kanban-processor/planning/on-enter', () => {
-    it('creates multiple subtask cards and returns 202', async () => {
+    it('creates a single clone card and stores planned tasks', async () => {
       mockGetBoardById.mockReturnValue(mockDevBoard);
       mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
       mockParseProtocolFromString.mockReturnValue({
@@ -212,19 +223,12 @@ describe('planning processor routes', () => {
         mockSession.isStreaming = streaming;
       });
 
-      mockCreateCard
-        .mockReturnValueOnce({
-          uid: '550e8400-e29b-41d4-a716-446655440010',
-          board_uid: mockTaskBoard.uid,
-          display_id: 'TSK-10',
-          title: 'Implement login endpoint',
-        })
-        .mockReturnValueOnce({
-          uid: '550e8400-e29b-41d4-a716-446655440011',
-          board_uid: mockTaskBoard.uid,
-          display_id: 'TSK-11',
-          title: 'Implement signup endpoint',
-        });
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement auth system',
+      });
 
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440020';
       const response = await app.inject({
@@ -244,10 +248,15 @@ describe('planning processor routes', () => {
       expect(OnEnterDispatchAcceptedResponseSchema.safeParse(body).success).toBe(true);
       expect(body.status).toBe('accepted');
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(mockCreateCard).toHaveBeenCalledTimes(2);
-      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(2);
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(1);
+
+      // Verify the clone uses parent's title and description
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].title).toBe(mockParentCard.title);
+      expect(createCall[2].description).toBe(mockParentCard.description);
 
       const callbackCall = fetchSpy.mock.calls.find((call) => {
         const url = call[0] as string;
@@ -258,8 +267,11 @@ describe('planning processor routes', () => {
       const payload = JSON.parse(init.body);
       expect(payload.status).toBe('success');
       expect(payload.move_to_column).toBe('delegated');
-      expect(payload.payload_updates.payload.task_card_uids).toHaveLength(2);
+      expect(payload.payload_updates.payload.task_card_uid).toBe('550e8400-e29b-41d4-a716-446655440010');
       expect(payload.payload_updates.payload.task_board_uid).toBe(mockTaskBoard.uid);
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(2);
+      expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
+      expect(payload.payload_updates.payload.planned_tasks[1].title).toBe('Implement signup endpoint');
     });
 
     it('falls back to single card when LLM fails', async () => {
@@ -308,6 +320,7 @@ describe('planning processor routes', () => {
       expect(payload.status).toBe('success');
       expect(payload.move_to_column).toBe('delegated');
       expect(payload.payload_updates.payload.task_card_uid).toBe('550e8400-e29b-41d4-a716-446655440020');
+      expect(payload.payload_updates.payload.planned_tasks).toEqual([]);
     });
 
     it('returns 400 for invalid body', async () => {

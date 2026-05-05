@@ -256,76 +256,6 @@ async function runPlanningSession(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Description composer                                               */
-/* ------------------------------------------------------------------ */
-
-function composeTaskDescription(body: string, instructions: Record<string, string>): string {
-  const instructionLines = Object.entries(instructions)
-    .map(([name, value]) => `  ${name}: ${value}`)
-    .join('\n');
-  return `---\ninstructions:\n${instructionLines}\n---\n\n${body}`;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Fallback: single legacy task card                                  */
-/* ------------------------------------------------------------------ */
-
-function createLegacyTaskCard(
-  card: {
-    uid: string;
-    board_uid: string;
-    title: string;
-    description: string | null;
-    payload: Record<string, unknown>;
-  },
-  taskBoard: { uid: string },
-  callbackUrl: string,
-): void {
-  const clonedPayload = {
-    ...card.payload,
-    parent_board_uid: card.board_uid,
-    parent_card_uid: card.uid,
-  };
-
-  const taskCard = createCard(
-    {},
-    taskBoard.uid,
-    {
-      title: card.title,
-      description: card.description,
-      current_status: 'todo',
-      payload: clonedPayload,
-    },
-    'system:planning',
-  );
-
-  createCardRelationship(
-    {},
-    card.board_uid,
-    card.uid,
-    taskCard.uid,
-    'dependency',
-    card.board_uid,
-    taskBoard.uid,
-  );
-
-  console.log(`[planning] Fallback: created legacy task card ${taskCard.display_id} / ${taskCard.title}`);
-
-  fireAndForgetCallback(callbackUrl, {
-    status: 'success',
-    move_to_column: 'delegated',
-    payload_updates: {
-      payload: {
-        ...card.payload,
-        delegated: true,
-        task_card_uid: taskCard.uid,
-        task_board_uid: taskBoard.uid,
-      },
-    },
-  });
-}
-
-/* ------------------------------------------------------------------ */
 /*  Main planning handler                                              */
 /* ------------------------------------------------------------------ */
 
@@ -368,53 +298,39 @@ async function delegatePlanning(
       console.log(`[planning] LLM planned ${tasks.length} subtasks for card ${card.uid}`);
     } catch (llmErr) {
       const message = llmErr instanceof Error ? llmErr.message : String(llmErr);
-      console.error(`[planning] LLM planning failed, falling back to single card: ${message}`);
+      console.error(`[planning] LLM planning failed, continuing with clone: ${message}`);
     }
 
-    if (tasks.length === 0) {
-      createLegacyTaskCard(card, taskBoard, callbackUrl);
-      return;
-    }
+    // Create a single clone child card on the task board (1:1 with parent)
+    const clonedPayload = {
+      ...card.payload,
+      parent_board_uid: card.board_uid,
+      parent_card_uid: card.uid,
+    };
 
-    const taskCardUids: string[] = [];
+    const taskCard = createCard(
+      {},
+      taskBoard.uid,
+      {
+        title: card.title,
+        description: card.description,
+        current_status: 'todo',
+        payload: clonedPayload,
+      },
+      'system:planning',
+    );
 
-    for (const task of tasks) {
-      const taskPayload = {
-        ...card.payload,
-        parent_board_uid: card.board_uid,
-        parent_card_uid: card.uid,
-        instructions: task.instructions,
-        body: task.body,
-      };
+    createCardRelationship(
+      {},
+      card.board_uid,
+      card.uid,
+      taskCard.uid,
+      'dependency',
+      card.board_uid,
+      taskBoard.uid,
+    );
 
-      const taskCard = createCard(
-        {},
-        taskBoard.uid,
-        {
-          title: task.title,
-          description: composeTaskDescription(task.body, task.instructions),
-          current_status: 'todo',
-          payload: taskPayload,
-        },
-        'system:planning',
-      );
-
-      createCardRelationship(
-        {},
-        card.board_uid,
-        card.uid,
-        taskCard.uid,
-        'dependency',
-        card.board_uid,
-        taskBoard.uid,
-      );
-
-      console.log(
-        `[planning] Created subtask card ${taskCard.display_id} / ${taskCard.title}:\n${taskCard.description ?? '(no description)'}`
-      );
-
-      taskCardUids.push(taskCard.uid);
-    }
+    console.log(`[planning] Created clone task card ${taskCard.display_id} / ${taskCard.title}`);
 
     fireAndForgetCallback(callbackUrl, {
       status: 'success',
@@ -423,8 +339,9 @@ async function delegatePlanning(
         payload: {
           ...card.payload,
           delegated: true,
-          task_card_uids: taskCardUids,
+          task_card_uid: taskCard.uid,
           task_board_uid: taskBoard.uid,
+          planned_tasks: tasks,
         },
       },
     });
