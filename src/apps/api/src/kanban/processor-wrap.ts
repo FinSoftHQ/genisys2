@@ -45,17 +45,40 @@ function sendError(callbackUrl: string, displayId: string, message: string): voi
   fireAndForgetCallback(callbackUrl, { status: 'error', error_message: message.slice(0, 500) });
 }
 
-async function fetchDevWrapup(workspacePath: string) {
+async function fetchDevWrapup(workspacePath: string, include?: 'all' | 'commit' | 'pr') {
   const url = `${getDevWrapupBaseUrl()}/api/v1/dev-wrapup`;
+  const body: Record<string, string> = { workspace_path: workspacePath };
+  if (include) {
+    body.include = include;
+  }
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace_path: workspacePath }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     const bodyText = await response.text().catch(() => 'unknown');
     throw new Error(`dev-wrapup API returned ${response.status}: ${bodyText}`);
   }
+
+  if (include === 'pr') {
+    const data = await response.json() as {
+      pr_title: string;
+      pr_body: string;
+    };
+    if (
+      typeof data.pr_title !== 'string' ||
+      typeof data.pr_body !== 'string'
+    ) {
+      throw new Error('dev-wrapup API returned invalid response shape');
+    }
+    return {
+      commitMessage: '',
+      prTitle: data.pr_title,
+      prBody: data.pr_body,
+    };
+  }
+
   const data = await response.json() as {
     commit_message: string;
     pr_title: string;
@@ -157,7 +180,7 @@ async function runWrapWorkflow(
     console.log(
       `[wrap] Card ${card.display_id}: calling dev-wrapup for workspace=${workspacePath}, currentBranch=${currentBranch}`,
     );
-    const wrapup = await fetchDevWrapup(workspacePath);
+    const wrapup = await fetchDevWrapup(workspacePath, hasChanges ? undefined : 'pr');
 
     // Phase 4: Commit changes
     const stagedFiles = await git.getStagedFiles(workspacePath);

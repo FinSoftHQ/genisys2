@@ -204,6 +204,13 @@ describe('wrap processor routes', () => {
         expect.objectContaining({ method: 'POST' }),
       );
 
+      const devWrapupCall = fetchSpy.mock.calls.find((call) =>
+        String(call[0]).includes('/api/v1/dev-wrapup'),
+      );
+      expect(devWrapupCall).toBeDefined();
+      const requestBody = JSON.parse((devWrapupCall![1] as { body: string }).body);
+      expect(requestBody).not.toHaveProperty('include');
+
       expect(mockExecFile).toHaveBeenCalledWith(
         'gh',
         expect.arrayContaining(['auth', 'status']),
@@ -262,6 +269,9 @@ describe('wrap processor routes', () => {
     it('skips commit when there are no staged changes but still pushes and creates PR', async () => {
       mockExecFile.mockImplementation((file, ...rest) => {
         const args = rest.flat().filter((a): a is string => typeof a === 'string');
+        if (file === 'git' && args.includes('status') && args.includes('--porcelain')) {
+          return { stdout: '' };
+        }
         if (file === 'git' && args.includes('diff') && args.includes('--cached') && args.includes('--name-only')) {
           return { stdout: '' };
         }
@@ -271,8 +281,19 @@ describe('wrap processor routes', () => {
         return undefined;
       });
 
-      fetchSpy.mockImplementation(async (url) => {
+      fetchSpy.mockImplementation(async (url, init) => {
         if (String(url).includes('/api/v1/dev-wrapup')) {
+          const body = JSON.parse((init as { body: string }).body);
+          if (body.include === 'pr') {
+            return new Response(
+              JSON.stringify({
+                pr_title: '[TST-1] Add feature',
+                pr_body: '## Summary\n\nThis PR adds a feature.',
+                has_staged_changes: false,
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
           return new Response(
             JSON.stringify({
               commit_message: 'feat: add feature',
@@ -322,6 +343,13 @@ describe('wrap processor routes', () => {
         ]),
         expect.anything(),
       );
+
+      const devWrapupCall = fetchSpy.mock.calls.find((call) =>
+        String(call[0]).includes('/api/v1/dev-wrapup'),
+      );
+      expect(devWrapupCall).toBeDefined();
+      const requestBody = JSON.parse((devWrapupCall![1] as { body: string }).body);
+      expect(requestBody.include).toBe('pr');
 
       expect(fetchSpy).toHaveBeenCalledWith(
         callbackUrl,
