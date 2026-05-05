@@ -93,33 +93,68 @@ function buildPlanningPrompt(context: {
         '\n\n'
       : '';
 
-  return `You are a senior engineering project planner. Your job is to break a development task into small, manageable subtasks (2–5 tasks). Each subtask must be independently implementable and testable.
+  return `You are a senior engineering project planner. Your job is to break a parent development task into small, highly manageable subtasks.
+
+**Core Principles for Sizing**
+- **Scope:** Each subtask must represent roughly a half-day to a full day of work for a single developer (a single, easily reviewable Pull Request). If a subtask exceeds this, you must break it down further.
+- **Independence:** Each subtask must be independently implementable and testable. Minimize blocking dependencies. If two subtasks absolutely must share a foundation (e.g., a shared contract or schema), the foundational piece must be its own subtask that appears first in the sequence.
+
+---
+
+**Step 1: Pre-Flight Analysis**
+Before generating subtasks, output exactly ONE \`<<<PRE_FLIGHT>>>\` block. This is your designated workspace to reason out loud. Do not skip this step.
+
+Inside \`<<<PRE_FLIGHT>>>\`:
+1. **Complexity:** Classify as \`Trivial\` (1 subtask), \`Standard\` (2–5), \`Complex\` (5–10), or \`Epic\` (10+). Justify in one sentence.
+2. **Primary Type:** Determine if the overall work is \`implementation\`, \`infrastructure/setup\`, \`research/spike\`, \`refactor\`, or \`bugfix\`.
+3. **Ambiguity Check:** If the Task Body lacks sufficient detail to produce testable subtasks, list the missing information. If ambiguity is found, immediately after closing \`<<<PRE_FLIGHT>>>\`, output \`<<<CLARIFICATION_NEEDED>>>\` followed by your questions, then output \`<<<END>>>\` and stop. Do not invent assumptions.
+4. **Draft Plan & Validation:** List tentative subtask titles and verify:
+   - [ ] 100% coverage of the parent Task Body scope.
+   - [ ] No subtask exceeds one day of work.
+   - [ ] Every subtask is independently testable without waiting for another subtask to merge.
+   - [ ] Dependencies flow forward only (no cycles); foundational subtasks appear first.
+   If validation fails, revise the draft plan here before proceeding to Step 2.
+
+---
+
+**Step 2: Generate Subtasks**
+If no clarification is needed, output the finalized subtasks. For each subtask, use the following **exact** format. Do not add markdown code fences, conversational filler, or extra text between blocks.
+
+<<<TASK>>>
+<<<TITLE>>>
+Subtask title
+<<<TYPE>>>
+implementation | infrastructure | research | refactor | bugfix
+<<<BODY>>>
+A detailed, self-contained description of what this subtask involves. Include specific files, modules, or interfaces to be touched. State any assumptions explicitly.
+<<<DEPENDS_ON>>>
+none | [exact title of another subtask in this plan]
+<<<ACCEPTANCE>>>
+- A specific, demonstrable, pass/fail criterion (e.g., "Unit test X passes", "Endpoint Y returns 200 with schema Z").
+- A second criterion that proves integration with the existing system.
+<<<INSTRUCTIONS>>>
+agent_name: Specific instruction for this agent. If no specific instructions are needed for any agent, write "none".
+<<<RISK>>>
+Any assumption, unknown, or external dependency that could cause this subtask to resize or block. If none, write "none".
+<<<END_TASK>>>
+
+Repeat the \`<<<TASK>>>\` block for every subtask.
+
+---
+
+**Input Data**
 
 Task Title: ${context.title}
 
 Task Body:
 ${context.body}
 
-${instructionsBlock}Output ONLY subtasks using the following exact format. Do not add any preamble, explanation, or extra text.
+${instructionsBlock}---
 
-<<<TASK>>>
-<<<TITLE>>>
-Subtask title
-<<<BODY>>>
-Subtask body — a detailed, self-contained description of what this subtask involves.
-<<<INSTRUCTIONS>>>
-agent_name: Specific instruction for this agent
-another_agent: Another specific instruction
-<<<END_TASK>>>
-<<<TASK>>>
-<<<TITLE>>>
-Another subtask title
-<<<BODY>>>
-Another subtask body
-<<<INSTRUCTIONS>>>
-agent_name: Instruction
-<<<END_TASK>>>
-<<<END>>>`;
+**Final Output Rules**
+- Output ONLY the requested tags (\`<<<PRE_FLIGHT>>>\`, \`<<<CLARIFICATION_NEEDED>>>\`, \`<<<TASK>>>\`, \`<<<END>>>\`). No markdown code fences around the entire output, no bullet summaries outside the tags.
+- Ensure all \`<<<DEPENDS_ON>>>\` references map flawlessly to \`<<<TITLE>>>\` values that appear earlier in the output sequence.
+- End the entire output with \`<<<END>>>\`.`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -143,8 +178,48 @@ function extractMarker(text: string, marker: string, nextMarkers: string[]): str
   return text.slice(contentStart, end).trim();
 }
 
-function parsePlannedTasks(text: string): Array<{ title: string; body: string; instructions: Record<string, string> }> {
-  const tasks: Array<{ title: string; body: string; instructions: Record<string, string> }> = [];
+type PlannedTask = {
+  title: string;
+  type: string;
+  body: string;
+  depends_on: string;
+  acceptance: string;
+  instructions: Record<string, string>;
+  risk: string;
+};
+
+type PlanningResult = {
+  tasks: PlannedTask[];
+  pre_flight?: string;
+  clarification_needed?: string;
+};
+
+function parsePlannedTasks(text: string): PlanningResult {
+  let pre_flight: string | undefined;
+
+  // Extract PRE_FLIGHT if present
+  const preFlightStart = text.indexOf('<<<PRE_FLIGHT>>>');
+  if (preFlightStart !== -1) {
+    const contentStart = preFlightStart + '<<<PRE_FLIGHT>>>'.length;
+    const nextMarkers = ['<<<CLARIFICATION_NEEDED>>>', '<<<TASK>>>', '<<<END>>>'];
+    let end = text.length;
+    for (const marker of nextMarkers) {
+      const pos = text.indexOf(marker, contentStart);
+      if (pos !== -1 && pos < end) end = pos;
+    }
+    pre_flight = text.slice(contentStart, end).trim();
+  }
+
+  // Check for CLARIFICATION_NEEDED
+  const clarStart = text.indexOf('<<<CLARIFICATION_NEEDED>>>');
+  if (clarStart !== -1) {
+    const contentStart = clarStart + '<<<CLARIFICATION_NEEDED>>>'.length;
+    const end = text.indexOf('<<<END>>>', contentStart);
+    const clarification_needed = text.slice(contentStart, end !== -1 ? end : text.length).trim();
+    return { tasks: [], pre_flight, clarification_needed };
+  }
+
+  const tasks: PlannedTask[] = [];
   const taskMarker = '<<<TASK>>>';
   const endMarker = '<<<END>>>';
 
@@ -164,9 +239,13 @@ function parsePlannedTasks(text: string): Array<{ title: string; body: string; i
 
     const block = text.slice(blockStart, blockEnd);
 
-    const title = extractMarker(block, '<<<TITLE>>>', ['<<<BODY>>>', '<<<INSTRUCTIONS>>>', '<<<END_TASK>>>']);
-    const body = extractMarker(block, '<<<BODY>>>', ['<<<INSTRUCTIONS>>>', '<<<END_TASK>>>']);
-    const instructionsText = extractMarker(block, '<<<INSTRUCTIONS>>>', ['<<<END_TASK>>>']);
+    const title = extractMarker(block, '<<<TITLE>>>', ['<<<TYPE>>>', '<<<BODY>>>', '<<<DEPENDS_ON>>>', '<<<ACCEPTANCE>>>', '<<<INSTRUCTIONS>>>', '<<<RISK>>>', '<<<END_TASK>>>']);
+    const type = extractMarker(block, '<<<TYPE>>>', ['<<<BODY>>>', '<<<DEPENDS_ON>>>', '<<<ACCEPTANCE>>>', '<<<INSTRUCTIONS>>>', '<<<RISK>>>', '<<<END_TASK>>>']);
+    const body = extractMarker(block, '<<<BODY>>>', ['<<<DEPENDS_ON>>>', '<<<ACCEPTANCE>>>', '<<<INSTRUCTIONS>>>', '<<<RISK>>>', '<<<END_TASK>>>']);
+    const depends_on = extractMarker(block, '<<<DEPENDS_ON>>>', ['<<<ACCEPTANCE>>>', '<<<INSTRUCTIONS>>>', '<<<RISK>>>', '<<<END_TASK>>>']);
+    const acceptance = extractMarker(block, '<<<ACCEPTANCE>>>', ['<<<INSTRUCTIONS>>>', '<<<RISK>>>', '<<<END_TASK>>>']);
+    const instructionsText = extractMarker(block, '<<<INSTRUCTIONS>>>', ['<<<RISK>>>', '<<<END_TASK>>>']);
+    const risk = extractMarker(block, '<<<RISK>>>', ['<<<END_TASK>>>']);
 
     const instructions: Record<string, string> = {};
     if (instructionsText) {
@@ -184,7 +263,15 @@ function parsePlannedTasks(text: string): Array<{ title: string; body: string; i
     }
 
     if (title && body) {
-      tasks.push({ title: title.trim(), body: body.trim(), instructions });
+      tasks.push({
+        title: title.trim(),
+        type: type.trim() || 'implementation',
+        body: body.trim(),
+        depends_on: depends_on.trim() || 'none',
+        acceptance: acceptance.trim() || '',
+        instructions,
+        risk: risk.trim() || 'none',
+      });
     }
 
     searchStart = blockEnd;
@@ -194,7 +281,7 @@ function parsePlannedTasks(text: string): Array<{ title: string; body: string; i
     throw new Error('No tasks found in LLM response');
   }
 
-  return tasks;
+  return { tasks, pre_flight };
 }
 
 /* ------------------------------------------------------------------ */
@@ -204,7 +291,7 @@ function parsePlannedTasks(text: string): Array<{ title: string; body: string; i
 async function runPlanningSession(
   prompt: string,
   cwd?: string,
-): Promise<Array<{ title: string; body: string; instructions: Record<string, string> }>> {
+): Promise<PlanningResult> {
   const preferredModel = getModel('github-copilot', 'gpt-5-mini');
 
   console.log('[planning] Starting AI planning session');
@@ -289,13 +376,13 @@ async function delegatePlanning(
     }
 
     // Attempt LLM-based subtask planning
-    let tasks: Array<{ title: string; body: string; instructions: Record<string, string> }> = [];
+    let result: PlanningResult = { tasks: [] };
     try {
       const context = extractCardContext(card);
       const workspacePath =
         typeof card.payload.workspace_path === 'string' ? card.payload.workspace_path : undefined;
-      tasks = await runPlanningSession(buildPlanningPrompt(context), workspacePath);
-      console.log(`[planning] LLM planned ${tasks.length} subtasks for card ${card.uid}`);
+      result = await runPlanningSession(buildPlanningPrompt(context), workspacePath);
+      console.log(`[planning] LLM planned ${result.tasks.length} subtasks for card ${card.uid}`);
     } catch (llmErr) {
       const message = llmErr instanceof Error ? llmErr.message : String(llmErr);
       console.error(`[planning] LLM planning failed, continuing with clone: ${message}`);
@@ -341,7 +428,9 @@ async function delegatePlanning(
           delegated: true,
           task_card_uid: taskCard.uid,
           task_board_uid: taskBoard.uid,
-          planned_tasks: tasks,
+          planned_tasks: result.tasks,
+          pre_flight: result.pre_flight,
+          clarification_needed: result.clarification_needed,
         },
       },
     });
