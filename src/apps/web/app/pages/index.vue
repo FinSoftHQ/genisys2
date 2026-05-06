@@ -402,7 +402,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <div v-if="browseLoading" class="rounded-2xl border border-default/70 bg-elevated/70 px-6 py-10 text-center text-muted">
+          <div v-if="browseLoading" aria-label="Loading" class="rounded-2xl border border-default/70 bg-elevated/70 px-6 py-10 text-center text-muted">
             <UIcon name="i-lucide-loader-2" class="mx-auto mb-3 size-6 animate-spin text-primary" />
             Loading boards and suites...
           </div>

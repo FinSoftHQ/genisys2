@@ -28,7 +28,7 @@ describe("dev-wrapup routes", () => {
     await app.close();
   });
 
-  it("returns 200 with LLM-generated wrap-up for valid workspace_path (default include=all)", async () => {
+  it("returns 200 with LLM-generated wrap-up for valid working_dir (default include=all)", async () => {
     vi.mocked(generateDevWrapup).mockResolvedValue({
       commit_message: "feat: add user authentication",
       pr_title: "Add user authentication",
@@ -39,7 +39,7 @@ describe("dev-wrapup routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "/home/user/projects/my-app" },
+      payload: { working_dir: "/home/user/projects/my-app" },
     });
 
     expect(response.statusCode).toBe(200);
@@ -62,7 +62,7 @@ describe("dev-wrapup routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "/home/user/projects/my-app", include: "commit" },
+      payload: { working_dir: "/home/user/projects/my-app", include: "commit" },
     });
 
     expect(response.statusCode).toBe(200);
@@ -84,7 +84,7 @@ describe("dev-wrapup routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "/home/user/projects/my-app", include: "pr" },
+      payload: { working_dir: "/home/user/projects/my-app", include: "pr" },
     });
 
     expect(response.statusCode).toBe(200);
@@ -101,7 +101,7 @@ describe("dev-wrapup routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "/home/user/projects/my-app", include: "invalid" },
+      payload: { working_dir: "/home/user/projects/my-app", include: "invalid" },
     });
 
     expect(response.statusCode).toBe(400);
@@ -109,7 +109,7 @@ describe("dev-wrapup routes", () => {
     expect(json.error.code).toBe("INVALID_BODY");
   });
 
-  it("returns 400 when workspace_path is missing", async () => {
+  it("returns 400 when working_dir is missing", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
@@ -121,11 +121,11 @@ describe("dev-wrapup routes", () => {
     expect(json.error.code).toBe("INVALID_BODY");
   });
 
-  it("returns 400 when workspace_path is empty string", async () => {
+  it("returns 400 when working_dir is empty string", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "" },
+      payload: { working_dir: "" },
     });
 
     expect(response.statusCode).toBe(400);
@@ -133,11 +133,11 @@ describe("dev-wrapup routes", () => {
     expect(json.error.code).toBe("INVALID_BODY");
   });
 
-  it("returns 400 when workspace_path contains path traversal", async () => {
+  it("returns 400 when working_dir contains path traversal", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "../../../etc/passwd" },
+      payload: { working_dir: "../../../etc/passwd" },
     });
 
     expect(response.statusCode).toBe(400);
@@ -145,15 +145,15 @@ describe("dev-wrapup routes", () => {
     expect(json.error.code).toBe("INVALID_PATH");
   });
 
-  it("returns 422 when workspace_path is not a git repo", async () => {
+  it("returns 422 when working_dir is not a git repo", async () => {
     vi.mocked(generateDevWrapup).mockImplementation(() => {
-      throw new GitRepoError("workspace_path is not a git repository: /tmp/foo");
+      throw new GitRepoError("working_dir is not a git repository: /tmp/foo");
     });
 
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "/tmp/foo" },
+      payload: { working_dir: "/tmp/foo" },
     });
 
     expect(response.statusCode).toBe(422);
@@ -169,7 +169,7 @@ describe("dev-wrapup routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "/home/user/projects/my-app" },
+      payload: { working_dir: "/home/user/projects/my-app" },
     });
 
     expect(response.statusCode).toBe(502);
@@ -185,7 +185,7 @@ describe("dev-wrapup routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "/home/user/projects/my-app" },
+      payload: { working_dir: "/home/user/projects/my-app" },
     });
 
     expect(response.statusCode).toBe(504);
@@ -201,7 +201,7 @@ describe("dev-wrapup routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev-wrapup",
-      payload: { workspace_path: "/home/user/projects/my-app" },
+      payload: { working_dir: "/home/user/projects/my-app" },
     });
 
     expect(response.statusCode).toBe(500);

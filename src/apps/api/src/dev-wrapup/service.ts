@@ -56,10 +56,10 @@ export class GenerationError extends Error {
   }
 }
 
-function hasStagedChanges(workspacePath: string): boolean {
+function hasStagedChanges(workingDir: string): boolean {
   try {
     const output = execSync("git diff --cached --name-only", {
-      cwd: workspacePath,
+      cwd: workingDir,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
       timeout: 5_000,
@@ -70,27 +70,27 @@ function hasStagedChanges(workspacePath: string): boolean {
   }
 }
 
-function validateGitRepo(workspacePath: string): void {
+function validateGitRepo(workingDir: string): void {
   try {
-    const stats = statSync(workspacePath);
+    const stats = statSync(workingDir);
     if (!stats.isDirectory()) {
-      throw new GitRepoError(`workspace_path is not a directory: ${workspacePath}`);
+      throw new GitRepoError(`working_dir is not a directory: ${workingDir}`);
     }
   } catch (err) {
     if (err instanceof GitRepoError) throw err;
-    throw new GitRepoError(`workspace_path does not exist: ${workspacePath}`);
+    throw new GitRepoError(`working_dir does not exist: ${workingDir}`);
   }
 
   try {
     execSync("git rev-parse --git-dir", {
-      cwd: workspacePath,
+      cwd: workingDir,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
       timeout: 5_000,
     });
   } catch {
     throw new GitRepoError(
-      `workspace_path is not a git repository: ${workspacePath}`
+      `working_dir is not a git repository: ${workingDir}`
     );
   }
 }
@@ -220,15 +220,15 @@ function parseDelimitedResponse(text: string): Record<string, string> {
   return result;
 }
 
-async function runPiSession(workspacePath: string, prompt: string): Promise<unknown> {
+async function runPiSession(workingDir: string, prompt: string): Promise<unknown> {
   // Attempt to use the github-copilot/gpt-5-mini model if available in the registry.
   const preferredModel = getModel("github-copilot", "gpt-5-mini");
 
-  console.log(`[dev-wrapup] Starting AI session in workspace: ${workspacePath}`);
+  console.log(`[dev-wrapup] Starting AI session in workspace: ${workingDir}`);
 
   const { session } = await createAgentSession({
-    cwd: workspacePath,
-    sessionManager: SessionManager.inMemory(workspacePath),
+    cwd: workingDir,
+    sessionManager: SessionManager.inMemory(workingDir),
     ...(preferredModel ? { model: preferredModel } : {}),
   });
 
@@ -287,12 +287,12 @@ export type DevWrapupResult =
   | { pr_title: string; pr_body: string; has_staged_changes: boolean };
 
 export async function generateDevWrapup(
-  workspacePath: string,
+  workingDir: string,
   include: "all" | "commit" | "pr" = "all"
 ): Promise<DevWrapupResult> {
-  console.log(`[dev-wrapup] Generating wrapup for workspace: ${workspacePath}, include: ${include}`);
+  console.log(`[dev-wrapup] Generating wrapup for workspace: ${workingDir}, include: ${include}`);
 
-  validateGitRepo(workspacePath);
+  validateGitRepo(workingDir);
 
   const schema =
     include === "commit"
@@ -302,7 +302,7 @@ export async function generateDevWrapup(
         : WrapupResponseAllSchema;
 
   const result = await Promise.race([
-    runPiSession(workspacePath, buildSystemPrompt(include)),
+    runPiSession(workingDir, buildSystemPrompt(include)),
     new Promise<never>((_, reject) => {
       setTimeout(() => {
         reject(new TimeoutError("LLM generation timed out after 60s"));
@@ -319,6 +319,6 @@ export async function generateDevWrapup(
 
   return {
     ...parsed.data,
-    has_staged_changes: hasStagedChanges(workspacePath),
+    has_staged_changes: hasStagedChanges(workingDir),
   } as DevWrapupResult;
 }

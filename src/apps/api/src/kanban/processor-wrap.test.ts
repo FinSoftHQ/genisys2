@@ -86,7 +86,7 @@ const mockCard = {
   processing_state: 'IDLE' as const,
   is_editable: true,
   payload: {
-    workspace_path: '/tmp/workspaces/TST-1',
+    working_dir: '/tmp/workspaces/TST-1',
     repository_url: 'https://github.com/test-org/test-repo.git',
   },
   current_status: 'wrap',
@@ -240,7 +240,7 @@ describe('wrap processor routes', () => {
       );
     });
 
-    it('fires error callback when workspace_path is missing', async () => {
+    it('fires error callback when working_dir is missing', async () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440003';
       const cardNoWorkspace = { ...mockCard, payload: {} };
 
@@ -834,7 +834,7 @@ describe('wrap processor routes', () => {
       );
     });
 
-    it('returns 200 acknowledged when workspace_path is missing', async () => {
+    it('returns 200 acknowledged when working_dir is missing', async () => {
       const cardNoWorkspace = { ...mockCard, payload: {} };
       const response = await app.inject({
         method: 'POST',

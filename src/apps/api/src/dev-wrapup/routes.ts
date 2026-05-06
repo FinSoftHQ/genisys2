@@ -8,7 +8,7 @@ import {
 } from "./service.js";
 
 const DevWrapupRequestSchema = z.object({
-  workspace_path: z.string().min(1),
+  working_dir: z.string().min(1),
   include: z.enum(["all", "commit", "pr"]).default("all"),
 });
 
@@ -25,17 +25,17 @@ export async function devWrapupRoutes(instance: FastifyInstance): Promise<void> 
       });
     }
 
-    if (body.data.workspace_path.includes("..")) {
+    if (body.data.working_dir.includes("..")) {
       return reply.status(400).send({
         error: {
           code: "INVALID_PATH",
-          message: "workspace_path contains invalid traversal characters",
+          message: "working_dir contains invalid traversal characters",
         },
       });
     }
 
     try {
-      const result = await generateDevWrapup(body.data.workspace_path, body.data.include);
+      const result = await generateDevWrapup(body.data.working_dir, body.data.include);
       return reply.status(200).send(result);
     } catch (err) {
       if (err instanceof GitRepoError) {

@@ -351,6 +351,9 @@ importers:
       vue:
         specifier: 'catalog:'
         version: 3.5.33(typescript@5.9.3)
+      vue-router:
+        specifier: 5.0.6
+        version: 5.0.6(@vue/compiler-sfc@3.5.33)(vue@3.5.33(typescript@5.9.3))
 
   src/libs/logger:
     dependencies:

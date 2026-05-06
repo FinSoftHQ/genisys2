@@ -108,17 +108,14 @@ function composeMarkdownFromPayload(card: {
     frontMatterLines.push(`tailor_shop: ${serializeYamlValue(p.tailor_shop.trim())}`);
   }
 
-  // Explicit mapping: workspace_path -> working_dir
   const workingDir = typeof p.working_dir === 'string' && p.working_dir.trim()
     ? p.working_dir.trim()
-    : typeof p.workspace_path === 'string' && p.workspace_path.trim()
-      ? p.workspace_path.trim()
-      : undefined;
+    : undefined;
   if (workingDir) {
     frontMatterLines.push(`working_dir: ${serializeYamlValue(workingDir)}`);
     console.log('[agentic-team] Resolved working_dir for card', card.display_id, ':', workingDir);
   } else {
-    console.warn('[agentic-team] WARNING: no working_dir or workspace_path found for card', card.display_id);
+    console.warn('[agentic-team] WARNING: no working_dir found for card', card.display_id);
   }
 
   const instructions = p.instructions;
@@ -173,11 +170,9 @@ async function runWipWorkflow(
   },
   callbackUrl: string,
 ) {
-  // Validate workspace_path is present before creating an agent room
-  const workspacePath = typeof card.payload.workspace_path === 'string' ? card.payload.workspace_path.trim() : '';
   const workingDir = typeof card.payload.working_dir === 'string' ? card.payload.working_dir.trim() : '';
-  if (!workspacePath && !workingDir) {
-    const errorMessage = `Agentic team workflow failed for card ${card.display_id}: missing workspace_path (or working_dir) in card payload`;
+  if (!workingDir) {
+    const errorMessage = `Agentic team workflow failed for card ${card.display_id}: missing working_dir in card payload`;
     console.error('[agentic-team]', errorMessage);
     fireAndForgetCallback(callbackUrl, {
       status: 'error',

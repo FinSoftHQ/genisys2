@@ -44,12 +44,12 @@ function sendError(callbackUrl: string, displayId: string, message: string): voi
   fireAndForgetCallback(callbackUrl, { status: 'error', error_message: message.slice(0, 500) });
 }
 
-async function fetchDevWrapupCommit(workspacePath: string) {
+async function fetchDevWrapupCommit(workingDir: string) {
   const url = `${getDevWrapupBaseUrl()}/api/v1/dev-wrapup`;
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace_path: workspacePath, include: 'commit' }),
+    body: JSON.stringify({ working_dir: workingDir, include: 'commit' }),
   });
   if (!response.ok) {
     const bodyText = await response.text().catch(() => 'unknown');
@@ -68,21 +68,21 @@ async function runCommitWorkflow(
   card: { display_id: string; payload?: Record<string, unknown> },
   callbackUrl: string,
 ) {
-  const workspacePath = card.payload?.workspace_path;
-  if (!workspacePath || typeof workspacePath !== 'string') {
-    return sendError(callbackUrl, card.display_id, 'Commit failed: missing workspace_path in card payload');
+  const workingDir = card.payload?.working_dir;
+  if (!workingDir || typeof workingDir !== 'string') {
+    return sendError(callbackUrl, card.display_id, 'Commit failed: missing working_dir in card payload');
   }
 
   try {
     // Phase 1: Stage all changes
     console.log(`[commit] Card ${card.display_id}: staging changes with git add -A`);
-    await git.stageAll(workspacePath);
+    await git.stageAll(workingDir);
 
     // Phase 2: Check if anything was staged
     const { stdout: stagedStdout } = await execFilePromise(
       'git',
       ['diff', '--cached', '--name-only'],
-      { cwd: workspacePath, timeout: 10_000 },
+      { cwd: workingDir, timeout: 10_000 },
     );
     const stagedFiles = stagedStdout.trim().split('\n').filter(Boolean);
     if (stagedFiles.length === 0) {
@@ -95,12 +95,12 @@ async function runCommitWorkflow(
     );
 
     // Phase 3: Generate commit message
-    const commitMessage = await fetchDevWrapupCommit(workspacePath);
+    const commitMessage = await fetchDevWrapupCommit(workingDir);
     console.log(`[commit] Card ${card.display_id}: generated commit message: ${commitMessage}`);
 
     // Phase 4: Commit
     await execFilePromise('git', ['commit', '-m', commitMessage], {
-      cwd: workspacePath,
+      cwd: workingDir,
       timeout: 30_000,
     });
     console.log(`[commit] Card ${card.display_id}: committed successfully`);

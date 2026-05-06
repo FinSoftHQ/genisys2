@@ -379,9 +379,9 @@ async function delegatePlanning(
     let result: PlanningResult = { tasks: [] };
     try {
       const context = extractCardContext(card);
-      const workspacePath =
-        typeof card.payload.workspace_path === 'string' ? card.payload.workspace_path : undefined;
-      result = await runPlanningSession(buildPlanningPrompt(context), workspacePath);
+      const workingDir =
+        typeof card.payload.working_dir === 'string' ? card.payload.working_dir : undefined;
+      result = await runPlanningSession(buildPlanningPrompt(context), workingDir);
       console.log(`[planning] LLM planned ${result.tasks.length} subtasks for card ${card.uid}`);
     } catch (llmErr) {
       const message = llmErr instanceof Error ? llmErr.message : String(llmErr);
