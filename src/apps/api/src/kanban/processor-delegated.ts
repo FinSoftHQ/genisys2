@@ -101,12 +101,10 @@ async function delegateTask(card: {
       });
     }
 
-    // Fallback: pull any other cards waiting in todo on the task board
-    moveCardToNextColumn({}, taskBoard, 'todo').catch((err) => {
-      console.error('[delegated] Auto-pull from todo failed:', err instanceof Error ? err.message : String(err));
-    });
-
-    fireAndForgetCallback(callbackUrl, { status: 'success', move_to_column: 'wrap' });
+    // Parent stays in Delegated. The done processor's auto-pull will handle
+    // subsequent children, and wakeParentIfAllChildrenDone will move the parent
+    // to Wrap when all children reach done.
+    fireAndForgetCallback(callbackUrl, { status: 'success' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     fireAndForgetCallback(callbackUrl, {

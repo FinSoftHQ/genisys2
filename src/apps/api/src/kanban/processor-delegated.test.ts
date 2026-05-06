@@ -217,7 +217,7 @@ describe('delegated processor routes', () => {
         expect.objectContaining({ uid: mockTaskCard.uid, current_status: 'agentic-team' }),
         expect.objectContaining({ uid: 'agentic-team', type: 'Processing' }),
       );
-      expect(mockMoveCardToNextColumn).toHaveBeenCalledWith({}, mockTaskBoard, 'todo');
+      expect(mockMoveCardToNextColumn).not.toHaveBeenCalled();
 
       const callbackCall = fetchSpy.mock.calls.find((call) => {
         const url = call[0] as string;
@@ -227,7 +227,7 @@ describe('delegated processor routes', () => {
       const init = callbackCall![1] as { body: string };
       const payload = JSON.parse(init.body);
       expect(payload.status).toBe('success');
-      expect(payload.move_to_column).toBe('wrap');
+      expect(payload.move_to_column).toBeUndefined();
     });
 
     it('does not move an unrelated todo card', async () => {
