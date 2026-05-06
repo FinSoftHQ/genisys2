@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -200,16 +200,28 @@ describe('agent-rooms manager', () => {
 			}
 		});
 
-		it('always appends identity and body prompts', () => {
+		it('always appends cwd, identity, and body prompts', () => {
 			const { args } = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.cwd.prompt'),
 				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 			]);
 		});
 
-		it('appends identity, agent role prompt, and working_protocol when both exist', () => {
+		it('injects working directory prompt with absolute path when workingDir is provided', () => {
+			const baseDir = mkdtempSync(join(tmpdir(), 'cwd-test-'));
+			const { args } = buildPiArgs('alpha', 'Lead', undefined, bodyPromptPath, roomPromptDir, baseDir);
+			const cwdPromptPath = join(roomPromptDir, 'alpha.cwd.prompt');
+			expect(args).toContain(cwdPromptPath);
+			expect(existsSync(cwdPromptPath)).toBe(true);
+			const content = readFileSync(cwdPromptPath, 'utf-8');
+			expect(content).toContain(`Your current working directory is: ${baseDir}`);
+			expect(content).toContain('All relative paths in read, write, and edit operations are resolved from this directory.');
+		});
+
+		it('appends cwd, identity, agent role prompt, and working_protocol when both exist', () => {
 			tailorDir = mkdtempSync(join(tmpdir(), 'tailor-test-'));
 			const agentsDir = join(tailorDir, 'agents');
 			mkdirSync(agentsDir, { recursive: true });
@@ -219,6 +231,7 @@ describe('agent-rooms manager', () => {
 			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.cwd.prompt'),
 				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 				'--append-system-prompt', join(tailorDir, 'agents', 'alpha.md'),
@@ -315,6 +328,7 @@ describe('agent-rooms manager', () => {
 			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.cwd.prompt'),
 				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 				'--append-system-prompt', join(tailorDir, 'working_protocol.md'),
@@ -331,6 +345,7 @@ describe('agent-rooms manager', () => {
 			const { args } = buildPiArgs('alpha', 'Lead', tailorDir, bodyPromptPath, roomPromptDir);
 			expect(args).toEqual([
 				'--mode', 'rpc', '--no-session',
+				'--append-system-prompt', join(roomPromptDir, 'alpha.cwd.prompt'),
 				'--append-system-prompt', join(roomPromptDir, 'alpha.identity.prompt'),
 				'--append-system-prompt', bodyPromptPath,
 			]);
