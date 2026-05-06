@@ -218,7 +218,9 @@ describe('agent-rooms manager', () => {
 			expect(existsSync(cwdPromptPath)).toBe(true);
 			const content = readFileSync(cwdPromptPath, 'utf-8');
 			expect(content).toContain(`Your current working directory is: ${baseDir}`);
+			expect(content).toContain('This directory IS your project root. All code, tests, and files you create must be written relative to this directory.');
 			expect(content).toContain('All relative paths in read, write, and edit operations are resolved from this directory.');
+			expect(content).toContain('When running tests, use explicit file paths (e.g., vitest run src/apps/api/path/to/file.test.ts).');
 		});
 
 		it('appends cwd, identity, agent role prompt, and working_protocol when both exist', () => {

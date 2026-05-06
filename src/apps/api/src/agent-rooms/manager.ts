@@ -453,7 +453,9 @@ export function buildPiArgs(
 	writeFileSync(
 		cwdPromptPath,
 		`[SYSTEM WORKING DIRECTORY] Your current working directory is: ${effectiveCwd}\n` +
+			`This directory IS your project root. All code, tests, and files you create must be written relative to this directory.\n` +
 			`All relative paths in read, write, and edit operations are resolved from this directory.\n` +
+			`When running tests, use explicit file paths (e.g., vitest run src/apps/api/path/to/file.test.ts).\n` +
 			`Do not change directory or write files outside this directory unless explicitly instructed.\n\n`,
 		"utf-8",
 	);
