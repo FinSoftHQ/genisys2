@@ -164,6 +164,42 @@ describe('parseProtocol', () => {
 			},
 		);
 	});
+
+	it('parses instructions with | multi-line string', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\ninstructions:\n  alice: |\n    First line of instruction\n    Second line of instruction\n---\n\nBody content.`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.instructions).toEqual({
+					alice: 'First line of instruction\nSecond line of instruction',
+				});
+			},
+		);
+	});
+
+	it('parses team member role with | multi-line string', () => {
+		withTempFile(
+			`---\nteam:\n  alice: |\n    Senior Developer\n    Team Lead\n---\n\nBody content.`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.team).toEqual({
+					alice: 'Senior Developer\nTeam Lead',
+				});
+			},
+		);
+	});
+
+	it('preserves empty lines inside | multi-line string', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\ninstructions:\n  alice: |\n    Line one\n\n    Line two\n---\n\nBody content.`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.instructions).toEqual({
+					alice: 'Line one\n\nLine two',
+				});
+			},
+		);
+	});
 });
 
 describe('parseProtocolFromString', () => {

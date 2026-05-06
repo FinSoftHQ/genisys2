@@ -456,6 +456,8 @@ export function buildPiArgs(
 			`This directory IS your project root. All code, tests, and files you create must be written relative to this directory.\n` +
 			`All relative paths in read, write, and edit operations are resolved from this directory.\n` +
 			`When running tests, use explicit file paths (e.g., vitest run src/apps/api/path/to/file.test.ts).\n` +
+			`process.cwd() inside this environment will return the path shown above.\n` +
+			`This workspace is a git clone of the project. If body text or instructions mention absolute paths from the original repository, treat them as relative to this workspace directory.\n` +
 			`Do not change directory or write files outside this directory unless explicitly instructed.\n\n`,
 		"utf-8",
 	);

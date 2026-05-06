@@ -221,6 +221,8 @@ describe('agent-rooms manager', () => {
 			expect(content).toContain('This directory IS your project root. All code, tests, and files you create must be written relative to this directory.');
 			expect(content).toContain('All relative paths in read, write, and edit operations are resolved from this directory.');
 			expect(content).toContain('When running tests, use explicit file paths (e.g., vitest run src/apps/api/path/to/file.test.ts).');
+			expect(content).toContain('process.cwd() inside this environment will return the path shown above.');
+			expect(content).toContain('This workspace is a git clone of the project. If body text or instructions mention absolute paths from the original repository, treat them as relative to this workspace directory.');
 		});
 
 		it('appends cwd, identity, agent role prompt, and working_protocol when both exist', () => {
