@@ -1,11 +1,17 @@
-import { describe, expect, it } from 'vitest';
-import { existsSync } from 'fs';
+import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 
-describe('agent-rooms diagnostics cwd', () => {
-	it('prints and verifies the working directory', () => {
-		console.log('[DIAGNOSTICS] CWD:', process.cwd());
+describe('Agent Working Directory Diagnostics', () => {
+  it('should verify the current working directory contains expected files', () => {
+    console.log('[DIAGNOSTICS] CWD:', process.cwd())
 
-		expect(process.cwd()).toBe('/home/dev3x/w/genisys2');
-		expect(existsSync('/home/dev3x/w/genisys2/package.json')).toBe(true);
-	});
-});
+    const cwdHasPackageJson = fs.existsSync(path.join(process.cwd(), 'package.json'))
+    expect(cwdHasPackageJson).toBe(true)
+
+    const apiPackageJsonExists = fs.existsSync(
+      path.join(process.cwd(), 'src/apps/api/package.json')
+    )
+    expect(apiPackageJsonExists).toBe(true)
+  })
+})
