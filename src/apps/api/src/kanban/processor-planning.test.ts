@@ -7,9 +7,7 @@ const {
   mockGetBoardById,
   mockListBoards,
   mockParseProtocolFromString,
-  mockSession,
-  mockCreateAgentSession,
-  mockSessionManager,
+  mockComplete,
   mockGetModel,
 } = vi.hoisted(() => ({
   mockCreateCard: vi.fn(),
@@ -17,18 +15,7 @@ const {
   mockGetBoardById: vi.fn(),
   mockListBoards: vi.fn(),
   mockParseProtocolFromString: vi.fn(),
-  mockSession: {
-    prompt: vi.fn(),
-    subscribe: vi.fn(() => vi.fn()),
-    abort: vi.fn(),
-    dispose: vi.fn(),
-    isStreaming: false,
-    getLastAssistantText: vi.fn(),
-  },
-  mockCreateAgentSession: vi.fn(),
-  mockSessionManager: {
-    inMemory: vi.fn(() => ({})),
-  },
+  mockComplete: vi.fn(),
   mockGetModel: vi.fn(),
 }));
 
@@ -39,13 +26,13 @@ vi.mock('./repository.js', () => ({
   listBoards: (...args: unknown[]) => mockListBoards(...args),
 }));
 
-vi.mock('@mariozechner/pi-coding-agent', () => ({
-  createAgentSession: (...args: unknown[]) => mockCreateAgentSession(...args),
-  SessionManager: mockSessionManager,
+vi.mock('@mariozechner/pi-ai', () => ({
+  complete: (...args: unknown[]) => mockComplete(...args),
+  getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: args[0], modelId: args[1] },
 }));
 
-vi.mock('@mariozechner/pi-ai', () => ({
-  getModel: (...args: unknown[]) => mockGetModel(...args),
+vi.mock('../lib/ai-auth.js', () => ({
+  getApiKey: vi.fn().mockResolvedValue('fake-api-key'),
 }));
 
 vi.mock('@repo/shared', async (importOriginal) => {
@@ -131,14 +118,8 @@ describe('planning processor routes', () => {
     mockGetBoardById.mockReset();
     mockListBoards.mockReset();
     mockParseProtocolFromString.mockReset();
-    mockCreateAgentSession.mockReset();
+    mockComplete.mockReset();
     mockGetModel.mockReset();
-    Object.values(mockSession).forEach((fn) => {
-      if (typeof fn === 'function' && 'mockReset' in fn) {
-        (fn as ReturnType<typeof vi.fn>).mockReset();
-      }
-    });
-    mockSession.subscribe.mockImplementation(() => vi.fn());
   });
 
   afterEach(async () => {
@@ -207,21 +188,15 @@ describe('planning processor routes', () => {
         instructions: { dev: 'Build login', tester: 'Write tests' },
       });
       mockGetModel.mockReturnValue(undefined);
-      mockCreateAgentSession.mockResolvedValue({ session: mockSession });
-      mockSession.isStreaming = true;
-      mockSession.getLastAssistantText.mockReturnValue(
-        '<<<PRE_FLIGHT>>>\nComplexity: Standard (2 subtasks). Building login and signup endpoints is a well-defined scope.\nPrimary Type: implementation\nAmbiguity Check: None. The task body is sufficiently detailed.\nDraft Plan & Validation:\n- [x] 100% coverage of the parent Task Body scope.\n- [x] No subtask exceeds one day of work.\n- [x] Every subtask is independently testable.\n- [x] Dependencies flow forward only.\n<<<TASK>>>\n<<<TITLE>>>\nImplement login endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /login endpoint with email/password validation and JWT generation.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- POST /login returns 200 with valid JWT for correct credentials.\n- POST /login returns 401 for incorrect credentials.\n<<<INSTRUCTIONS>>>\ndev: Implement the login endpoint\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<TASK>>>\n<<<TITLE>>>\nImplement signup endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /signup endpoint with password hashing and user creation.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- POST /signup creates a new user and returns 201.\n- Password is hashed before storage.\n<<<INSTRUCTIONS>>>\ndev: Implement the signup endpoint\ntester: Write signup tests\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<END>>>',
-      );
-
-      let streaming = true;
-      const interval = setInterval(() => {
-        streaming = false;
-        mockSession.isStreaming = false;
-        clearInterval(interval);
-      }, 50);
-      mockSession.prompt.mockImplementation(async () => {
-        mockSession.isStreaming = streaming;
-      });
+      mockComplete.mockResolvedValue({
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: '<<<PRE_FLIGHT>>>\nComplexity: Standard (2 subtasks). Building login and signup endpoints is a well-defined scope.\nPrimary Type: implementation\nAmbiguity Check: None. The task body is sufficiently detailed.\nDraft Plan & Validation:\n- [x] 100% coverage of the parent Task Body scope.\n- [x] No subtask exceeds one day of work.\n- [x] Every subtask is independently testable.\n- [x] Dependencies flow forward only.\n<<<TASK>>>\n<<<TITLE>>>\nImplement login endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /login endpoint with email/password validation and JWT generation.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- POST /login returns 200 with valid JWT for correct credentials.\n- POST /login returns 401 for incorrect credentials.\n<<<INSTRUCTIONS>>>\ndev: Implement the login endpoint\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<TASK>>>\n<<<TITLE>>>\nImplement signup endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /signup endpoint with password hashing and user creation.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- POST /signup creates a new user and returns 201.\n- Password is hashed before storage.\n<<<INSTRUCTIONS>>>\ndev: Implement the signup endpoint\ntester: Write signup tests\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<END>>>',
+          },
+        ],
+      } as unknown as Awaited<ReturnType<typeof mockComplete>>);
 
       mockCreateCard.mockReturnValue({
         uid: '550e8400-e29b-41d4-a716-446655440010',
@@ -272,6 +247,60 @@ describe('planning processor routes', () => {
       expect(payload.payload_updates.payload.planned_tasks).toHaveLength(2);
       expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
       expect(payload.payload_updates.payload.planned_tasks[1].title).toBe('Implement signup endpoint');
+      expect(mockComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it('parses multi-line instructions from LLM output', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue({
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: '<<<PRE_FLIGHT>>>\nComplexity: Standard (1 subtask).\nPrimary Type: implementation\n<<<TASK>>>\n<<<TITLE>>>\nImplement login endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /login endpoint.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- POST /login returns 200.\n<<<INSTRUCTIONS>>>\ndev: |\n  Implement the login endpoint\n  Add validation middleware\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<END>>>',
+          },
+        ],
+      } as unknown as Awaited<ReturnType<typeof mockComplete>>);
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement auth system',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440020';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440010',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(1);
+      expect(payload.payload_updates.payload.planned_tasks[0].instructions).toEqual({
+        dev: 'Implement the login endpoint\nAdd validation middleware',
+      });
     });
 
     it('falls back to single card when LLM fails', async () => {
@@ -282,7 +311,7 @@ describe('planning processor routes', () => {
         instructions: { dev: 'Build login' },
       });
       mockGetModel.mockReturnValue(undefined);
-      mockCreateAgentSession.mockRejectedValue(new Error('LLM unavailable'));
+      mockComplete.mockRejectedValue(new Error('LLM unavailable'));
 
       mockCreateCard.mockReturnValue({
         uid: '550e8400-e29b-41d4-a716-446655440020',

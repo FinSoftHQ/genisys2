@@ -46,13 +46,13 @@ function getRoomClosedCallbackUrl(): string {
 // In-memory registry: roomId -> { cardUid, boardUid }
 const agenticTeamRoomRegistry = new Map<string, { cardUid: string; boardUid: string }>();
 
-function serializeYamlValue(value: unknown, indent = ''): string {
+export function serializeYamlValue(value: unknown, indent = ''): string {
   if (value === null || value === undefined) {
     return '';
   }
   if (typeof value === 'string') {
     // Use quoted string if it contains special YAML characters
-    if (value.includes('\n') || value.includes(':') || value.startsWith(' ') || value.startsWith('-') || value.startsWith('[') || value.startsWith('{') || value === '' || value === 'true' || value === 'false' || value === 'null' || /^\d+$/.test(value)) {
+    if (value.includes('\n') || value.includes(':') || value.startsWith(' ') || value.startsWith('-') || value.startsWith('[') || value.startsWith('{') || value === '' || value === 'true' || value === 'false' || value === 'null' || /^\d+$/.test(value) || value === '|' || value.startsWith('| ') || value.startsWith('>') || value.startsWith('> ')) {
       const lines = value.split('\n');
       if (lines.length === 1) {
         return `"${value.replace(/"/g, '\\"')}"`;

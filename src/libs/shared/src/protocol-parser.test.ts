@@ -200,6 +200,16 @@ describe('parseProtocol', () => {
 			},
 		);
 	});
+
+	it('parses instructions with bare | as empty string', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\ninstructions:\n  alice: |\n---\n\nBody content.`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.instructions).toEqual({ alice: '' });
+			},
+		);
+	});
 });
 
 describe('parseProtocolFromString', () => {

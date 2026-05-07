@@ -28,7 +28,7 @@ import {
   ApiErrorSchema,
 } from '@repo/shared';
 
-import { agenticTeamProcessorRoutes } from './processor-agentic-team.js';
+import { agenticTeamProcessorRoutes, serializeYamlValue } from './processor-agentic-team.js';
 
 const mockBoard = {
   uid: '550e8400-e29b-41d4-a716-446655440000',
@@ -162,6 +162,25 @@ describe('agentic-team processor routes', () => {
     });
   });
 
+  describe('serializeYamlValue', () => {
+    it('quotes literal | to avoid YAML block-scalar misinterpretation', () => {
+      expect(serializeYamlValue('|')).toBe('"|"');
+    });
+
+    it('quotes literal > to avoid YAML block-scalar misinterpretation', () => {
+      expect(serializeYamlValue('>')).toBe('">"');
+    });
+
+    it('does not quote normal strings', () => {
+      expect(serializeYamlValue('hello')).toBe('hello');
+    });
+
+    it('serializes multi-line strings with | block scalar', () => {
+      const result = serializeYamlValue('line one\nline two');
+      expect(result).toBe('|\n  line one\n  line two');
+    });
+  });
+
   describe('POST /api/kanban-processor/agentic-team/on-enter', () => {
     it('returns 202 accepted, logs payload, and creates agent room', async () => {
       fetchSpy.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
@@ -286,6 +305,54 @@ describe('agentic-team processor routes', () => {
         }),
         'system:agentic-team',
       );
+    });
+
+    it('quotes literal | in instructions during markdown composition', async () => {
+      const roomId = 'rm_abc123';
+      fetchSpy.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+        if (typeof url === 'string' && url.includes('/api/v1/agent-rooms')) {
+          return new Response(JSON.stringify({ roomId, status: 'initialized' }), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 200 });
+      });
+
+      const cardWithPipeInstruction = {
+        ...mockCard,
+        payload: {
+          repository_url: 'https://github.com/test-org/test-repo.git',
+          tailor_shop: '/workspace/teams/dev',
+          working_dir: '/workspace/TST-1',
+          instructions: { alice: '|' },
+          body: 'Build the new feature.',
+        },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/agentic-team/on-enter',
+        payload: {
+          card: cardWithPipeInstruction,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440002',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const agentRoomsCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/v1/agent-rooms');
+      });
+      expect(agentRoomsCall).toBeDefined();
+      const [, agentRoomsInit] = agentRoomsCall!;
+      const markdownBody = agentRoomsInit?.body as string;
+      expect(markdownBody).toContain('alice: "|"');
     });
 
     it('callbacks with error when agent-rooms returns non-2xx', async () => {

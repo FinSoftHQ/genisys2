@@ -11,12 +11,10 @@ import {
   HealthCheckResponseSchema,
   parseProtocolFromString,
 } from '@repo/shared';
-import { createAgentSession, SessionManager } from '@mariozechner/pi-coding-agent';
+import { complete } from '@mariozechner/pi-ai';
 import { getModel } from '@mariozechner/pi-ai';
-import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import { getApiKey } from '../lib/ai-auth.js';
 import { createCard, createCardRelationship, getBoardById, listBoards } from './repository.js';
-
-const PLANNING_TIMEOUT_MS = 120_000;
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
@@ -80,6 +78,14 @@ function extractCardContext(card: {
 /*  Prompt builder                                                     */
 /* ------------------------------------------------------------------ */
 
+function formatInstructionsEntry(name: string, value: string): string {
+  if (value.includes('\n')) {
+    const lines = value.split('\n');
+    return `  ${name}: |\n${lines.map((l) => `    ${l}`).join('\n')}`;
+  }
+  return `  ${name}: ${value}`;
+}
+
 function buildPlanningPrompt(context: {
   title: string;
   body: string;
@@ -89,7 +95,7 @@ function buildPlanningPrompt(context: {
   const instructionsBlock =
     instructionsEntries.length > 0
       ? 'Global Instructions:\n' +
-        instructionsEntries.map(([name, value]) => `  ${name}: ${value}`).join('\n') +
+        instructionsEntries.map(([name, value]) => formatInstructionsEntry(name, value)).join('\n') +
         '\n\n'
       : '';
 
@@ -247,20 +253,54 @@ function parsePlannedTasks(text: string): PlanningResult {
     const instructionsText = extractMarker(block, '<<<INSTRUCTIONS>>>', ['<<<RISK>>>', '<<<END_TASK>>>']);
     const risk = extractMarker(block, '<<<RISK>>>', ['<<<END_TASK>>>']);
 
-    const instructions: Record<string, string> = {};
-    if (instructionsText) {
-      for (const line of instructionsText.split('\n')) {
+    function parseInstructionsBlock(text: string): Record<string, string> {
+      const instructions: Record<string, string> = {};
+      const lines = text.split('\n');
+      let multiLineKey: string | null = null;
+      let multiLineLines: string[] = [];
+
+      for (const rawLine of lines) {
+        const line = rawLine.replace(/\r$/, '');
+
+        if (multiLineKey !== null) {
+          if (line.startsWith('  ') || line.startsWith('\t')) {
+            const content = line.replace(/^[ \t]{2}/, '');
+            multiLineLines.push(content);
+            continue;
+          }
+          if (line.trim() === '') {
+            multiLineLines.push('');
+            continue;
+          }
+          instructions[multiLineKey] = multiLineLines.join('\n');
+          multiLineKey = null;
+          multiLineLines = [];
+        }
+
         const trimmed = line.trim();
         const colonIdx = trimmed.indexOf(':');
         if (colonIdx !== -1) {
           const name = trimmed.slice(0, colonIdx).trim();
           const value = trimmed.slice(colonIdx + 1).trim();
           if (name && value) {
-            instructions[name] = value;
+            if (value === '|' || value.startsWith('| ')) {
+              multiLineKey = name;
+              multiLineLines = [];
+            } else {
+              instructions[name] = value;
+            }
           }
         }
       }
+
+      if (multiLineKey !== null) {
+        instructions[multiLineKey] = multiLineLines.join('\n');
+      }
+
+      return instructions;
     }
+
+    const instructions = parseInstructionsBlock(instructionsText);
 
     if (title && body) {
       tasks.push({
@@ -288,58 +328,43 @@ function parsePlannedTasks(text: string): PlanningResult {
 /*  LLM session                                                        */
 /* ------------------------------------------------------------------ */
 
-async function runPlanningSession(
-  prompt: string,
-  cwd?: string,
-): Promise<PlanningResult> {
-  const preferredModel = getModel('github-copilot', 'gpt-5-mini');
+async function runPlanningSession(prompt: string): Promise<PlanningResult> {
+  const preferredModel = getModel('opencode-go', 'kimi-k2.5');
 
-  console.log('[planning] Starting AI planning session');
+  console.log('[planning] Starting AI planning completion');
 
-  const { session } = await createAgentSession({
-    cwd: cwd || process.cwd(),
-    sessionManager: SessionManager.inMemory(cwd || process.cwd()),
-    ...(preferredModel ? { model: preferredModel } : {}),
-  });
+  const apiKey = await getApiKey(preferredModel.provider);
 
-  let agentError: Error | undefined;
+  const response = await complete(
+    preferredModel,
+    {
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    { apiKey }
+  );
 
-  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-    if (event.type === 'auto_retry_end' && !event.success) {
-      agentError = new Error(`Agent retry failed: ${event.finalError ?? 'unknown error'}`);
-    }
-  });
-
-  try {
-    await session.prompt(prompt);
-
-    const start = Date.now();
-    const maxWait = PLANNING_TIMEOUT_MS;
-
-    while (session.isStreaming && !agentError) {
-      if (Date.now() - start > maxWait) {
-        await session.abort();
-        throw new Error('LLM planning timed out');
-      }
-      await new Promise((r) => setTimeout(r, 200));
-    }
-
-    if (agentError) {
-      throw agentError;
-    }
-
-    const lastText = session.getLastAssistantText();
-    if (!lastText) {
-      throw new Error('Agent produced no assistant text');
-    }
-
-    console.log('[planning] Raw LLM output:\n', lastText);
-
-    return parsePlannedTasks(lastText);
-  } finally {
-    unsubscribe();
-    session.dispose();
+  if (response.stopReason === 'error') {
+    throw new Error(response.errorMessage || 'LLM provider error');
   }
+
+  const textContent = response.content
+    .filter((c) => c.type === 'text')
+    .map((c) => (c as { text: string }).text)
+    .join('');
+
+  if (!textContent.trim()) {
+    throw new Error('LLM returned empty text');
+  }
+
+  console.log('[planning] Raw LLM output:\n', textContent);
+
+  return parsePlannedTasks(textContent);
 }
 
 /* ------------------------------------------------------------------ */
@@ -379,9 +404,7 @@ async function delegatePlanning(
     let result: PlanningResult = { tasks: [] };
     try {
       const context = extractCardContext(card);
-      const workingDir =
-        typeof card.payload.working_dir === 'string' ? card.payload.working_dir : undefined;
-      result = await runPlanningSession(buildPlanningPrompt(context), workingDir);
+      result = await runPlanningSession(buildPlanningPrompt(context));
       console.log(`[planning] LLM planned ${result.tasks.length} subtasks for card ${card.uid}`);
     } catch (llmErr) {
       const message = llmErr instanceof Error ? llmErr.message : String(llmErr);
