@@ -60,6 +60,10 @@ context-extractor -i targets.jsonl -o result.md
 
 # Use custom working directory for resolving relative paths
 context-extractor --input targets.jsonl --cwd ./project
+
+# Use a custom context file (defaults to llm_context.md beside output)
+context-extractor --input targets.jsonl --context ./docs/context.md
+context-extractor -i targets.jsonl -c ./docs/context.md
 ```
 
 ### CLI Options
@@ -68,6 +72,7 @@ context-extractor --input targets.jsonl --cwd ./project
 |--------|-------|-------------|---------|
 | `--input <path>` | `-i` | **Required.** Path to input JSONL file | — |
 | `--output <path>` | `-o` | Path to output markdown file | `llm_target.md` |
+| `--context <path>` | `-c` | Path to context markdown file (prepended before extracted blocks) | `llm_context.md` in output directory |
 | `--cwd <path>` | — | Working directory for resolving relative file paths | `process.cwd()` |
 | `--help` | `-h` | Display help information | — |
 | `--version` | `-V` | Display version number | — |

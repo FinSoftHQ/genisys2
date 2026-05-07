@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getFileExtension, getLanguageForExtension, isValidExtractionTarget } from '../../src/utils.js';
+import { getFileExtension, getLanguageForExtension, isValidExtractionTarget, buildContextPrefix } from '../../src/utils.js';
 
 describe('getFileExtension', () => {
   it('extracts extension without dot for regular files', () => {
@@ -101,6 +101,38 @@ describe('getLanguageForExtension', () => {
 
   it('returns "text" for empty extension', () => {
     expect(getLanguageForExtension('')).toBe('text');
+  });
+});
+
+describe('buildContextPrefix', () => {
+  it('returns content up to and including ## File Contents heading', () => {
+    const content = '# Project Context\n\n## Project Tree\n\n```\nsrc/\n```\n\n## File Contents\n\n<file path="a.ts">\n```ts\nconst a = 1;\n```\n</file>';
+    const result = buildContextPrefix(content);
+    expect(result).toBe('# Project Context\n\n## Project Tree\n\n```\nsrc/\n```\n\n## File Contents');
+  });
+
+  it('appends ## File Contents when heading is missing', () => {
+    const content = '# Project Context\n\n## Project Tree\n\n```\nsrc/\n```\n';
+    const result = buildContextPrefix(content);
+    expect(result).toBe('# Project Context\n\n## Project Tree\n\n```\nsrc/\n```\n\n## File Contents');
+  });
+
+  it('handles content with no trailing newline when heading is missing', () => {
+    const content = '# Project Context';
+    const result = buildContextPrefix(content);
+    expect(result).toBe('# Project Context\n\n## File Contents');
+  });
+
+  it('handles heading at the very beginning', () => {
+    const content = '## File Contents\n\n<file path="a.ts">';
+    const result = buildContextPrefix(content);
+    expect(result).toBe('## File Contents');
+  });
+
+  it('handles heading with surrounding whitespace', () => {
+    const content = '# Context\n  ## File Contents  \n<file path="a.ts">';
+    const result = buildContextPrefix(content);
+    expect(result).toBe('# Context\n  ## File Contents  ');
   });
 });
 
