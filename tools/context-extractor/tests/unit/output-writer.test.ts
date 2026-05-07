@@ -27,6 +27,68 @@ describe('writeOutput', () => {
     };
   }
 
+  describe('context prefix', () => {
+    it('prepends context prefix before blocks', () => {
+      const outputPath = join(tempDir, 'output.md');
+      const block = createBlock({ target: { file: 'src/App.vue' }, extension: 'vue' });
+
+      writeOutput(outputPath, [block], { totalEntries: 1, blocksWritten: 1, warnings: 0 }, '# Context\n\n## File Contents');
+
+      const content = readFileSync(outputPath, 'utf-8');
+      expect(content.startsWith('# Context\n\n## File Contents\n\n<file path="src/App.vue">')).toBe(true);
+    });
+
+    it('adds blank line between prefix and first block', () => {
+      const outputPath = join(tempDir, 'output.md');
+      const block = createBlock();
+
+      writeOutput(outputPath, [block], { totalEntries: 1, blocksWritten: 1, warnings: 0 }, '## File Contents');
+
+      const content = readFileSync(outputPath, 'utf-8');
+      const lines = content.split('\n');
+      const headingIdx = lines.findIndex((l) => l === '## File Contents');
+      const fileIdx = lines.findIndex((l) => l.startsWith('<file'));
+      expect(headingIdx).toBeGreaterThan(-1);
+      expect(fileIdx).toBeGreaterThan(-1);
+      expect(lines[headingIdx + 1]).toBe('');
+      expect(lines[headingIdx + 2]).toBe('<file path="test.ts">');
+    });
+
+    it('ignores empty prefix', () => {
+      const outputPath = join(tempDir, 'output.md');
+      const block = createBlock();
+
+      writeOutput(outputPath, [block], { totalEntries: 1, blocksWritten: 1, warnings: 0 }, '');
+
+      const content = readFileSync(outputPath, 'utf-8');
+      expect(content).toBe('<file path="test.ts">\n```ts\nconst x = 1;\n```\n</file>\n');
+    });
+
+    it('handles prefix with trailing whitespace', () => {
+      const outputPath = join(tempDir, 'output.md');
+      const block = createBlock();
+
+      writeOutput(outputPath, [block], { totalEntries: 1, blocksWritten: 1, warnings: 0 }, '## File Contents\n\n\n');
+
+      const content = readFileSync(outputPath, 'utf-8');
+      expect(content.startsWith('## File Contents\n\n<file path="test.ts">')).toBe(true);
+    });
+
+    it('handles multiple blocks with prefix', () => {
+      const outputPath = join(tempDir, 'output.md');
+      const blocks = [
+        createBlock({ target: { file: 'file1.ts' }, content: 'content1' }),
+        createBlock({ target: { file: 'file2.ts' }, content: 'content2' }),
+      ];
+
+      writeOutput(outputPath, blocks, { totalEntries: 2, blocksWritten: 2, warnings: 0 }, '# Context');
+
+      const content = readFileSync(outputPath, 'utf-8');
+      expect(content).toContain('# Context\n\n<file path="file1.ts">');
+      expect(content).toContain('</file>\n\n<file path="file2.ts">');
+    });
+  });
+
   describe('XML tag generation for full-file extraction', () => {
     it('generates opening tag without line numbers for full-file', () => {
       const outputPath = join(tempDir, 'output.md');

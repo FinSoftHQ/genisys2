@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync } from 'fs';
 import { parseArgs } from './cli.js';
 import { parseJsonlFile } from './jsonl-parser.js';
 import { extractFromFile } from './file-extractor.js';
 import { writeOutput } from './output-writer.js';
+import { buildContextPrefix } from './utils.js';
 import type { ExtractedBlock, ProcessingStats, Warning } from './types.js';
 
 
@@ -41,16 +43,23 @@ async function main(): Promise<void> {
       }
     }
 
-    // Step 3: Write output
+    // Step 3: Build context prefix if context file exists
+    let contextPrefix: string | undefined;
+    if (existsSync(options.context)) {
+      const contextContent = readFileSync(options.context, 'utf-8');
+      contextPrefix = buildContextPrefix(contextContent);
+    }
+
+    // Step 4: Write output
     const stats: ProcessingStats = {
       totalEntries: targets.length,
       blocksWritten: blocks.length,
       warnings: warnings.length,
     };
 
-    writeOutput(options.output, blocks, stats);
+    writeOutput(options.output, blocks, stats, contextPrefix);
 
-    // Step 4: Print summary
+    // Step 5: Print summary
     console.log(
       `Done. ${String(blocks.length)} blocks written to ${options.output}. ${String(warnings.length)} warnings.`
     );

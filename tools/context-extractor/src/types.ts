@@ -6,6 +6,8 @@ export interface CLIOptions {
   input: string;
   /** Path to output markdown file */
   output: string;
+  /** Path to context markdown file (llm_context.md) */
+  context: string;
   /** Working directory for resolving relative paths */
   cwd: string;
 }

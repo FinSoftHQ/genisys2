@@ -1708,7 +1708,11 @@ export function writeOutput(
   lines.push('');
 
   // File Contents
+  lines.push('------');
+  lines.push('');
   lines.push('## File Contents');
+  lines.push('');
+  lines.push('> **Note:** The files below are excerpted, not reproduced in full. For most modules, only exported symbols and type signatures are shown; function bodies, internal helpers, and detailed implementations are truncated. Do not infer implementation details, schema fields, or side effects from the signatures shown here—refer to the full files when reasoning about behavior.');
   lines.push('');
 
   for (const parsed of parsedFiles) {

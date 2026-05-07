@@ -221,7 +221,11 @@ src/
 └── types.ts
 ```
 
+------
+
 ## File Contents
+
+> **Note:** The files below are excerpted, not reproduced in full. For most modules, only exported symbols and type signatures are shown; function bodies, internal helpers, and detailed implementations are truncated. Do not infer implementation details, schema fields, or side effects from the signatures shown here—refer to the full files when reasoning about behavior.
 
 ### src/types.ts
 

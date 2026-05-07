@@ -60,6 +60,22 @@ export function getLanguageForExtension(ext: string): string {
 }
 
 /**
+ * Build a context prefix from llm_context.md content.
+ * Returns everything up to and including the `## File Contents` heading.
+ * If the heading is not found, returns the whole content with the heading appended.
+ */
+export function buildContextPrefix(contextContent: string): string {
+  const lines = contextContent.split('\n');
+  const headingIndex = lines.findIndex((line) => line.trim() === '## File Contents');
+
+  if (headingIndex !== -1) {
+    return lines.slice(0, headingIndex + 1).join('\n');
+  }
+
+  return contextContent.trimEnd() + '\n\n## File Contents';
+}
+
+/**
  * Validate if an object conforms to ExtractionTarget shape
  * Extra keys are allowed and ignored
  */

@@ -359,3 +359,27 @@ export function bootstrapCommitProcessor(instance: DbInstance): void {
     updated_at: now,
   }).run();
 }
+
+export function bootstrapExploreProcessor(instance: DbInstance): void {
+  const { db } = instance;
+  const existing = db.select().from(processorRegistry).where(eq(processorRegistry.processor_id, 'explore')).get();
+  if (existing) return;
+
+  const now = new Date().toISOString();
+  db.insert(processorRegistry).values({
+    processor_id: 'explore',
+    name: 'Explore Processor',
+    base_url: `${API_BASE_URL}/api/kanban-processor/explore`,
+    health_endpoint: '/health',
+    hooks: ['on-enter', 'on-update', 'on-action', 'can-exit', 'on-exit'],
+    sla_seconds: 300,
+    max_sla_seconds: 86400,
+    auth_type: 'none',
+    auth_config: null,
+    hmac_secret: 'dev-secret',
+    status: 'healthy',
+    last_health_check: now,
+    created_at: now,
+    updated_at: now,
+  }).run();
+}

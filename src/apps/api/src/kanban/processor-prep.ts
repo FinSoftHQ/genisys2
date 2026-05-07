@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { resolve } from 'node:path';
+import { access, constants, readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { execFilePromise } from './exec-helpers.js';
 import {
   OnEnterDispatchRequestSchema,
@@ -92,7 +93,80 @@ function getWorkspacePath(displayId: string): string {
   return resolve(root, displayId);
 }
 
+const JUSTFILE_CANDIDATES = ['justfile', 'Justfile', '.justfile', '.Justfile'];
+const LLM_CONTEXT_PATH = 'llm_context.md';
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function justfileHasRecipe(contents: string, recipeName: string): boolean {
+  const escaped = escapeRegExp(recipeName);
+  const recipeDefinition = new RegExp(`^@?${escaped}(?=$|\\s|:)(?!\\s*:=).*:(?![=])`, 'm');
+  return recipeDefinition.test(contents);
+}
+
+async function findJustfileWithRecipe(workspacePath: string, recipeName: string): Promise<string | undefined> {
+  for (const candidate of JUSTFILE_CANDIDATES) {
+    const candidatePath = join(workspacePath, candidate);
+    try {
+      await access(candidatePath);
+      const contents = await readFile(candidatePath, 'utf8');
+      if (justfileHasRecipe(contents, recipeName)) {
+        return candidatePath;
+      }
+    } catch (err) {
+      const code = typeof err === 'object' && err !== null && 'code' in err ? (err as { code?: string }).code : undefined;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw err;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function runJustRecipeIfAvailable(workspacePath: string, recipeName: string): Promise<boolean> {
+  const justfilePath = await findJustfileWithRecipe(workspacePath, recipeName);
+  if (!justfilePath) {
+    console.log(`[prep] No just ${recipeName} recipe found in ${workspacePath}; skipping`);
+    return false;
+  }
+
+  console.log(`[prep] Running just ${recipeName} in ${workspacePath}`);
+  await execFilePromise('just', ['--justfile', justfilePath, recipeName], { cwd: workspacePath, timeout: 600_000 });
+  return true;
+}
+
+async function resolveExecutablePath(binaryName: string): Promise<string> {
+  const candidates = [
+    resolve(process.cwd(), '.bin', binaryName),
+    resolve(process.cwd(), '../../..', '.bin', binaryName),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  throw new Error(`Executable not found or not executable: ${binaryName}`);
+}
+
+async function generateLlmContextForPrep(workspacePath: string, displayId: string): Promise<void> {
+  const contextGeneratorPath = await resolveExecutablePath('context-generator');
+  const outputPath = join(workspacePath, LLM_CONTEXT_PATH);
+
+  console.log(`[prep] Card ${displayId}: running context-generator for ${LLM_CONTEXT_PATH}`);
+  await execFilePromise(
+    contextGeneratorPath,
+    ['-e', '.agents', '-e', 'tools', '-r', workspacePath, '-o', outputPath],
+    { cwd: workspacePath, timeout: 60_000 },
+  );
+  console.log(`[prep] Card ${displayId}: generated ${LLM_CONTEXT_PATH}`);
+}
 
 async function runPrepWorkflow(
   card: { display_id: string; payload?: Record<string, unknown>; description?: string | null },
@@ -123,12 +197,20 @@ async function runPrepWorkflow(
     // 3. Create branch
     await execFilePromise('git', ['checkout', '-b', `surii/${card.display_id}`], { cwd: workspacePath });
 
-    // 4. Success callback
+    // 4. Run optional project preparation recipes from justfile, if present
+    await runJustRecipeIfAvailable(workspacePath, 'bootup');
+    await runJustRecipeIfAvailable(workspacePath, 'build-tools');
+
+    // 5. Generate llm_context.md as the last prep step
+    await generateLlmContextForPrep(workspacePath, card.display_id);
+
+    // 6. Success callback
     console.log(`[prep] Card ${card.display_id}: success, moving to planning`);
     const updatedPayload: Record<string, unknown> = {
       ...card.payload,
       working_dir: parsed.workingDir ?? workspacePath,
       repository_url: repositoryUrl,
+      llm_context_md: LLM_CONTEXT_PATH,
       ...(parsed.repo ? { repo: parsed.repo } : {}),
       ...(parsed.tailorShop ? { tailor_shop: parsed.tailorShop } : {}),
       ...(parsed.teamName ? { team_name: parsed.teamName } : {}),

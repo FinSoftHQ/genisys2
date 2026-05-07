@@ -54,14 +54,15 @@ const mockTaskBoard = {
   prefix: 'TSK',
   suite_uid: '550e8400-e29b-41d4-a716-446655440001',
   role: 'tasks',
-  schema: {
-    columns: [
-      { uid: 'todo', title: 'TODO', type: 'Normal' as const, processor_id: 'todo', exit_logic: { default: 'agentic-team' }, order: 0 },
-      { uid: 'agentic-team', title: 'AI Team', type: 'Processing' as const, processor_id: 'agentic-team', exit_logic: { default: 'commit' }, order: 1 },
-      { uid: 'commit', title: 'Commit', type: 'Processing' as const, processor_id: 'commit', exit_logic: { default: 'done' }, order: 2 },
-      { uid: 'done', title: 'Done', type: 'Processing' as const, processor_id: 'done', exit_logic: { default: 'done' }, order: 3 },
-    ],
-  },
+    schema: {
+      columns: [
+        { uid: 'todo', title: 'TODO', type: 'Normal' as const, processor_id: 'todo', exit_logic: { default: 'explore' }, order: 0 },
+        { uid: 'explore', title: 'Explore', type: 'Processing' as const, processor_id: 'explore', exit_logic: { default: 'agentic-team' }, order: 1 },
+        { uid: 'agentic-team', title: 'AI Team', type: 'Processing' as const, processor_id: 'agentic-team', exit_logic: { default: 'commit' }, order: 2 },
+        { uid: 'commit', title: 'Commit', type: 'Processing' as const, processor_id: 'commit', exit_logic: { default: 'done' }, order: 3 },
+        { uid: 'done', title: 'Done', type: 'Processing' as const, processor_id: 'done', exit_logic: { default: 'done' }, order: 4 },
+      ],
+    },
   permissions: { read: [] as string[], write: [] as string[] },
   created_at: '2026-04-26T08:30:00.000Z',
   updated_at: '2026-04-26T08:30:00.000Z',
@@ -175,11 +176,11 @@ describe('delegated processor routes', () => {
   });
 
   describe('POST /api/kanban-processor/delegated/on-enter', () => {
-    it('returns 202 accepted and moves the related todo card to agentic-team', async () => {
+    it('returns 202 accepted and moves the related todo card to explore', async () => {
       mockGetBoardById.mockReturnValue(mockDevBoard);
       mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
       mockGetCardById.mockReturnValue(mockTaskCard);
-      mockMoveCard.mockReturnValue({ ...mockTaskCard, current_status: 'agentic-team', version: 2 });
+      mockMoveCard.mockReturnValue({ ...mockTaskCard, current_status: 'explore', version: 2 });
 
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440020';
       const response = await app.inject({
@@ -208,14 +209,14 @@ describe('delegated processor routes', () => {
         {},
         mockTaskBoard.uid,
         mockTaskCard.uid,
-        'agentic-team',
+        'explore',
         'system:delegated',
       );
       expect(mockStartProcessing).toHaveBeenCalledWith(
         {},
         mockTaskBoard,
-        expect.objectContaining({ uid: mockTaskCard.uid, current_status: 'agentic-team' }),
-        expect.objectContaining({ uid: 'agentic-team', type: 'Processing' }),
+        expect.objectContaining({ uid: mockTaskCard.uid, current_status: 'explore' }),
+        expect.objectContaining({ uid: 'explore', type: 'Processing' }),
       );
       expect(mockMoveCardToNextColumn).not.toHaveBeenCalled();
 

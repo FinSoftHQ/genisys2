@@ -495,6 +495,99 @@ describe('context-extractor CLI integration', () => {
     });
   });
 
+  describe('--context flag', () => {
+    it('prepends context content up to ## File Contents heading', () => {
+      writeFileSync(join(tempDir, 'sample.ts'), 'const x = 1;\n');
+      writeFileSync(join(tempDir, 'targets.jsonl'), '{"file": "sample.ts"}\n');
+      writeFileSync(
+        join(tempDir, 'llm_context.md'),
+        '# Project Context\n\n## Project Tree\n\n```\nsrc/\n```\n\n## File Contents\n\n<file path="old.ts">\n```ts\nold\n```\n</file>\n'
+      );
+
+      const result = runCLI('--input targets.jsonl');
+
+      expect(result.exitCode).toBe(0);
+      const outputContent = readFileSync(join(tempDir, 'llm_target.md'), 'utf-8');
+      expect(outputContent).toContain('# Project Context');
+      expect(outputContent).toContain('## Project Tree');
+      expect(outputContent).toContain('## File Contents');
+      expect(outputContent).not.toContain('old.ts');
+      expect(outputContent).not.toContain('old');
+      expect(outputContent).toContain('<file path="sample.ts">');
+    });
+
+    it('appends ## File Contents when heading is missing in context file', () => {
+      writeFileSync(join(tempDir, 'sample.ts'), 'const x = 1;\n');
+      writeFileSync(join(tempDir, 'targets.jsonl'), '{"file": "sample.ts"}\n');
+      writeFileSync(
+        join(tempDir, 'llm_context.md'),
+        '# Project Context\n\n## Project Tree\n\n```\nsrc/\n```\n'
+      );
+
+      const result = runCLI('--input targets.jsonl');
+
+      expect(result.exitCode).toBe(0);
+      const outputContent = readFileSync(join(tempDir, 'llm_target.md'), 'utf-8');
+      expect(outputContent).toContain('# Project Context');
+      expect(outputContent).toContain('## Project Tree');
+      expect(outputContent).toContain('## File Contents');
+      expect(outputContent).toContain('<file path="sample.ts">');
+      // Ensure heading appears exactly once in the prefix area
+      const fileContentsMatches = outputContent.match(/## File Contents/g);
+      expect(fileContentsMatches?.length).toBe(1);
+    });
+
+    it('uses custom context path with -c flag', () => {
+      writeFileSync(join(tempDir, 'sample.ts'), 'const x = 1;\n');
+      writeFileSync(join(tempDir, 'targets.jsonl'), '{"file": "sample.ts"}\n');
+      writeFileSync(
+        join(tempDir, 'custom-context.md'),
+        '# Custom Context\n\n## File Contents\n'
+      );
+
+      const result = runCLI('--input targets.jsonl -c custom-context.md');
+
+      expect(result.exitCode).toBe(0);
+      const outputContent = readFileSync(join(tempDir, 'llm_target.md'), 'utf-8');
+      expect(outputContent).toContain('# Custom Context');
+      expect(outputContent).toContain('<file path="sample.ts">');
+    });
+
+    it('resolves default context relative to output directory', () => {
+      mkdirSync(join(tempDir, 'output'), { recursive: true });
+      writeFileSync(join(tempDir, 'sample.ts'), 'const x = 1;\n');
+      writeFileSync(join(tempDir, 'targets.jsonl'), '{"file": "sample.ts"}\n');
+      writeFileSync(
+        join(tempDir, 'output', 'llm_context.md'),
+        '# Output Context\n\n## File Contents\n'
+      );
+
+      const result = runCLI('--input targets.jsonl --output output/llm_target.md');
+
+      expect(result.exitCode).toBe(0);
+      const outputContent = readFileSync(join(tempDir, 'output', 'llm_target.md'), 'utf-8');
+      expect(outputContent).toContain('# Output Context');
+      expect(outputContent).toContain('<file path="sample.ts">');
+    });
+
+    it('skips context silently when file does not exist', () => {
+      writeFileSync(join(tempDir, 'sample.ts'), 'const x = 1;\n');
+      writeFileSync(join(tempDir, 'targets.jsonl'), '{"file": "sample.ts"}\n');
+      // No llm_context.md created
+
+      const result = runCLI('--input targets.jsonl');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('1 blocks written');
+      const outputContent = readFileSync(join(tempDir, 'llm_target.md'), 'utf-8');
+      expect(outputContent).toContain('<file path="sample.ts">');
+      expect(outputContent).toContain('```ts');
+      expect(outputContent).toContain('const x = 1;');
+      expect(outputContent).toContain('</file>');
+      expect(outputContent).not.toContain('# Project Context');
+    });
+  });
+
   describe('CLI error handling', () => {
     it('exits non-zero when --input is missing', () => {
       const result = runCLI('');

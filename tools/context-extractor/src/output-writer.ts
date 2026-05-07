@@ -72,9 +72,18 @@ function generateBlockMarkdown(block: ExtractedBlock): string {
 export function writeOutput(
   outputPath: string,
   blocks: ExtractedBlock[],
-  _stats: ProcessingStats
+  _stats: ProcessingStats,
+  contextPrefix?: string
 ): void {
   const lines: string[] = [];
+
+  if (contextPrefix) {
+    const normalized = contextPrefix.trimEnd();
+    if (normalized) {
+      lines.push(normalized);
+      lines.push('');
+    }
+  }
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
