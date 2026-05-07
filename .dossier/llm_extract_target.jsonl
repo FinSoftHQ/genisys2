@@ -1,0 +1,7 @@
+{"file":".dossier/sow.md","reasoning":"Mission statement; include first so downstream readers understand the requested work."}
+{"file":"src/apps/api/src/agent-rooms/diagnostics.cwd.test.ts","reasoning":"Test file to be created/modified based on the SOW mission."}
+{"file":"src/apps/api/vitest.config.ts","reasoning":"Vitest configuration for the API app, needed to understand test setup and run command."}
+{"file":"vitest.workspace.ts","reasoning":"Workspace configuration defining which vitest configs are active, relevant for running tests."}
+{"file":"vitest.config.ts","reasoning":"Root vitest configuration, relevant for understanding global test settings."}
+{"file":"package.json","reasoning":"Root package.json with pnpm scripts and workspace configuration needed to run tests."}
+{"file":"src/apps/api/package.json","reasoning":"API app package.json with vitest dependency and scripts; path is validated by the diagnostic test."}
