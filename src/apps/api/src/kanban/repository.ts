@@ -1,10 +1,10 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { BoardEntitySchema, BoardSuiteEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema, CallbackTokenEntitySchema, ProcessingStateTransitionSchema, BoardStreamSseEventSchema } from '@repo/shared';
+import { BoardEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema, CallbackTokenEntitySchema, ProcessingStateTransitionSchema, BoardStreamSseEventSchema } from '@repo/shared';
 import { boards, boardSuites, boardSequences, cards, processorRegistry, callbackTokens } from '../db/schema.js';
 import type { ProcessorRegistryEntity } from '@repo/shared';
 import '../db/seed.js';
-import type { BoardEntity, BoardSuiteEntity, CardEntity } from '@repo/shared';
+import type { BoardEntity, CardEntity } from '@repo/shared';
 import { DEFAULT_PROCESSOR_BASE_URL } from './config.js';
 import { resolveDb, openDb, closeDb } from './db-context.js';
 import { appendEventLog } from './event-log.js';
@@ -539,7 +539,7 @@ export function updateCard(
       lifecycle_event: null,
       from_column: null,
       to_column: null,
-      payload_delta: Object.keys(payloadDelta).length > 0 ? (payloadDelta as any) : null,
+      payload_delta: Object.keys(payloadDelta).length > 0 ? payloadDelta : null,
     } as Parameters<typeof appendEventLog>[1]);
 
     const parsed = CardEntitySchema.safeParse(result);

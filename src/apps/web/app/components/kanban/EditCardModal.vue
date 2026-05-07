@@ -101,7 +101,7 @@ function onClose() {
   isOpen.value = false;
 }
 
-function statusColor(status: string): string {
+function statusColor(status: string): 'success' | 'error' | 'info' | 'neutral' {
   if (status === 'done') return 'success';
   if (status === 'error') return 'error';
   if (status === 'processing' || status === 'agentic-team') return 'info';

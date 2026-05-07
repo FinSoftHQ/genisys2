@@ -1,6 +1,6 @@
 import process from "process";
 
-export class SquadLogger {
+export class RoomLogger {
 	private isTTY = process.stdout.isTTY;
 	private textBuffer = "";
 	private thinkingBuffer = "";

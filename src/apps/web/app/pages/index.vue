@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { definePageMeta, useToast } from '#imports';
 import type {
   BoardEntity,
   BoardSuiteResponse,

@@ -36,7 +36,7 @@ function parseSseMessages(chunk: string): { messages: SseMessage[]; leftover: st
   }
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i] ?? '';
     if (line === '' && i < lines.length - 1) {
       flushMessage();
       continue;

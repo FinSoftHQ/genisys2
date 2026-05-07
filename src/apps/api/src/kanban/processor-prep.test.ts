@@ -204,12 +204,12 @@ describe('prep processor routes', () => {
       );
     });
 
-    it('parses markdown description with repo and team_name and stores parsed fields in payload', async () => {
+    it('parses markdown description with repo/team_name/branch and stores parsed fields in payload', async () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440005';
       const originalCwd = process.cwd();
       const cardWithFrontMatter = {
         ...mockCard,
-        description: `---\nteam:\n  alice: Developer\nrepo: https://github.com/org/repo.git\nteam_name: dev\nfacilitator: alice\n---\n\nDo the work.`,
+        description: `---\nteam:\n  alice: Developer\nrepo: https://github.com/org/repo.git\nbranch: feature/kanban-branch\nteam_name: dev\nfacilitator: alice\n---\n\nDo the work.`,
         payload: {},
       };
 
@@ -233,11 +233,19 @@ describe('prep processor routes', () => {
       expect(requestBody.status).toBe('success');
       expect(requestBody.payload_updates.payload.repository_url).toBe('https://github.com/org/repo.git');
       expect(requestBody.payload_updates.payload.repo).toBe('https://github.com/org/repo.git');
+      expect(requestBody.payload_updates.payload.repository_branch).toBe('feature/kanban-branch');
       expect(requestBody.payload_updates.payload.team_name).toBe('dev');
       expect(requestBody.payload_updates.payload.tailor_shop).toBe(resolve(originalCwd, '../../..', 'teams', 'dev'));
       expect(requestBody.payload_updates.payload.facilitator).toBe('alice');
       expect(requestBody.payload_updates.payload.body).toBe('Do the work.');
       expect(requestBody.payload_updates.payload.team).toEqual({ alice: 'Developer' });
+
+      const workspacePath = join(workspaceRoot, cardWithFrontMatter.display_id);
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['clone', '--branch', 'feature/kanban-branch', 'https://github.com/org/repo.git', workspacePath],
+        expect.objectContaining({ timeout: 120000 }),
+      );
     });
 
     it('falls back to regex when repo is missing in front matter but other fields are stored', async () => {
@@ -271,6 +279,13 @@ describe('prep processor routes', () => {
       expect(requestBody.payload_updates.payload.team_name).toBe('sample');
       expect(requestBody.payload_updates.payload.tailor_shop).toBe(resolve(originalCwd, '../../..', 'teams', 'sample'));
       expect(requestBody.payload_updates.payload.team).toEqual({ bob: 'Tester' });
+
+      const workspacePath = join(workspaceRoot, cardWithFrontMatterNoRepo.display_id);
+      expect(mockExecFile).toHaveBeenCalledWith(
+        'git',
+        ['clone', 'https://github.com/fallback-org/fallback-repo.git', workspacePath],
+        expect.objectContaining({ timeout: 120000 }),
+      );
     });
 
     it('gracefully handles invalid front matter and falls back to regex', async () => {

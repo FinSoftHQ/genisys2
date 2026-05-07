@@ -10,6 +10,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      '#imports': resolve(__dirname, './app/test/imports-shim.ts'),
       '~': resolve(__dirname, './app'),
       '~~': resolve(__dirname, '.'),
       '@': resolve(__dirname, './app'),

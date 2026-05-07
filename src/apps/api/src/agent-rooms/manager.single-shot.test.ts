@@ -66,7 +66,7 @@ vi.mock('child_process', () => {
 	};
 });
 
-vi.mock('../squads/jsonl.js', () => {
+vi.mock('./internal/jsonl.js', () => {
 	return {
 		attachJsonlReader: vi.fn((stdout: object, cb: (line: string) => void) => {
 			readers.set(stdout, cb);

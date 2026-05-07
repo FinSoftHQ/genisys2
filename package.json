@@ -16,11 +16,13 @@
   "scripts": {
     "dev": "just dev",
     "build": "just build",
-    "test": "vitest run",
-    "test:unit": "vitest run",
+    "test": "vitest run --config src/apps/api/vitest.config.ts && vitest run --config src/libs/shared/vitest.config.ts && vitest run --config src/libs/logger/vitest.config.ts",
+    "test:unit": "pnpm test",
+    "test:web": "pnpm --filter @repo/web exec vitest run",
     "test:e2e": "just test-e2e",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit && pnpm --filter web typecheck",
+    "typecheck": "pnpm --filter @repo/shared typecheck && pnpm --filter @repo/logger typecheck && pnpm --filter @repo/web typecheck",
+    "typecheck:api": "pnpm --filter @repo/api typecheck",
     "start": "node src/apps/api/dist/index.js"
   },
   "pnpm": {

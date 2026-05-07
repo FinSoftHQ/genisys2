@@ -4,6 +4,7 @@ export interface Protocol {
 	team: Record<string, string>;
 	body: string;
 	repo?: string;
+	branch?: string;
 	teamName?: string;
 	routes?: Record<string, string[]>;
 	facilitator?: string;
@@ -50,6 +51,7 @@ export function parseProtocolFromString(content: string, options?: { requireTeam
 	let tailorShop: string | undefined;
 	let workingDir: string | undefined;
 	let repo: string | undefined;
+	let branch: string | undefined;
 	let teamName: string | undefined;
 	const instructions: Record<string, string> = {};
 	const lines = frontMatter.split("\n");
@@ -124,6 +126,14 @@ export function parseProtocolFromString(content: string, options?: { requireTeam
 			inInstructions = false;
 			currentRouteAgent = null;
 			repo = line.slice("repo:".length).trim();
+			continue;
+		}
+		if (line.startsWith("branch:")) {
+			inTeam = false;
+			inRoutes = false;
+			inInstructions = false;
+			currentRouteAgent = null;
+			branch = line.slice("branch:".length).trim();
 			continue;
 		}
 
@@ -232,6 +242,7 @@ export function parseProtocolFromString(content: string, options?: { requireTeam
 		team,
 		body,
 		...(repo ? { repo } : {}),
+		...(branch ? { branch } : {}),
 		...(teamName ? { teamName } : {}),
 		...(Object.keys(routes).length > 0 ? { routes } : {}),
 		...(facilitator ? { facilitator } : {}),

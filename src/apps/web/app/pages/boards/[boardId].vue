@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, computed, ref, nextTick, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import { definePageMeta, useToast } from '#imports';
 import type { SnapshotResponse, UpdateBoardResponse, BoardSuiteWithBoards } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
 import { useBoardsList } from '~/composables/useBoardsList';

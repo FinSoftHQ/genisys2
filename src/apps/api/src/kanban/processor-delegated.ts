@@ -11,7 +11,7 @@ import {
   HealthCheckResponseSchema,
 } from '@repo/shared';
 import { getBoardById, getCardById, getSnapshot, listBoards, moveCard } from './repository.js';
-import { startProcessing, moveCardToNextColumn } from './processing-orchestrator.js';
+import { startProcessing } from './processing-orchestrator.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };

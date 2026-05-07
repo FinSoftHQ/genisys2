@@ -40,17 +40,6 @@ function getCardByUid(instance: unknown, boardUid: string, cardUid: string): Car
   return parsed.success ? parsed.data : undefined;
 }
 
-function getCardAcrossBoards(instance: unknown, boardUid: string, cardUid: string): CardEntity | undefined {
-  const card = getCardByUid(instance, boardUid, cardUid);
-  if (card) return card;
-
-  const { db } = resolveDb(instance);
-  const row = db.select().from(cards).where(eq(cards.uid, cardUid)).get();
-  if (!row) return undefined;
-  const parsed = CardEntitySchema.safeParse(row);
-  return parsed.success ? parsed.data : undefined;
-}
-
 function getBoard(instance: unknown, boardUid: string): BoardEntity | undefined {
   const { db } = resolveDb(instance);
   const row = db.select().from(boards).where(eq(boards.uid, boardUid)).get();
