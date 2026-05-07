@@ -25,6 +25,7 @@
     "happy-dom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "vue": "catalog:"
+    "vue": "catalog:",
+    "vue-router": "5.0.6"
   }
 }

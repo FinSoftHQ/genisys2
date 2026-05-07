@@ -10,7 +10,7 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   HealthCheckResponseSchema,
 } from '@repo/shared';
-import { getBoardById, listBoards, moveCard, getSnapshot, getCardById } from './repository.js';
+import { getBoardById, getCardById, getSnapshot, listBoards, moveCard } from './repository.js';
 import { startProcessing, moveCardToNextColumn } from './processing-orchestrator.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
@@ -72,6 +72,15 @@ async function delegateTask(card: {
       return;
     }
 
+    // New multi-subtask path: do NOT auto-move children; let them stay in todo for review.
+    // The done processor will wake the parent when all children reach done.
+    const taskCardUids = card.payload.task_card_uids;
+    if (Array.isArray(taskCardUids) && taskCardUids.length > 0 && typeof taskCardUids[0] === 'string') {
+      fireAndForgetCallback(callbackUrl, { status: 'success' });
+      return;
+    }
+
+    // Legacy single-child path: kickstart the child into agentic-team and advance parent to wrap
     const todoCard = findRelatedTodoCard(card, taskBoard.uid);
     if (!todoCard) {
       fireAndForgetCallback(callbackUrl, { status: 'success' });
@@ -92,12 +101,10 @@ async function delegateTask(card: {
       });
     }
 
-    // Fallback: pull any other cards waiting in todo on the task board
-    moveCardToNextColumn({}, taskBoard, 'todo').catch((err) => {
-      console.error('[delegated] Auto-pull from todo failed:', err instanceof Error ? err.message : String(err));
-    });
-
-    fireAndForgetCallback(callbackUrl, { status: 'success', move_to_column: 'wrap' });
+    // Parent stays in Delegated. The done processor's auto-pull will handle
+    // subsequent children, and wakeParentIfAllChildrenDone will move the parent
+    // to Wrap when all children reach done.
+    fireAndForgetCallback(callbackUrl, { status: 'success' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     fireAndForgetCallback(callbackUrl, {

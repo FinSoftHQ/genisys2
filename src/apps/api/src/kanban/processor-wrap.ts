@@ -45,17 +45,40 @@ function sendError(callbackUrl: string, displayId: string, message: string): voi
   fireAndForgetCallback(callbackUrl, { status: 'error', error_message: message.slice(0, 500) });
 }
 
-async function fetchDevWrapup(workspacePath: string) {
+async function fetchDevWrapup(workingDir: string, include?: 'all' | 'commit' | 'pr') {
   const url = `${getDevWrapupBaseUrl()}/api/v1/dev-wrapup`;
+  const body: Record<string, string> = { working_dir: workingDir };
+  if (include) {
+    body.include = include;
+  }
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace_path: workspacePath }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     const bodyText = await response.text().catch(() => 'unknown');
     throw new Error(`dev-wrapup API returned ${response.status}: ${bodyText}`);
   }
+
+  if (include === 'pr') {
+    const data = await response.json() as {
+      pr_title: string;
+      pr_body: string;
+    };
+    if (
+      typeof data.pr_title !== 'string' ||
+      typeof data.pr_body !== 'string'
+    ) {
+      throw new Error('dev-wrapup API returned invalid response shape');
+    }
+    return {
+      commitMessage: '',
+      prTitle: data.pr_title,
+      prBody: data.pr_body,
+    };
+  }
+
   const data = await response.json() as {
     commit_message: string;
     pr_title: string;
@@ -76,7 +99,7 @@ async function fetchDevWrapup(workspacePath: string) {
 }
 
 async function createPR(
-  workspacePath: string,
+  workingDir: string,
   title: string,
   body: string,
   displayId: string,
@@ -85,7 +108,7 @@ async function createPR(
     `[wrap] Card ${displayId}: creating PR via gh CLI (title=${JSON.stringify(title)}, bodyLength=${body.length})`,
   );
   try {
-    await git.createPullRequest(workspacePath, title, body);
+    await git.createPullRequest(workingDir, title, body);
     console.log(`[wrap] Card ${displayId}: PR created successfully`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -102,17 +125,17 @@ async function runWrapWorkflow(
   card: { display_id: string; payload?: Record<string, unknown> },
   callbackUrl: string,
 ) {
-  const workspacePath = card.payload?.workspace_path;
-  if (!workspacePath || typeof workspacePath !== 'string') {
-    return sendError(callbackUrl, card.display_id, 'Wrap failed: missing workspace_path in card payload');
+  const workingDir = card.payload?.working_dir;
+  if (!workingDir || typeof workingDir !== 'string') {
+    return sendError(callbackUrl, card.display_id, 'Wrap failed: missing working_dir in card payload');
   }
 
   const branch = `surii/${card.display_id}`;
 
   try {
     // Phase 1: Detect if there's anything to wrap
-    const hasChanges = await git.hasWorkingTreeChanges(workspacePath);
-    const branchExists = await git.branchExists(workspacePath, branch);
+    const hasChanges = await git.hasWorkingTreeChanges(workingDir);
+    const branchExists = await git.branchExists(workingDir, branch);
     console.log(
       `[wrap] Card ${card.display_id}: preflight state hasChanges=${hasChanges} branchExists=${branchExists} branch=${branch}`,
     );
@@ -128,7 +151,7 @@ async function runWrapWorkflow(
     // Always call countUnpushedCommits for remaining paths — it returns -1 when
     // the answer is unknown. -1 !== 0 is truthy, preserving "might have commits"
     // semantics without special-casing.
-    const unpushedCount = await git.countUnpushedCommits(workspacePath, branch);
+    const unpushedCount = await git.countUnpushedCommits(workingDir, branch);
     const hasUnpushed = unpushedCount !== 0; // -1 means unknown → treat as truthy
     console.log(
       `[wrap] Card ${card.display_id}: commit state unpushedCount=${unpushedCount} hasUnpushed=${hasUnpushed}`,
@@ -147,36 +170,36 @@ async function runWrapWorkflow(
     );
 
     // Phase 2: Stage all changes so the AI sees them
-    await git.stageAll(workspacePath);
+    await git.stageAll(workingDir);
 
     // Phase 3: Fetch wrapup metadata
     const currentBranch = await execFilePromise('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: workspacePath,
+      cwd: workingDir,
       timeout: 10_000,
     }).then((r) => r.stdout.trim()).catch(() => 'unknown');
     console.log(
-      `[wrap] Card ${card.display_id}: calling dev-wrapup for workspace=${workspacePath}, currentBranch=${currentBranch}`,
+      `[wrap] Card ${card.display_id}: calling dev-wrapup for workspace=${workingDir}, currentBranch=${currentBranch}`,
     );
-    const wrapup = await fetchDevWrapup(workspacePath);
+    const wrapup = await fetchDevWrapup(workingDir, hasChanges ? undefined : 'pr');
 
     // Phase 4: Commit changes
-    const stagedFiles = await git.getStagedFiles(workspacePath);
+    const stagedFiles = await git.getStagedFiles(workingDir);
     if (stagedFiles.length > 0) {
-      await git.commit(workspacePath, wrapup.commitMessage);
+      await git.commit(workingDir, wrapup.commitMessage);
     } else {
       console.log(`[wrap] Card ${card.display_id}: no staged changes, skipping commit`);
     }
 
     // Phase 4: Push and create PR
     console.log(`[wrap] Card ${card.display_id}: pushing branch ${branch}`);
-    await git.pushBranch(workspacePath, branch);
+    await git.pushBranch(workingDir, branch);
     console.log(`[wrap] Card ${card.display_id}: push completed for ${branch}`);
 
     console.log(`[wrap] Card ${card.display_id}: checking gh auth status`);
-    const authStatus = await git.verifyGhAuth(workspacePath);
+    const authStatus = await git.verifyGhAuth(workingDir);
     console.log(`[wrap] gh auth status:\n${authStatus}`);
 
-    await createPR(workspacePath, wrapup.prTitle, wrapup.prBody, card.display_id);
+    await createPR(workingDir, wrapup.prTitle, wrapup.prBody, card.display_id);
 
     return sendDone(callbackUrl, card.display_id);
   } catch (err) {
@@ -243,7 +266,7 @@ export async function wrapProcessorRoutes(instance: FastifyInstance): Promise<vo
       return reply.status(400).send(errorResponse('VALIDATION_ERROR', 'Invalid request body', { issues: body.error.issues }));
     }
 
-    const workspacePath = body.data.card.payload?.workspace_path;
+    const workspacePath = body.data.card.payload?.working_dir;
     if (typeof workspacePath === 'string') {
       rm(workspacePath, { recursive: true, force: true }).then(() => {
         console.log(`[wrap] Cleaned up workspace ${workspacePath}`);

@@ -447,7 +447,23 @@ export function buildPiArgs(
 	const args = ["--mode", "rpc", "--no-session"];
 	let executionMode: ExecutionMode = "session";
 
-	// 1. Agent identity notification as first system prompt
+	// 1. Working directory prompt as first system prompt
+	const cwdPromptPath = join(roomPromptDir, `${agentName}.cwd.prompt`);
+	const effectiveCwd = workingDir ?? process.cwd();
+	writeFileSync(
+		cwdPromptPath,
+		`[SYSTEM WORKING DIRECTORY] Your current working directory is: ${effectiveCwd}\n` +
+			`This directory IS your project root. All code, tests, and files you create must be written relative to this directory.\n` +
+			`All relative paths in read, write, and edit operations are resolved from this directory.\n` +
+			`When running tests, use explicit file paths (e.g., vitest run src/apps/api/path/to/file.test.ts).\n` +
+			`process.cwd() inside this environment will return the path shown above.\n` +
+			`This workspace is a git clone of the project. If body text or instructions mention absolute paths from the original repository, treat them as relative to this workspace directory.\n` +
+			`Do not change directory or write files outside this directory unless explicitly instructed.\n\n`,
+		"utf-8",
+	);
+	args.push("--append-system-prompt", cwdPromptPath);
+
+	// 2. Agent identity notification
 	const identityPromptPath = join(roomPromptDir, `${agentName}.identity.prompt`);
 	writeFileSync(
 		identityPromptPath,
@@ -456,7 +472,7 @@ export function buildPiArgs(
 	);
 	args.push("--append-system-prompt", identityPromptPath);
 
-	// 2. Protocol body as system prompt
+	// 3. Protocol body as system prompt
 	args.push("--append-system-prompt", bodyPromptPath);
 
 	if (tailorShop) {
@@ -465,7 +481,7 @@ export function buildPiArgs(
 			? tailorShop
 			: resolve(workingDir ?? process.cwd(), tailorShop);
 
-		// 3. Agent-specific prompt file: name first, then role fallback
+		// 4. Agent-specific prompt file: name first, then role fallback
 		const namePath = join(resolvedTailorShop, "agents", `${agentName}.md`);
 		const rolePath = join(resolvedTailorShop, "agents", `${role}.md`);
 
@@ -508,7 +524,7 @@ export function buildPiArgs(
 			console.warn("[agent-rooms] tailor_shop agent prompt not found:", namePath);
 		}
 
-		// 4. Optional shared working protocol
+		// 5. Optional shared working protocol
 		const workingPath = join(resolvedTailorShop, "working_protocol.md");
 		if (existsSync(workingPath)) {
 			const workingContent = readFileSync(workingPath, "utf-8");

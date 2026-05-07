@@ -73,7 +73,7 @@ const mockCard = {
   processing_state: 'IDLE' as const,
   is_editable: true,
   payload: {
-    workspace_path: '/tmp/workspaces/TST-1',
+    working_dir: '/tmp/workspaces/TST-1',
   },
   current_status: 'commit',
   created_at: '2026-04-26T08:30:00.000Z',
@@ -215,7 +215,7 @@ describe('commit processor routes', () => {
       );
     });
 
-    it('fires error callback when workspace_path is missing', async () => {
+    it('fires error callback when working_dir is missing', async () => {
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440003';
       const cardNoWorkspace = { ...mockCard, payload: {} };
 

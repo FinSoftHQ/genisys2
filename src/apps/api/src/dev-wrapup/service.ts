@@ -1,12 +1,9 @@
 import { execSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { z } from "zod";
-import {
-  createAgentSession,
-  SessionManager,
-} from "@mariozechner/pi-coding-agent";
+import { complete } from "@mariozechner/pi-ai";
 import { getModel } from "@mariozechner/pi-ai";
-import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import { getApiKey } from "../lib/ai-auth.js";
 
 const GENERATION_TIMEOUT_MS = 60_000;
 
@@ -56,10 +53,10 @@ export class GenerationError extends Error {
   }
 }
 
-function hasStagedChanges(workspacePath: string): boolean {
+function hasStagedChanges(workingDir: string): boolean {
   try {
     const output = execSync("git diff --cached --name-only", {
-      cwd: workspacePath,
+      cwd: workingDir,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
       timeout: 5_000,
@@ -70,28 +67,54 @@ function hasStagedChanges(workspacePath: string): boolean {
   }
 }
 
-function validateGitRepo(workspacePath: string): void {
+function validateGitRepo(workingDir: string): void {
   try {
-    const stats = statSync(workspacePath);
+    const stats = statSync(workingDir);
     if (!stats.isDirectory()) {
-      throw new GitRepoError(`workspace_path is not a directory: ${workspacePath}`);
+      throw new GitRepoError(`working_dir is not a directory: ${workingDir}`);
     }
   } catch (err) {
     if (err instanceof GitRepoError) throw err;
-    throw new GitRepoError(`workspace_path does not exist: ${workspacePath}`);
+    throw new GitRepoError(`working_dir does not exist: ${workingDir}`);
   }
 
   try {
     execSync("git rev-parse --git-dir", {
-      cwd: workspacePath,
+      cwd: workingDir,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
       timeout: 5_000,
     });
   } catch {
     throw new GitRepoError(
-      `workspace_path is not a git repository: ${workspacePath}`
+      `working_dir is not a git repository: ${workingDir}`
     );
+  }
+}
+
+function getGitDiffStaged(workingDir: string): string {
+  try {
+    return execSync("git diff --staged", {
+      cwd: workingDir,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+      timeout: 10_000,
+    });
+  } catch {
+    return "";
+  }
+}
+
+function getGitLog(workingDir: string): string {
+  try {
+    return execSync("git log --oneline -5", {
+      cwd: workingDir,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+      timeout: 10_000,
+    });
+  } catch {
+    return "";
   }
 }
 
@@ -104,11 +127,6 @@ function validateGitRepo(workspacePath: string): void {
  */
 function buildSystemPrompt(include: "all" | "commit" | "pr"): string {
   const base = `You are a senior engineer preparing a commit and PR for review.
-
-Your task:
-1. Run: git diff --staged
-2. Run: git log --oneline -5
-3. Based on the staged changes, write the sections requested below.
 
 Output ONLY the delimited sections. Do not add any preamble, explanation, or extra text.`;
 
@@ -177,6 +195,90 @@ Rules:
 - pr_body: well-structured markdown`;
 }
 
+function buildUserMessage(
+  workingDir: string,
+  include: "all" | "commit" | "pr"
+): string {
+  const diff = getGitDiffStaged(workingDir);
+  const log = getGitLog(workingDir);
+
+  const sections: string[] = [];
+
+  sections.push("Here are the staged changes:");
+  sections.push("");
+  sections.push("<<<GIT_DIFF>>>");
+  sections.push(diff || "(no staged changes)");
+  sections.push("<<<END>>>");
+  sections.push("");
+  sections.push("Recent commits:");
+  sections.push(log || "(no commit history)");
+  sections.push("");
+
+  if (include === "commit") {
+    sections.push("Write the following section:");
+    sections.push("");
+    sections.push("<<<COMMIT_MESSAGE>>>");
+    sections.push("feat(scope): concise description of the change");
+    sections.push("<<<END>>>");
+    sections.push("");
+    sections.push("Rules for commit_message:");
+    sections.push("- Conventional Commits format: type(scope)?: description");
+    sections.push("- Allowed types: feat, fix, chore, docs, refactor, test, build, ci, perf, style, revert");
+    sections.push("- Single line, lowercase type, no trailing period");
+  } else if (include === "pr") {
+    sections.push("Write the following sections:");
+    sections.push("");
+    sections.push("<<<PR_TITLE>>>");
+    sections.push("A clear, one-line title for the Pull Request");
+    sections.push("<<<PR_BODY>>>");
+    sections.push("## Summary");
+    sections.push("");
+    sections.push("Brief description of what this PR does.");
+    sections.push("");
+    sections.push("## Changes");
+    sections.push("");
+    sections.push("- Key change one");
+    sections.push("- Key change two");
+    sections.push("");
+    sections.push("## Risks");
+    sections.push("");
+    sections.push("Risk assessment (e.g. Low — unit tests added).");
+    sections.push("<<<END>>>");
+    sections.push("");
+    sections.push("Rules:");
+    sections.push("- pr_title: single line, clear and descriptive");
+    sections.push("- pr_body: well-structured markdown");
+  } else {
+    sections.push("Write the following sections:");
+    sections.push("");
+    sections.push("<<<COMMIT_MESSAGE>>>");
+    sections.push("feat(scope): concise description of the change");
+    sections.push("<<<PR_TITLE>>>");
+    sections.push("A clear, one-line title for the Pull Request");
+    sections.push("<<<PR_BODY>>>");
+    sections.push("## Summary");
+    sections.push("");
+    sections.push("Brief description of what this PR does.");
+    sections.push("");
+    sections.push("## Changes");
+    sections.push("");
+    sections.push("- Key change one");
+    sections.push("- Key change two");
+    sections.push("");
+    sections.push("## Risks");
+    sections.push("");
+    sections.push("Risk assessment (e.g. Low — unit tests added).");
+    sections.push("<<<END>>>");
+    sections.push("");
+    sections.push("Rules:");
+    sections.push("- commit_message: Conventional Commits format, single line, lowercase type");
+    sections.push("- pr_title: single line, clear and descriptive");
+    sections.push("- pr_body: well-structured markdown");
+  }
+
+  return sections.join("\n");
+}
+
 /**
  * Parses the delimiter-based output produced by the model.
  * Each field sits between its opening <<<FIELD>>> marker and
@@ -220,65 +322,55 @@ function parseDelimitedResponse(text: string): Record<string, string> {
   return result;
 }
 
-async function runPiSession(workspacePath: string, prompt: string): Promise<unknown> {
-  // Attempt to use the github-copilot/gpt-5-mini model if available in the registry.
-  const preferredModel = getModel("github-copilot", "gpt-5-mini");
+async function runCompletion(
+  workingDir: string,
+  include: "all" | "commit" | "pr"
+): Promise<unknown> {
+  const preferredModel = getModel("opencode-go", "kimi-k2.5");
 
-  console.log(`[dev-wrapup] Starting AI session in workspace: ${workspacePath}`);
+  console.log(`[dev-wrapup] Starting AI completion in workspace: ${workingDir}`);
 
-  const { session } = await createAgentSession({
-    cwd: workspacePath,
-    sessionManager: SessionManager.inMemory(workspacePath),
-    ...(preferredModel ? { model: preferredModel } : {}),
-  });
+  const systemPrompt = buildSystemPrompt(include);
+  const userMessage = buildUserMessage(workingDir, include);
 
-  let agentError: Error | undefined;
+  const apiKey = await getApiKey(preferredModel.provider);
 
-  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-    if (event.type === "auto_retry_end" && !event.success) {
-      agentError = new GenerationError(
-        `Agent retry failed: ${event.finalError ?? "unknown error"}`
-      );
-    }
-  });
+  const response = await complete(
+    preferredModel,
+    {
+      systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: userMessage,
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    { apiKey }
+  );
 
-  try {
-    await session.prompt(prompt);
-
-    // Wait for agent_end with a polling loop (isStreaming becomes false)
-    const start = Date.now();
-    const maxWait = GENERATION_TIMEOUT_MS;
-
-    while (session.isStreaming && !agentError) {
-      if (Date.now() - start > maxWait) {
-        await session.abort();
-        throw new TimeoutError("LLM generation timed out");
-      }
-      await new Promise((r) => setTimeout(r, 200));
-    }
-
-    if (agentError) {
-      throw agentError;
-    }
-
-    const lastText = session.getLastAssistantText();
-    if (!lastText) {
-      throw new GenerationError("Agent produced no assistant text");
-    }
-
-    // Parse the delimiter-based response (no JSON escaping hazards).
-    const parsed = parseDelimitedResponse(lastText);
-    if (Object.keys(parsed).length === 0) {
-      throw new GenerationError(
-        `Agent output did not contain expected delimiters (<<<COMMIT_MESSAGE>>>, <<<PR_TITLE>>>, or <<<PR_BODY>>>). Raw output: ${lastText.slice(0, 200)}`
-      );
-    }
-
-    return parsed;
-  } finally {
-    unsubscribe();
-    session.dispose();
+  if (response.stopReason === "error") {
+    throw new GenerationError(response.errorMessage || "LLM provider error");
   }
+
+  const textContent = response.content
+    .filter((c) => c.type === "text")
+    .map((c) => (c as { text: string }).text)
+    .join("");
+
+  if (!textContent.trim()) {
+    throw new GenerationError("LLM returned empty text");
+  }
+
+  const parsed = parseDelimitedResponse(textContent);
+  if (Object.keys(parsed).length === 0) {
+    throw new GenerationError(
+      `LLM output did not contain expected delimiters (<<<COMMIT_MESSAGE>>>, <<<PR_TITLE>>>, or <<<PR_BODY>>>). Raw output: ${textContent.slice(0, 200)}`
+    );
+  }
+
+  return parsed;
 }
 
 export type DevWrapupResult =
@@ -287,12 +379,12 @@ export type DevWrapupResult =
   | { pr_title: string; pr_body: string; has_staged_changes: boolean };
 
 export async function generateDevWrapup(
-  workspacePath: string,
+  workingDir: string,
   include: "all" | "commit" | "pr" = "all"
 ): Promise<DevWrapupResult> {
-  console.log(`[dev-wrapup] Generating wrapup for workspace: ${workspacePath}, include: ${include}`);
+  console.log(`[dev-wrapup] Generating wrapup for workspace: ${workingDir}, include: ${include}`);
 
-  validateGitRepo(workspacePath);
+  validateGitRepo(workingDir);
 
   const schema =
     include === "commit"
@@ -302,7 +394,7 @@ export async function generateDevWrapup(
         : WrapupResponseAllSchema;
 
   const result = await Promise.race([
-    runPiSession(workspacePath, buildSystemPrompt(include)),
+    runCompletion(workingDir, include),
     new Promise<never>((_, reject) => {
       setTimeout(() => {
         reject(new TimeoutError("LLM generation timed out after 60s"));
@@ -319,6 +411,6 @@ export async function generateDevWrapup(
 
   return {
     ...parsed.data,
-    has_staged_changes: hasStagedChanges(workspacePath),
-  } as DevWrapupResult;
+    has_staged_changes: hasStagedChanges(workingDir),
+  };
 }

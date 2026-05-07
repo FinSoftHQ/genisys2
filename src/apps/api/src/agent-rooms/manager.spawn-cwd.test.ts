@@ -74,6 +74,11 @@ describe('agent-rooms spawn cwd', () => {
 		const options = piSpawn![2] as { cwd?: string };
 		expect(options.cwd).toBe(baseDir);
 
+		const piArgs = piSpawn![1] as string[];
+		const cwdPromptIndex = piArgs.findIndex((arg) => arg.endsWith('alpha.cwd.prompt'));
+		expect(cwdPromptIndex).toBeGreaterThan(-1);
+		expect(piArgs[cwdPromptIndex - 1]).toBe('--append-system-prompt');
+
 		destroyRoom(result.roomId);
 		rmSync(baseDir, { recursive: true, force: true });
 	});

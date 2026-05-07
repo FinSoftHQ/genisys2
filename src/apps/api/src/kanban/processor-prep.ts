@@ -127,7 +127,7 @@ async function runPrepWorkflow(
     console.log(`[prep] Card ${card.display_id}: success, moving to planning`);
     const updatedPayload: Record<string, unknown> = {
       ...card.payload,
-      workspace_path: workspacePath,
+      working_dir: parsed.workingDir ?? workspacePath,
       repository_url: repositoryUrl,
       ...(parsed.repo ? { repo: parsed.repo } : {}),
       ...(parsed.tailorShop ? { tailor_shop: parsed.tailorShop } : {}),
@@ -135,7 +135,7 @@ async function runPrepWorkflow(
       ...(parsed.team ? { team: parsed.team } : {}),
       ...(parsed.routes ? { routes: parsed.routes } : {}),
       ...(parsed.facilitator ? { facilitator: parsed.facilitator } : {}),
-      ...(parsed.workingDir ? { working_dir: parsed.workingDir } : {}),
+
       ...(parsed.instructions ? { instructions: parsed.instructions } : {}),
       ...(parsed.body ? { body: parsed.body } : {}),
     };

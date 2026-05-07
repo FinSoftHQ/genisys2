@@ -12,6 +12,25 @@ export interface Protocol {
 	instructions?: Record<string, string>;
 }
 
+function dedentLines(lines: string[]): string {
+	// Find minimum indentation across non-empty lines
+	let minIndent = Infinity;
+	for (const line of lines) {
+		if (line.trim() === "") continue;
+		const match = line.match(/^[ \t]+/);
+		if (match) {
+			minIndent = Math.min(minIndent, match[0].length);
+		} else {
+			minIndent = 0;
+			break;
+		}
+	}
+	if (minIndent === Infinity || minIndent === 0) {
+		return lines.join("\n");
+	}
+	return lines.map((line) => line.slice(minIndent)).join("\n");
+}
+
 export function parseProtocolFromString(content: string, options?: { requireTeam?: boolean }): Protocol {
 	if (!content.startsWith("---")) {
 		throw new Error("Expected front matter starting with ---");
@@ -38,6 +57,10 @@ export function parseProtocolFromString(content: string, options?: { requireTeam
 	let inRoutes = false;
 	let inInstructions = false;
 	let currentRouteAgent: string | null = null;
+	let instructionsMultiLineKey: string | null = null;
+	let instructionsMultiLineLines: string[] = [];
+	let teamMultiLineKey: string | null = null;
+	let teamMultiLineLines: string[] = [];
 
 	for (const rawLine of lines) {
 		const line = rawLine.replace(/\r$/, "");
@@ -105,13 +128,32 @@ export function parseProtocolFromString(content: string, options?: { requireTeam
 		}
 
 		if (inTeam) {
+			if (teamMultiLineKey !== null) {
+				if (line.startsWith("  ") || line.startsWith("\t")) {
+					const content = line.replace(/^[ \t]{2}/, "");
+					teamMultiLineLines.push(content);
+					continue;
+				}
+				if (line.trim() === "") {
+					teamMultiLineLines.push("");
+					continue;
+				}
+				team[teamMultiLineKey] = teamMultiLineLines.join("\n");
+				teamMultiLineKey = null;
+				teamMultiLineLines = [];
+			}
 			if (line.startsWith("  ") || line.startsWith("\t")) {
 				const trimmed = line.trim();
 				const colonIdx = trimmed.indexOf(":");
 				if (colonIdx !== -1) {
 					const name = trimmed.slice(0, colonIdx).trim();
 					const role = trimmed.slice(colonIdx + 1).trim();
-					team[name] = role;
+					if (role === "|" || role.startsWith("| ")) {
+						teamMultiLineKey = name;
+						teamMultiLineLines = [];
+					} else {
+						team[name] = role;
+					}
 				}
 			} else if (line.trim() !== "") {
 				inTeam = false;
@@ -142,18 +184,44 @@ export function parseProtocolFromString(content: string, options?: { requireTeam
 		}
 
 		if (inInstructions) {
+			if (instructionsMultiLineKey !== null) {
+				if (line.startsWith("  ") || line.startsWith("\t")) {
+					const content = line.replace(/^[ \t]{2}/, "");
+					instructionsMultiLineLines.push(content);
+					continue;
+				}
+				if (line.trim() === "") {
+					instructionsMultiLineLines.push("");
+					continue;
+				}
+				instructions[instructionsMultiLineKey] = instructionsMultiLineLines.join("\n");
+				instructionsMultiLineKey = null;
+				instructionsMultiLineLines = [];
+			}
 			if (line.startsWith("  ") || line.startsWith("\t")) {
 				const trimmed = line.trim();
 				const colonIdx = trimmed.indexOf(":");
 				if (colonIdx !== -1) {
 					const name = trimmed.slice(0, colonIdx).trim();
 					const value = trimmed.slice(colonIdx + 1).trim();
-					instructions[name] = value;
+					if (value === "|" || value.startsWith("| ")) {
+						instructionsMultiLineKey = name;
+						instructionsMultiLineLines = [];
+					} else {
+						instructions[name] = value;
+					}
 				}
 			} else if (line.trim() !== "") {
 				inInstructions = false;
 			}
 		}
+	}
+
+	if (teamMultiLineKey !== null) {
+		team[teamMultiLineKey] = dedentLines(teamMultiLineLines);
+	}
+	if (instructionsMultiLineKey !== null) {
+		instructions[instructionsMultiLineKey] = dedentLines(instructionsMultiLineLines);
 	}
 
 	if ((options?.requireTeam ?? true) && Object.keys(team).length === 0) {

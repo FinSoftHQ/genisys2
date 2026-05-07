@@ -318,8 +318,8 @@ describe('Home Page', () => {
 
       // DOM order assertion
       const html = wrapper.html();
-      expect(html.indexOf('Quick Actions')).toBeLessThan(html.indexOf('Browse'));
-      expect(html.indexOf('Browse')).toBeLessThan(html.indexOf('UUID Fallback'));
+      expect(html.indexOf('aria-label="Quick Actions"')).toBeLessThan(html.indexOf('aria-label="Browse"'));
+      expect(html.indexOf('aria-label="Browse"')).toBeLessThan(html.indexOf('aria-label="UUID Fallback"'));
     });
 
     it('renders Create Suite before Create Board and as the primary CTA', async () => {
