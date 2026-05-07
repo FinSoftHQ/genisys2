@@ -15,7 +15,7 @@ const emit = defineEmits<{
 
 const schema = z.object({
   title: z.string().min(1, 'Title is required').max(200, 'Max 200 characters'),
-  description: z.string().max(5000, 'Max 5000 characters').optional(),
+  description: z.string().max(20000, 'Max 20000 characters').optional(),
 });
 
 type Schema = z.output<typeof schema>;

@@ -279,7 +279,7 @@ export const CardEntitySchema = z
     board_uid: BoardIdSchema,
     display_id: DisplayIdSchema,
     title: z.string().min(1).max(200),
-    description: z.string().max(5000).nullable(),
+    description: z.string().max(20000).nullable(),
     version: CardVersionSchema,
     processing_state: CardProcessingStateSchema,
     is_editable: z.boolean(),
@@ -350,7 +350,7 @@ export const CardTitleSchema = z
 
 export const CardDescriptionSchema = z
   .string()
-  .max(5000, { message: 'description must be at most 5000 characters' })
+  .max(20000, { message: 'description must be at most 20000 characters' })
   .nullable();
 
 export const CardResponseDataSchema = z.object({ card: CardEntitySchema }).strict();
