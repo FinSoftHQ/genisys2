@@ -251,7 +251,6 @@ describe('explore processor routes', () => {
       const fetchCall = fetchSpy.mock.calls[0];
       const fetchPayload = JSON.parse((fetchCall?.[1] as { body?: string })?.body ?? '{}');
       expect(fetchPayload.move_to_column).toBe('agentic-team');
-      expect(fetchPayload.payload_updates.payload.body).toContain("The working repository structure is described in 'llm_context.md'.");
       expect(fetchPayload.payload_updates.payload.body).toContain("Mission-focused extracted context is available in 'llm_target.md'");
       expect(fetchPayload.payload_updates.payload.body).toContain('Initial task body');
       expect(fetchPayload.payload_updates.payload.llm_extract_target_jsonl).toBe('.dossier/llm_extract_target.jsonl');

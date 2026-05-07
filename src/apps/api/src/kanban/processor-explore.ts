@@ -624,21 +624,19 @@ async function runExploreWorkflow(card: ExploreCard, callbackUrl: string) {
   }
 
   const existingBody = typeof card.payload?.body === 'string' ? card.payload.body : '';
-  const contextNote = '\n\n## Repository Context\n\nThe working repository structure is described in \'llm_context.md\'.';
   const targetNote = targetGenerated
     ? '\n\n## Mission Context Extract\n\nMission-focused extracted context is available in \'llm_target.md\' (generated from \'.dossier/llm_extract_target.jsonl\'). Use \'llm_target.md\' as your primary context for implementation.'
-    : '\n\n## Mission Context Extract\n\nUse \'llm_target.md\' (generated from \'.dossier/llm_extract_target.jsonl\') when available. If it is missing, continue with \'llm_context.md\' and source files directly.';
+    : '\n\n## Mission Context Extract\n\nUse \'llm_target.md\' (generated from \'.dossier/llm_extract_target.jsonl\') when available. If it is missing, continue with source files directly.';
 
   const warningNote = warnings.length > 0
     ? `\n\n## Explore Warnings\n${warnings.map((w) => `- ${w}`).join('\n')}`
     : '';
 
-  const updatedBody = existingBody + contextNote + targetNote + warningNote;
+  const updatedBody = existingBody + targetNote + warningNote;
 
   const updatedPayload: Record<string, unknown> = {
     ...card.payload,
     body: updatedBody,
-    llm_context_md: LLM_CONTEXT_PATH,
     llm_extract_target_jsonl: EXTRACT_TARGET_JSONL_PATH,
     llm_target_md: LLM_TARGET_MD_PATH,
     generated_files: generatedFiles,
