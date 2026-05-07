@@ -146,7 +146,8 @@ Usually include, if relevant and present:
 Do not include:
 
 - Large unrelated files.
-- node_modules, build output, cache directories, lockfiles unless they are specifically relevant.
+- Lockfiles (e.g. pnpm-lock.yaml, package-lock.json, yarn.lock, bun.lockb, Cargo.lock, poetry.lock, Gemfile.lock). Exclude them unless the mission specifically requires analyzing dependency changes.
+- node_modules, build output, and cache directories.
 - Entire huge files when a focused range is enough.
 - Binary files.
 - Duplicate ranges unless there is a clear reason.

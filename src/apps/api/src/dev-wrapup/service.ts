@@ -326,7 +326,7 @@ async function runCompletion(
   workingDir: string,
   include: "all" | "commit" | "pr"
 ): Promise<unknown> {
-  const preferredModel = getModel("opencode-go", "kimi-k2.5");
+  const preferredModel = getModel("opencode-go", "deepseek-v4-flash");
 
   console.log(`[dev-wrapup] Starting AI completion in workspace: ${workingDir}`);
 
