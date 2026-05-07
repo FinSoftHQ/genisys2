@@ -1,6 +1,8 @@
 import fastify, { type FastifyInstance } from 'fastify';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { resolve } from 'node:path';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import {
   HealthCheckResponseSchema,
   CanExitHookResponseSchema,
@@ -65,9 +67,14 @@ const mockCard = {
 describe('prep processor routes', () => {
   let app: FastifyInstance;
   let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let workspaceRoot: string;
+  let originalWorkspaceRoot: string | undefined;
 
   beforeEach(async () => {
     mockExecFile.mockClear();
+    originalWorkspaceRoot = process.env.WORKSPACE_ROOT;
+    workspaceRoot = await mkdtemp(join(tmpdir(), 'prep-processor-test-'));
+    process.env.WORKSPACE_ROOT = workspaceRoot;
     app = fastify();
     await app.register(prepProcessorRoutes, { prefix: '/api/kanban-processor/prep' });
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
@@ -76,6 +83,12 @@ describe('prep processor routes', () => {
   afterEach(async () => {
     await app.close();
     fetchSpy.mockRestore();
+    if (originalWorkspaceRoot === undefined) {
+      delete process.env.WORKSPACE_ROOT;
+    } else {
+      process.env.WORKSPACE_ROOT = originalWorkspaceRoot;
+    }
+    await rm(workspaceRoot, { recursive: true, force: true });
   });
 
   describe('GET /api/kanban-processor/prep/health', () => {
@@ -288,6 +301,68 @@ describe('prep processor routes', () => {
       expect(requestBody.status).toBe('success');
       expect(requestBody.payload_updates.payload.repository_url).toBe('https://github.com/org/repo.git');
       expect(requestBody.payload_updates.payload.team_name).toBeUndefined();
+    });
+
+    it('runs just bootup and just build-tools when both recipes are available', async () => {
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440011';
+      const cardWithJustfile = { ...mockCard, display_id: 'TST-2' };
+      const workspacePath = join(workspaceRoot, cardWithJustfile.display_id);
+      const justfilePath = join(workspacePath, 'justfile');
+      await mkdir(workspacePath, { recursive: true });
+      await writeFile(justfilePath, 'bootup:\n\techo booting\n\nbuild-tools:\n\techo building tools\n');
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/prep/on-enter',
+        payload: {
+          card: cardWithJustfile,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440012',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(mockExecFile).toHaveBeenNthCalledWith(5, 'just', ['--justfile', justfilePath, 'bootup'], expect.objectContaining({ cwd: workspacePath }));
+      expect(mockExecFile).toHaveBeenNthCalledWith(6, 'just', ['--justfile', justfilePath, 'build-tools'], expect.objectContaining({ cwd: workspacePath }));
+      const call = fetchSpy.mock.calls.find((c) => (c[0] as string) === callbackUrl);
+      expect(call).toBeDefined();
+      const requestBody = JSON.parse((call![1] as RequestInit).body as string);
+      expect(requestBody.status).toBe('success');
+    });
+
+    it('skips unavailable just recipes', async () => {
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440013';
+      const cardWithJustfile = { ...mockCard, display_id: 'TST-3' };
+      const workspacePath = join(workspaceRoot, cardWithJustfile.display_id);
+      const justfilePath = join(workspacePath, 'Justfile');
+      await mkdir(workspacePath, { recursive: true });
+      await writeFile(justfilePath, 'bootup:\n\techo booting\n');
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/prep/on-enter',
+        payload: {
+          card: cardWithJustfile,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440014',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const justCalls = mockExecFile.mock.calls.filter((call) => call[0] === 'just');
+      expect(justCalls).toEqual([
+        ['just', ['--justfile', justfilePath, 'bootup'], expect.objectContaining({ cwd: workspacePath })],
+      ]);
+      const call = fetchSpy.mock.calls.find((c) => (c[0] as string) === callbackUrl);
+      expect(call).toBeDefined();
+      const requestBody = JSON.parse((call![1] as RequestInit).body as string);
+      expect(requestBody.status).toBe('success');
     });
 
     it('returns 400 for invalid body', async () => {
