@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { access, readFile } from 'node:fs/promises';
+import { access, constants, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFilePromise } from './exec-helpers.js';
 import {
@@ -94,6 +94,7 @@ function getWorkspacePath(displayId: string): string {
 }
 
 const JUSTFILE_CANDIDATES = ['justfile', 'Justfile', '.justfile', '.Justfile'];
+const LLM_CONTEXT_PATH = 'llm_context.md';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -136,6 +137,37 @@ async function runJustRecipeIfAvailable(workspacePath: string, recipeName: strin
   return true;
 }
 
+async function resolveExecutablePath(binaryName: string): Promise<string> {
+  const candidates = [
+    resolve(process.cwd(), '.bin', binaryName),
+    resolve(process.cwd(), '../../..', '.bin', binaryName),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  throw new Error(`Executable not found or not executable: ${binaryName}`);
+}
+
+async function generateLlmContextForPrep(workspacePath: string, displayId: string): Promise<void> {
+  const contextGeneratorPath = await resolveExecutablePath('context-generator');
+  const outputPath = join(workspacePath, LLM_CONTEXT_PATH);
+
+  console.log(`[prep] Card ${displayId}: running context-generator for ${LLM_CONTEXT_PATH}`);
+  await execFilePromise(
+    contextGeneratorPath,
+    ['-e', '.agents', '-e', 'tools', '-r', workspacePath, '-o', outputPath],
+    { cwd: workspacePath, timeout: 60_000 },
+  );
+  console.log(`[prep] Card ${displayId}: generated ${LLM_CONTEXT_PATH}`);
+}
+
 async function runPrepWorkflow(
   card: { display_id: string; payload?: Record<string, unknown>; description?: string | null },
   callbackUrl: string,
@@ -169,12 +201,16 @@ async function runPrepWorkflow(
     await runJustRecipeIfAvailable(workspacePath, 'bootup');
     await runJustRecipeIfAvailable(workspacePath, 'build-tools');
 
-    // 5. Success callback
+    // 5. Generate llm_context.md as the last prep step
+    await generateLlmContextForPrep(workspacePath, card.display_id);
+
+    // 6. Success callback
     console.log(`[prep] Card ${card.display_id}: success, moving to planning`);
     const updatedPayload: Record<string, unknown> = {
       ...card.payload,
       working_dir: parsed.workingDir ?? workspacePath,
       repository_url: repositoryUrl,
+      llm_context_md: LLM_CONTEXT_PATH,
       ...(parsed.repo ? { repo: parsed.repo } : {}),
       ...(parsed.tailorShop ? { tailor_shop: parsed.tailorShop } : {}),
       ...(parsed.teamName ? { team_name: parsed.teamName } : {}),

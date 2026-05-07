@@ -467,6 +467,24 @@ function stringifyTargetsJsonl(targets: ExtractTarget[]): string {
   return `${targets.map((target) => JSON.stringify(target)).join('\n')}\n`;
 }
 
+async function resolveExecutablePath(binaryName: string): Promise<string> {
+  const candidates = [
+    resolve(process.cwd(), '.bin', binaryName),
+    resolve(process.cwd(), '../../..', '.bin', binaryName),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  throw new Error(`Executable not found or not executable: ${binaryName}`);
+}
+
 async function generateExtractorTargets(workingDir: string): Promise<void> {
   const sowPath = join(workingDir, SOW_PATH);
   const llmContextPath = join(workingDir, LLM_CONTEXT_PATH);
@@ -524,8 +542,7 @@ async function generateExtractorTargets(workingDir: string): Promise<void> {
 }
 
 async function runContextExtractor(workingDir: string): Promise<void> {
-  const contextExtractorPath = resolve(process.cwd(), '.bin/context-extractor');
-  await access(contextExtractorPath, constants.X_OK);
+  const contextExtractorPath = await resolveExecutablePath('context-extractor');
 
   console.log('[explore] Running context-extractor');
   await execFilePromise(
@@ -538,9 +555,15 @@ async function runContextExtractor(workingDir: string): Promise<void> {
 
 async function runExploreWorkflow(card: ExploreCard, callbackUrl: string) {
   const workingDir = typeof card.payload?.working_dir === 'string' ? card.payload.working_dir.trim() : process.cwd();
-  const contextGeneratorPath = resolve(process.cwd(), '.bin/context-generator');
   const warnings: string[] = [];
+  const generatedFiles: string[] = [];
   let targetGenerated = false;
+
+  const recordGeneratedFile = (relativePath: string) => {
+    if (!generatedFiles.includes(relativePath)) {
+      generatedFiles.push(relativePath);
+    }
+  };
 
   const addWarning = (message: string, err?: unknown) => {
     const details = err instanceof Error ? err.message : err ? String(err) : '';
@@ -550,16 +573,19 @@ async function runExploreWorkflow(card: ExploreCard, callbackUrl: string) {
   };
 
   try {
+    console.log(`[explore] Card ${card.display_id}: starting workflow in ${workingDir}`);
+
     // Step 1: write card mission content to .dossier/sow.md
     try {
       await writeCardContentToSow(workingDir, card);
+      recordGeneratedFile(SOW_PATH);
     } catch (err) {
       addWarning('Failed to write .dossier/sow.md from card content', err);
     }
 
     // Step 2: build repository map (best effort)
     try {
-      await access(contextGeneratorPath, constants.X_OK);
+      const contextGeneratorPath = await resolveExecutablePath('context-generator');
       console.log(`[explore] Card ${card.display_id}: running context-generator`);
       await execFilePromise(
         contextGeneratorPath,
@@ -567,6 +593,7 @@ async function runExploreWorkflow(card: ExploreCard, callbackUrl: string) {
         { cwd: workingDir, timeout: 60_000 },
       );
       console.log(`[explore] Card ${card.display_id}: context-generator completed`);
+      recordGeneratedFile(LLM_CONTEXT_PATH);
     } catch (err) {
       const code = typeof err === 'object' && err !== null && 'code' in err ? (err as { code?: string }).code : undefined;
       if (code === 'ENOENT') {
@@ -579,13 +606,21 @@ async function runExploreWorkflow(card: ExploreCard, callbackUrl: string) {
     // Step 3: generate JSONL targets + run context-extractor (best effort)
     try {
       await generateExtractorTargets(workingDir);
+      recordGeneratedFile(EXTRACT_TARGET_JSONL_PATH);
       await runContextExtractor(workingDir);
+      recordGeneratedFile(LLM_TARGET_MD_PATH);
       targetGenerated = true;
     } catch (err) {
       addWarning('Failed to generate llm_target.md', err);
     }
   } catch (err) {
     addWarning('Unexpected explore workflow failure', err);
+  }
+
+  if (generatedFiles.length > 0) {
+    console.log(`[explore] Card ${card.display_id}: generated files -> ${generatedFiles.join(', ')}`);
+  } else {
+    console.warn(`[explore] Card ${card.display_id}: generated files -> none`);
   }
 
   const existingBody = typeof card.payload?.body === 'string' ? card.payload.body : '';
@@ -603,8 +638,10 @@ async function runExploreWorkflow(card: ExploreCard, callbackUrl: string) {
   const updatedPayload: Record<string, unknown> = {
     ...card.payload,
     body: updatedBody,
+    llm_context_md: LLM_CONTEXT_PATH,
     llm_extract_target_jsonl: EXTRACT_TARGET_JSONL_PATH,
     llm_target_md: LLM_TARGET_MD_PATH,
+    generated_files: generatedFiles,
     ...(warnings.length > 0 ? { explore_warnings: warnings } : {}),
   };
 

@@ -127,10 +127,7 @@ export async function startProcessing(
   const idempotencyKey = randomUUID();
   const callbackBaseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 8080}`;
   const callbackUrl = `${callbackBaseUrl.replace(/\/$/, '')}/api/callbacks/${token}`;
-  const processor = getProcessorById(db, processingColumn.processor_id);
-  if (!processor) {
-    throw new Error('PROCESSOR_NOT_FOUND');
-  }
+  const processor = getProcessorById(db, processingColumn.processor_id) ?? getDefaultProcessor(processingColumn.processor_id);
 
   const expiresAt = new Date(Date.now() + (processor.max_sla_seconds ?? 600) * 1000).toISOString();
 

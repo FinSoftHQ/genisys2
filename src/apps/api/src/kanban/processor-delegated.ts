@@ -80,18 +80,18 @@ async function delegateTask(card: {
       return;
     }
 
-    // Legacy single-child path: kickstart the child into agentic-team and advance parent to wrap
+    // Legacy single-child path: kickstart the child into explore and advance parent to wrap
     const todoCard = findRelatedTodoCard(card, taskBoard.uid);
     if (!todoCard) {
       fireAndForgetCallback(callbackUrl, { status: 'success' });
       return;
     }
 
-    const movedCard = moveCard({}, todoCard.board_uid, todoCard.uid, 'agentic-team', 'system:delegated');
+    const movedCard = moveCard({}, todoCard.board_uid, todoCard.uid, 'explore', 'system:delegated');
 
-    const agenticTeamColumn = taskBoard.schema.columns.find((c) => c.uid === 'agentic-team');
-    if (agenticTeamColumn && agenticTeamColumn.type === 'Processing' && movedCard) {
-      await startProcessing({}, taskBoard, movedCard, agenticTeamColumn as {
+    const exploreColumn = taskBoard.schema.columns.find((c) => c.uid === 'explore');
+    if (exploreColumn && exploreColumn.type === 'Processing' && movedCard) {
+      await startProcessing({}, taskBoard, movedCard, exploreColumn as {
         uid: string;
         title: string;
         type: 'Processing';
