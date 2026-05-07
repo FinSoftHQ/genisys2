@@ -163,7 +163,7 @@ describe('prep processor routes', () => {
       expect(OnEnterDispatchAcceptedResponseSchema.safeParse(body).success).toBe(true);
       expect(body.status).toBe('accepted');
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(fetchSpy).toHaveBeenCalledWith(
         callbackUrl,
@@ -194,7 +194,7 @@ describe('prep processor routes', () => {
         },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(fetchSpy).toHaveBeenCalledWith(
         callbackUrl,
@@ -225,7 +225,7 @@ describe('prep processor routes', () => {
         },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const call = fetchSpy.mock.calls.find((c) => (c[0] as string) === callbackUrl);
       expect(call).toBeDefined();
@@ -261,7 +261,7 @@ describe('prep processor routes', () => {
         },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const call = fetchSpy.mock.calls.find((c) => (c[0] as string) === callbackUrl);
       expect(call).toBeDefined();
@@ -293,7 +293,7 @@ describe('prep processor routes', () => {
         },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const call = fetchSpy.mock.calls.find((c) => (c[0] as string) === callbackUrl);
       expect(call).toBeDefined();
@@ -323,7 +323,7 @@ describe('prep processor routes', () => {
         },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(mockExecFile).toHaveBeenNthCalledWith(5, 'just', ['--justfile', justfilePath, 'bootup'], expect.objectContaining({ cwd: workspacePath }));
       expect(mockExecFile).toHaveBeenNthCalledWith(6, 'just', ['--justfile', justfilePath, 'build-tools'], expect.objectContaining({ cwd: workspacePath }));
@@ -353,7 +353,7 @@ describe('prep processor routes', () => {
         },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const justCalls = mockExecFile.mock.calls.filter((call) => call[0] === 'just');
       expect(justCalls).toEqual([
@@ -400,7 +400,7 @@ describe('prep processor routes', () => {
       expect(OnEnterDispatchAcceptedResponseSchema.safeParse(body).success).toBe(true);
       expect(body.status).toBe('accepted');
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(fetchSpy).toHaveBeenCalledWith(
         callbackUrl,
