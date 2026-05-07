@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { useToast } from '#imports';
 import type { CardEntity, SnapshotResponse, MoveCardRequest, MoveCardResponse } from '@repo/shared';
 import { useBoardStore } from '~/composables/useBoardStore';
 import { useBoardRealtime } from '~/composables/useBoardRealtime';

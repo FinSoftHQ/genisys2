@@ -5,8 +5,8 @@ import { tmpdir } from "os";
 import { join, resolve, isAbsolute } from "path";
 import type { FastifyReply } from "fastify";
 import { parseProtocol, type Protocol, parseAgentPromptFile } from "@repo/shared";
-import { attachJsonlReader } from "../squads/jsonl.js";
-import { SquadLogger, loggingEnabled } from "../squads/logger.js";
+import { attachJsonlReader } from "./internal/jsonl.js";
+import { RoomLogger, loggingEnabled } from "./internal/room-logger.js";
 
 export type RoomStatus =
 	| "initialized"
@@ -75,8 +75,8 @@ interface AgentState {
 	isStreaming: boolean;
 	pendingUiRequest: boolean;
 	status: "idle" | "streaming" | "error";
-	logger: SquadLogger;
-	// Event coalescing buffers (mirrors SquadLogger internals)
+	logger: RoomLogger;
+	// Event coalescing buffers (mirrors RoomLogger internals)
 	_textBuf: string;
 	_thinkingBuf: string;
 	_msgTs: number;
@@ -696,7 +696,7 @@ function attachAgentEventHandlers(room: Room, agent: AgentState): void {
 			}
 		}
 
-		// ── Event storage (coalesced, mirrors SquadLogger output) ────────────
+		// ── Event storage (coalesced, mirrors RoomLogger output) ─────────────
 		const now = new Date().toISOString();
 		let messageText = "";
 		switch (type) {
@@ -913,7 +913,7 @@ export async function createRoom(
 			isStreaming: false,
 			pendingUiRequest: false,
 			status: "idle",
-			logger: new SquadLogger(name),
+			logger: new RoomLogger(name),
 			_textBuf: "",
 			_thinkingBuf: "",
 			_msgTs: 0,

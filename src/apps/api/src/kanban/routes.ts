@@ -20,7 +20,6 @@ import {
   AuditLogQuerySchema,
   BoardStreamRequestHeadersSchema,
   CreateCardRelationshipRequestSchema,
-  CardFamilyResponseSchema,
   ListBoardSuitesResponseSchema,
   BoardSuiteResponseSchema,
   BoardSuiteSnapshotResponseSchema,
@@ -259,7 +258,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
             proposed_payload: body.data.payload,
             actor,
           });
-        } catch (_err) {
+        } catch {
           return reply.status(503).send({
             error: {
               code: 'PROCESSOR_UNAVAILABLE',
@@ -355,7 +354,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
         let hookResult;
         try {
           hookResult = await dispatchSyncHook(processor, dispatchRequest, hookPayload);
-        } catch (_err) {
+        } catch {
           return reply.status(409).send({
             error: {
               code: 'MOVE_BLOCKED',
@@ -570,7 +569,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
         callback_url: callbackUrl,
         idempotency_key: idempotencyKey,
       });
-    } catch (_err) {
+    } catch {
       return reply.status(503).send({
         error: {
           code: 'PROCESSOR_UNAVAILABLE',

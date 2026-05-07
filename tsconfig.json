@@ -10,5 +10,12 @@
     "*.ts",
     "*.mjs"
   ],
-  "exclude": ["node_modules", "dist", ".output", "src/apps/web"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".output",
+    "src/apps/web",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ]
 }

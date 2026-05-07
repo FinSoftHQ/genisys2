@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    include: ['src/libs/logger/**/*.test.ts', 'src/libs/logger/**/*.spec.ts'],
   },
 });

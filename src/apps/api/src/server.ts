@@ -10,7 +10,6 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import { createLogger } from '@repo/logger';
-import { squadRoutes } from './squads/routes.js';
 import { agentRoomRoutes } from './agent-rooms/index.js';
 import { proxyRoomRoutes } from './proxy-room/index.js';
 import { kanbanRoutes, suiteRoutes, callbackRoutes } from './kanban/routes.js';
@@ -28,9 +27,6 @@ import { devWrapupRoutes } from './dev-wrapup/routes.js';
 if (process.versions.bun && process.env.NODE_ENV === 'production') {
   throw new Error('Production requires Node.js 22. Bun runtime is not supported in Azure Oryx.');
 }
-
-const port = Number(process.env.PORT) || 8080;
-const host = '0.0.0.0';
 
 export const app = fastify({
   loggerInstance: createLogger({ name: 'api' }),
@@ -82,7 +78,6 @@ await app.register(
   { prefix: '/api' }
 );
 
-await app.register(squadRoutes, { prefix: '/api/v1/squads' });
 await app.register(agentRoomRoutes, { prefix: '/api/v1/agent-rooms' });
 await app.register(proxyRoomRoutes, { prefix: '/api/v1/proxy-room' });
 await app.register(kanbanRoutes, { prefix: '/api/boards' });
@@ -110,5 +105,3 @@ process.on('SIGTERM', () => {
     process.exit(1);
   });
 });
-
-

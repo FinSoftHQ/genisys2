@@ -63,16 +63,18 @@ Re-read the full document at the start of every phase (5 minutes). Priorities an
 
 ## Phase 0 — Preconditions (1 PR, ~2h)
 
-- [ ] **0.1** Confirm CI runs `pnpm lint && pnpm typecheck && pnpm test` on every PR; add if missing.
-- [ ] **0.2** Capture a `vitest --coverage` baseline; commit summary to `docs/coverage-baseline.md` as a regression guardrail.
-- [ ] **0.3** Add `eslint-plugin-import` `no-cycle` and `max-lines` (warn at 500). Allowlist current offenders so the rule isn't blocking.
-- [ ] **0.4** Document the "no `instance: unknown`" target and the 400/250 LOC ceiling in `docs/conventions.md`.
+- [x] **0.1** Confirm CI runs `pnpm lint && pnpm typecheck && pnpm test` on every PR; add if missing.
+- [x] **0.2** Capture a `vitest --coverage` baseline; commit summary to `docs/coverage-baseline.md` as a regression guardrail.
+- [x] **0.3** Add `eslint-plugin-import` `no-cycle` and `max-lines` (warn at 500). Allowlist current offenders so the rule isn't blocking.
+- [x] **0.4** Document the "no `instance: unknown`" target and the 400/250 LOC ceiling in `docs/conventions.md`.
 
 **Exit criteria:** lint/typecheck/test pass; baseline metrics committed.
 
+Current status (2026-05-08): tasks 0.1-0.4 completed; `pnpm lint`, `pnpm typecheck`, and `pnpm test` are green (lint warnings only).
+
 ## Phase 1 — Quick wins, no behavior change (~3 PRs, 1 day)
 
-- [ ] **1.1** **Delete legacy `squads/`** (confirmed internal-only).
+- [x] **1.1** **Delete legacy `squads/`** (confirmed internal-only).
   - Remove `src/apps/api/src/squads/{manager,manager.test,routes,jsonl,logger}.ts`.
   - Move the still-used pieces (`jsonl.ts`, `SquadLogger` → renamed `RoomLogger`) into `agent-rooms/internal/`.
   - Drop `squadRoutes` registration from `server.ts`.

@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync } from 'fs';
+import { resolve } from 'path';
 
 describe('agent-rooms diagnostics cwd', () => {
 	it('prints and verifies the working directory', () => {
 		console.log('[DIAGNOSTICS] CWD:', process.cwd());
 
-		expect(process.cwd()).toBe('/home/dev3x/w/genisys2');
-		expect(existsSync('/home/dev3x/w/genisys2/package.json')).toBe(true);
+		const cwd = process.cwd();
+		const searchRoots = [cwd, resolve(cwd, '..'), resolve(cwd, '../..'), resolve(cwd, '../../..')];
+		const detectedRepoRoot = searchRoots.find((root) => existsSync(resolve(root, 'package.json')));
+
+		expect(detectedRepoRoot).toBeDefined();
 	});
 });

@@ -7,7 +7,7 @@
     "dev": "nuxt dev",
     "build": "nuxt build",
     "start": "node .output/server/index.mjs",
-    "typecheck": "nuxt typecheck"
+    "typecheck": "nuxt prepare && vue-tsc --noEmit -p tsconfig.typecheck.json"
   },
   "dependencies": {
     "@iconify-json/lucide": "catalog:",
@@ -21,11 +21,13 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "@vitejs/plugin-vue": "catalog:",
+    "@vue/language-core": "catalog:",
     "@vue/test-utils": "catalog:",
     "happy-dom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:",
+    "vue-tsc": "catalog:",
     "vue-router": "5.0.6"
   }
 }

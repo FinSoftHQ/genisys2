@@ -113,7 +113,7 @@ function onDragStart(event: DragEvent) {
         class="gap-1"
       >
         <UIcon name="i-lucide-arrow-up" class="size-3" />
-        Parent: {{ card.parents[0].display_id }}
+        Parent: {{ card.parents?.[0]?.display_id }}
       </UBadge>
       <UBadge
         v-if="card.children?.length"
