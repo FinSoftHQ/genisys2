@@ -34,8 +34,25 @@ function fireAndForgetCallback(callbackUrl: string, payload: Record<string, unkn
 
 const GITHUB_URL_REGEX = /(?:https?:\/\/github\.com\/[^\/\s]+\/[^\/\s]+(?:\.git)?|git@github\.com[^:\s]*:[^\/\s]+\/[^\/\s]+(?:\.git)?)/i;
 
+function extractFrontMatterScalar(description: string, key: string): string | undefined {
+  if (!description.startsWith('---')) return undefined;
+  const endIdx = description.indexOf('\n---', 3);
+  if (endIdx === -1) return undefined;
+  const frontMatter = description.slice(3, endIdx).trim();
+  const prefix = `${key}:`;
+  for (const rawLine of frontMatter.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith(prefix)) {
+      const value = line.slice(prefix.length).trim();
+      return value.length > 0 ? value : undefined;
+    }
+  }
+  return undefined;
+}
+
 function parseCardDescription(description: string | null | undefined): {
   repo?: string;
+  branch?: string;
   teamName?: string;
   tailorShop?: string;
   body?: string;
@@ -50,8 +67,14 @@ function parseCardDescription(description: string | null | undefined): {
   }
   try {
     const parsed = parseProtocolFromString(description, { requireTeam: false });
+    const parsedBranch = typeof (parsed as { branch?: unknown }).branch === 'string'
+      ? (parsed as { branch?: string }).branch?.trim()
+      : undefined;
+    const branch = parsedBranch || extractFrontMatterScalar(description, 'branch');
+
     const result: ReturnType<typeof parseCardDescription> = {
       ...(parsed.repo ? { repo: parsed.repo } : {}),
+      ...(branch ? { branch } : {}),
       ...(parsed.teamName ? { teamName: parsed.teamName } : {}),
       ...(parsed.body ? { body: parsed.body } : {}),
       ...(parsed.team && Object.keys(parsed.team).length > 0 ? { team: parsed.team } : {}),
@@ -185,10 +208,13 @@ async function runPrepWorkflow(
 
     const workspacePath = getWorkspacePath(card.display_id);
     console.log(`[prep] Card ${card.display_id}: cloning ${repositoryUrl} into ${workspacePath}`);
-    console.log('[prep] Parsed description for card', card.display_id, '→ repo:', repositoryUrl, 'tailor_shop:', parsed.tailorShop);
+    console.log('[prep] Parsed description for card', card.display_id, '→ repo:', repositoryUrl, 'branch:', parsed.branch, 'tailor_shop:', parsed.tailorShop);
 
-    // 1. Clone
-    await execFilePromise('git', ['clone', repositoryUrl, workspacePath], { timeout: 120_000 });
+    // 1. Clone (optionally from requested branch)
+    const cloneArgs = parsed.branch
+      ? ['clone', '--branch', parsed.branch, repositoryUrl, workspacePath]
+      : ['clone', repositoryUrl, workspacePath];
+    await execFilePromise('git', cloneArgs, { timeout: 120_000 });
 
     // 2. Configure git
     await execFilePromise('git', ['config', 'user.name', 'Teerachai Laothong'], { cwd: workspacePath });
@@ -212,6 +238,7 @@ async function runPrepWorkflow(
       repository_url: repositoryUrl,
       llm_context_md: LLM_CONTEXT_PATH,
       ...(parsed.repo ? { repo: parsed.repo } : {}),
+      ...(parsed.branch ? { repository_branch: parsed.branch } : {}),
       ...(parsed.tailorShop ? { tailor_shop: parsed.tailorShop } : {}),
       ...(parsed.teamName ? { team_name: parsed.teamName } : {}),
       ...(parsed.team ? { team: parsed.team } : {}),

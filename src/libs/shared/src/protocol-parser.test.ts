@@ -142,6 +142,16 @@ describe('parseProtocol', () => {
 		);
 	});
 
+	it('parses branch field', () => {
+		withTempFile(
+			`---\nteam:\n  alice: Developer\nbranch: feature/test-branch\n---\n\nHello team!`,
+			(path) => {
+				const result = parseProtocol(path);
+				expect(result.branch).toBe('feature/test-branch');
+			},
+		);
+	});
+
 	it('parses team_name field', () => {
 		withTempFile(
 			`---\nteam:\n  alice: Developer\nteam_name: dev\n---\n\nHello team!`,
@@ -214,10 +224,11 @@ describe('parseProtocol', () => {
 
 describe('parseProtocolFromString', () => {
 	it('parses front matter and body from a string', () => {
-		const content = `---\nteam:\n  alice: Developer\nrepo: https://github.com/org/repo.git\n---\n\nDo the work.`;
+		const content = `---\nteam:\n  alice: Developer\nrepo: https://github.com/org/repo.git\nbranch: feature/checkout-me\n---\n\nDo the work.`;
 		const result = parseProtocolFromString(content);
 		expect(result.team).toEqual({ alice: 'Developer' });
 		expect(result.repo).toBe('https://github.com/org/repo.git');
+		expect(result.branch).toBe('feature/checkout-me');
 		expect(result.body).toBe('Do the work.');
 	});
 
