@@ -26,10 +26,14 @@ vi.mock('./repository.js', () => ({
   listBoards: (...args: unknown[]) => mockListBoards(...args),
 }));
 
-vi.mock('@mariozechner/pi-ai', () => ({
-  complete: (...args: unknown[]) => mockComplete(...args),
-  getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: args[0], modelId: args[1] },
-}));
+vi.mock('@mariozechner/pi-ai', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mariozechner/pi-ai')>();
+  return {
+    ...actual,
+    complete: (...args: unknown[]) => mockComplete(...args),
+    getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: args[0], modelId: args[1] },
+  };
+});
 
 vi.mock('../lib/ai-auth.js', () => ({
   getApiKey: vi.fn().mockResolvedValue('fake-api-key'),
@@ -106,7 +110,7 @@ const mockParentCard = {
 };
 
 function makePlanningV1Response(overrides?: { tasks?: unknown[]; clarification_needed?: unknown }) {
-  return JSON.stringify({
+  const header = {
     version: 'planning.v1',
     pre_flight: {
       complexity_level: 'standard',
@@ -126,9 +130,14 @@ function makePlanningV1Response(overrides?: { tasks?: unknown[]; clarification_n
       required: false,
       questions: [],
     },
-    tasks: [],
-    ...overrides,
-  });
+  };
+  const tasks = overrides?.tasks ?? [];
+  const clarification = overrides?.clarification_needed;
+  const lines = [
+    JSON.stringify(clarification !== undefined ? { ...header, clarification_needed: clarification } : header),
+    ...(Array.isArray(tasks) ? tasks.map((t) => JSON.stringify(t)) : []),
+  ];
+  return lines.join('\n');
 }
 
 function makeLlmResponse(text: string) {
@@ -674,6 +683,246 @@ describe('planning processor routes', () => {
       expect(payload.payload_updates.payload.planning_validation_errors).toEqual(
         expect.arrayContaining([expect.stringContaining('self-dependency')])
       );
+    });
+
+    it('extracts JSONL from markdown code fences with prose', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // LLM wrapped JSONL in ```jsonl ... ``` with prose before and after
+      const fencedJsonl = `Now I have the full picture. Let me break this down.
+
+\`\`\`jsonl
+${makePlanningV1Response({
+  tasks: [
+    {
+      id: 'T1',
+      title: 'Implement login endpoint',
+      type: 'implementation',
+      body: ['Create the POST /login endpoint.'],
+      depends_on: [],
+      acceptance: ['POST /login returns 200.'],
+      instructions: { agent_name: null, notes: [] },
+      risk: [],
+    },
+  ],
+})}
+\`\`\`
+
+Hope this helps! Let me know if you need anything else.`;
+
+      mockComplete.mockResolvedValue(makeLlmResponse(fencedJsonl));
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440040';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440040',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockComplete).toHaveBeenCalledTimes(1);
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(1);
+      expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
+    });
+
+    it('extracts JSONL from plain markdown fences', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // LLM used plain ``` ... ``` without language tag
+      const plainFencedJsonl = `Here is the plan:
+
+\`\`\`
+${makePlanningV1Response({
+  tasks: [
+    {
+      id: 'T1',
+      title: 'Implement login endpoint',
+      type: 'implementation',
+      body: ['Create the POST /login endpoint.'],
+      depends_on: [],
+      acceptance: ['POST /login returns 200.'],
+      instructions: { agent_name: null, notes: [] },
+      risk: [],
+    },
+  ],
+})}
+\`\`\``;
+
+      mockComplete.mockResolvedValue(makeLlmResponse(plainFencedJsonl));
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440041';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440041',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockComplete).toHaveBeenCalledTimes(1);
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(1);
+      expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
+    });
+
+    it('recovers from truncated JSONL via repair pass', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // First call: truncated JSONL — last task line is incomplete
+      const truncatedJsonl = makePlanningV1Response({
+        tasks: [
+          {
+            id: 'T1',
+            title: 'Implement login endpoint',
+            type: 'implementation',
+            body: ['Create the POST /login endpoint.'],
+            depends_on: [],
+            acceptance: ['POST /login returns 200.'],
+            instructions: { agent_name: null, notes: [] },
+            risk: [],
+          },
+        ],
+      }) + '\n{"id":"T2","title":"Implement signup endpoint","type":"implementation","body":["Create the';
+
+      mockComplete
+        .mockResolvedValueOnce(makeLlmResponse(truncatedJsonl))
+        .mockResolvedValueOnce(
+          makeLlmResponse(
+            makePlanningV1Response({
+              tasks: [
+                {
+                  id: 'T1',
+                  title: 'Implement login endpoint',
+                  type: 'implementation',
+                  body: ['Create the POST /login endpoint.'],
+                  depends_on: [],
+                  acceptance: ['POST /login returns 200.'],
+                  instructions: { agent_name: null, notes: [] },
+                  risk: [],
+                },
+                {
+                  id: 'T2',
+                  title: 'Implement signup endpoint',
+                  type: 'implementation',
+                  body: ['Create the POST /signup endpoint.'],
+                  depends_on: [],
+                  acceptance: ['POST /signup returns 201.'],
+                  instructions: { agent_name: null, notes: [] },
+                  risk: [],
+                },
+              ],
+            })
+          )
+        );
+
+      mockCreateCard
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440010',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-10',
+          title: 'Implement login endpoint',
+        })
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440011',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-11',
+          title: 'Implement signup endpoint',
+        });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440030';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440030',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockComplete).toHaveBeenCalledTimes(2);
+      expect(mockCreateCard).toHaveBeenCalledTimes(2);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(2);
     });
 
     it('generates and appends markdown summary on success', async () => {

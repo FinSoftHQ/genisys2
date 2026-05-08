@@ -33,10 +33,14 @@ vi.mock('./exec-helpers.js', () => ({
   execFilePromise: (...args: unknown[]) => mockExecFilePromise(...args),
 }));
 
-vi.mock('@mariozechner/pi-ai', () => ({
-  complete: (...args: unknown[]) => mockComplete(...args),
-  getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: 'opencode-go', modelId: 'deepseek-v4-flash' },
-}));
+vi.mock('@mariozechner/pi-ai', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mariozechner/pi-ai')>();
+  return {
+    ...actual,
+    complete: (...args: unknown[]) => mockComplete(...args),
+    getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: 'opencode-go', modelId: 'deepseek-v4-flash' },
+  };
+});
 
 vi.mock('../lib/ai-auth.js', () => ({
   getApiKey: (...args: unknown[]) => mockGetApiKey(...args),

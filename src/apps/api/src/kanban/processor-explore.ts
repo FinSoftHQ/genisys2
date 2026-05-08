@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { access, constants, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
-import { complete, getModel } from '@mariozechner/pi-ai';
+import { getModel } from '@mariozechner/pi-ai';
 import { getApiKey } from '../lib/ai-auth.js';
+import { readFileTool, runLlmWithToolLoop } from '../lib/llm-tool-loop.js';
 import { execFilePromise } from './exec-helpers.js';
 import {
   OnEnterDispatchRequestSchema,
@@ -496,30 +497,25 @@ async function generateExtractorTargets(workingDir: string): Promise<void> {
 
   console.log('[explore] Generating context-extractor JSONL with LLM');
 
-  const response = await complete(
-    preferredModel,
-    {
-      systemPrompt: trimForPrompt(LLM_CONTEXT_PATH, llmContextContent),
-      messages: [
-        {
-          role: 'user',
-          content: buildExtractTargetPrompt(workingDir, sowContent),
-          timestamp: Date.now(),
-        },
-      ],
-    },
-    { apiKey },
-  );
+  const result = await runLlmWithToolLoop({
+    model: preferredModel,
+    apiKey,
+    systemPrompt: trimForPrompt(LLM_CONTEXT_PATH, llmContextContent),
+    userMessage: buildExtractTargetPrompt(workingDir, sowContent),
+    workingDir,
+    tools: [readFileTool],
+    maxRounds: 3,
+    maxFilesPerRound: 7,
+    maxTokens: preferredModel.maxTokens,
+  });
 
-  if (response.stopReason === 'error') {
-    throw new Error(response.errorMessage || 'LLM provider error while generating extract targets');
+  console.log(`[explore] LLM completed in ${result.totalRounds} round(s)`);
+
+  if (result.stopReason === 'error') {
+    throw new Error('LLM provider error while generating extract targets');
   }
 
-  const llmText = response.content
-    .filter((part) => part.type === 'text')
-    .map((part) => (part as { text: string }).text)
-    .join('')
-    .trim();
+  const llmText = result.text.trim();
 
   if (!llmText) {
     throw new Error('LLM returned empty content for extract targets');

@@ -13,9 +13,9 @@ import {
   PlanningV1Schema,
 } from '@repo/shared';
 import type { PlanningV1 } from '@repo/shared';
-import { complete } from '@mariozechner/pi-ai';
 import { getModel } from '@mariozechner/pi-ai';
 import { getApiKey } from '../lib/ai-auth.js';
+import { readFileTool, runLlmWithToolLoop, writeToFileTool } from '../lib/llm-tool-loop.js';
 import { createCard, createCardRelationship, getBoardById, listBoards } from './repository.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
@@ -110,52 +110,27 @@ function buildPlanningPrompt(context: {
 ---
 
 **Output Format**
-Return ONLY a single JSON object conforming to the \`planning.v1\` schema shown below. Do not wrap the JSON in markdown code fences, and do not add conversational filler before or after it.
+Return ONLY valid JSONL (JSON Lines). Wrap the JSONL in a \` \`\`\`jsonl \` markdown code block. Do not add conversational filler before or after the code block.
 
-\`\`\`json
-{
-  "version": "planning.v1",
-  "pre_flight": {
-    "complexity_level": "trivial|standard|complex|epic",
-    "justification": "One-sentence rationale.",
-    "primary_type": "implementation|infrastructure|research|refactor|bugfix",
-    "ambiguity_status": "none|needs_clarification",
-    "missing_info": ["string"],
-    "validation": {
-      "coverage_complete": true,
-      "fits_one_day": true,
-      "independently_testable": true,
-      "forward_dependencies_only": true,
-      "notes": ["string"]
-    }
-  },
-  "clarification_needed": {
-    "required": false,
-    "questions": ["string"]
-  },
-  "tasks": [
-    {
-      "id": "T1",
-      "title": "Subtask title",
-      "type": "implementation|infrastructure|research|refactor|bugfix",
-      "body": ["Paragraph chunk 1", "Paragraph chunk 2"],
-      "depends_on": ["T0"],
-      "acceptance": ["Pass/fail criterion 1", "Pass/fail criterion 2"],
-      "instructions": {
-        "agent_name": "none|string",
-        "notes": ["string"]
-      },
-      "risk": ["string"]
-    }
-  ]
-}
+Each line must be a standalone, minified JSON object. Use exactly one line per object.
+
+Example:
+
+\`\`\`jsonl
+{"version":"planning.v1","pre_flight":{"complexity_level":"trivial|standard|complex|epic","justification":"One-sentence rationale.","primary_type":"implementation|infrastructure|research|refactor|bugfix","ambiguity_status":"none|needs_clarification","missing_info":[],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":[]}},"clarification_needed":{"required":false,"questions":[]}}
+{"id":"T1","title":"Subtask title","type":"implementation|infrastructure|research|refactor|bugfix","body":["Paragraph chunk 1","Paragraph chunk 2"],"depends_on":[],"acceptance":["Pass/fail criterion 1","Pass/fail criterion 2"],"instructions":{"agent_name":"none","notes":[]},"risk":[]}
 \`\`\`
+
+**Line structure**
+- **Line 1**: Header object containing \`version\`, \`pre_flight\`, and \`clarification_needed\`.
+- **Lines 2–N**: One task object per line. Each task uses the same fields as shown above.
+- If \`clarification_needed.required\` is \`true\`, output ONLY the header line (no task lines).
 
 **Field guidance**
 - \`body\`: Use paragraph chunks (not one array entry per physical line).
 - \`acceptance\`: Each item must be pass/fail and testable.
 - \`depends_on\`: Array of task IDs (e.g. \`["T1"]\`). Never depend on title text. Use \`[]\` for no dependencies.
-- If \`clarification_needed.required\` is \`true\`, \`tasks\` MUST be an empty array \`[]\`.
+- Output compact/minified JSON (no extra spaces or newlines inside a line).
 
 ---
 
@@ -169,9 +144,9 @@ ${context.body}
 ${instructionsBlock}---
 
 **Final Output Rules**
-- Output ONLY valid JSON conforming to \`planning.v1\`. No markdown code fences around the entire output, no bullet summaries outside the JSON.
-- Ensure all \`depends_on\` references use task \`id\` values that appear earlier in the \`tasks\` array.
-- End the entire output with the closing brace of the JSON object.`;
+- Output ONLY valid JSONL inside a \` \`\`\`jsonl \` code block. No prose before or after the block, no bullet summaries outside it.
+- Ensure all \`depends_on\` references use task \`id\` values that appear earlier in the output.
+- The first line must be the header object. Every subsequent line must be one task object.`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -182,20 +157,75 @@ type ParsePlanningResult =
   | { success: true; data: PlanningV1 }
   | { success: false; errors: string[]; raw: string };
 
-function extractJsonFromText(text: string): string {
-  // Explicit markdown code block extraction
-  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) {
-    return fenceMatch[1].trim();
+function extractJsonlFromText(text: string): {
+  header: unknown;
+  tasks: unknown[];
+  lineErrors: string[];
+} {
+  const allLines = text.split(/\r?\n/).map((line) => line.trim());
+
+  // Detect markdown code fences and extract content between them
+  let jsonlLines: string[] = [];
+  const fenceOpenRegex = /^```(?:jsonl)?\s*$/;
+  const fenceCloseRegex = /^```\s*$/;
+
+  let insideFence = false;
+  for (const line of allLines) {
+    if (!insideFence && fenceOpenRegex.test(line)) {
+      insideFence = true;
+      continue;
+    }
+    if (insideFence && fenceCloseRegex.test(line)) {
+      insideFence = false;
+      continue;
+    }
+    if (insideFence) {
+      jsonlLines.push(line);
+    }
   }
 
-  // Fallback: find first '{' and last '}'
-  const firstBrace = text.indexOf('{');
-  const lastBrace = text.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
-    return text.trim();
+  // If fences were found, use only fenced content; otherwise fall back to all non-empty lines
+  const lines =
+    jsonlLines.length > 0
+      ? jsonlLines.filter((line) => line.length > 0)
+      : allLines.filter((line) => line.length > 0 && !line.startsWith('```'));
+
+  const parsedObjects: unknown[] = [];
+  const lineErrors: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isLastLine = i === lines.length - 1;
+
+    if (!line.startsWith('{') || !line.endsWith('}')) {
+      if (isLastLine) {
+        lineErrors.push(`Line ${i + 1} appears truncated (incomplete JSON object)`);
+        continue;
+      }
+      lineErrors.push(`Line ${i + 1} is not a valid JSON object`);
+      continue;
+    }
+
+    try {
+      parsedObjects.push(JSON.parse(line));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isLastLine) {
+        lineErrors.push(`Line ${i + 1} JSON parse error (truncated?): ${message}`);
+        continue;
+      }
+      lineErrors.push(`Line ${i + 1} JSON parse error: ${message}`);
+    }
   }
-  return text.slice(firstBrace, lastBrace + 1);
+
+  if (parsedObjects.length === 0) {
+    return { header: null, tasks: [], lineErrors: [...lineErrors, 'No valid JSONL lines found'] };
+  }
+
+  const header = parsedObjects[0];
+  const tasks = parsedObjects.slice(1);
+
+  return { header, tasks, lineErrors };
 }
 
 function hasDependencyCycle(tasks: PlanningV1['tasks']): boolean {
@@ -229,30 +259,33 @@ function hasDependencyCycle(tasks: PlanningV1['tasks']): boolean {
   return false;
 }
 
-function parsePlanningV1(rawText: string): ParsePlanningResult {
-  const jsonText = extractJsonFromText(rawText);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[planning] JSON parse error: ${message}`);
-    console.error(`[planning] Extracted JSON text (first 2000 chars):\n${jsonText.slice(0, 2000)}`);
-    return { success: false, errors: [`JSON parse error: ${message}`], raw: rawText };
+function parsePlanningV1Jsonl(rawText: string): ParsePlanningResult {
+  const { header, tasks, lineErrors } = extractJsonlFromText(rawText);
+
+  if (header === null) {
+    console.error(`[planning] JSONL parse failed: ${lineErrors.join('; ')}`);
+    console.error(`[planning] Raw text (first 2000 chars):\n${rawText.slice(0, 2000)}`);
+    return { success: false, errors: lineErrors, raw: rawText };
   }
 
-  const zodResult = PlanningV1Schema.safeParse(parsed);
+  // Assemble into PlanningV1 shape
+  const assembled = {
+    ...(typeof header === 'object' && header !== null ? header : {}),
+    tasks,
+  };
+
+  const zodResult = PlanningV1Schema.safeParse(assembled);
   if (!zodResult.success) {
     const issues = zodResult.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
     console.error(`[planning] Schema validation failed with ${issues.length} issue(s):`);
     for (const issue of issues) {
       console.error(`[planning]   - ${issue}`);
     }
-    return { success: false, errors: [`Schema validation failed: ${issues.join('; ')}`], raw: rawText };
+    return { success: false, errors: [...lineErrors, `Schema validation failed: ${issues.join('; ')}`], raw: rawText };
   }
 
   const data = zodResult.data;
-  const semanticErrors: string[] = [];
+  const semanticErrors: string[] = [...lineErrors];
 
   // Semantic checks
   if (!data.clarification_needed.required && data.tasks.length === 0) {
@@ -291,35 +324,38 @@ function parsePlanningV1(rawText: string): ParsePlanningResult {
 /*  LLM session with repair                                            */
 /* ------------------------------------------------------------------ */
 
-async function runPlanningSession(prompt: string): Promise<ParsePlanningResult> {
+async function runPlanningSession(prompt: string, workingDir?: string): Promise<ParsePlanningResult> {
   const preferredModel = getModel('opencode-go', 'deepseek-v4-pro');
 
   console.log('[planning] Starting AI planning completion');
 
   const apiKey = await getApiKey(preferredModel.provider);
 
-  const response = await complete(
-    preferredModel,
-    {
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-          timestamp: Date.now(),
-        },
-      ],
-    },
-    { apiKey }
-  );
+  const result = await runLlmWithToolLoop({
+    model: preferredModel,
+    apiKey,
+    systemPrompt: prompt,
+    userMessage: 'Please produce the task breakdown as valid JSON conforming to the planning.v1 schema above.',
+    workingDir,
+    tools: [readFileTool, writeToFileTool],
+    maxRounds: 1,
+    maxFilesPerRound: 3,
+    maxTokens: preferredModel.maxTokens,
+  });
 
-  if (response.stopReason === 'error') {
-    throw new Error(response.errorMessage || 'LLM provider error');
+  if (result.stopReason === 'error') {
+    throw new Error('LLM provider error');
   }
 
-  const textContent = response.content
-    .filter((c) => c.type === 'text')
-    .map((c) => (c as { text: string }).text)
-    .join('');
+  console.log(`[planning] LLM completed in ${result.totalRounds} round(s)`);
+
+  // Prefer captured writes (e.g., from write_to_file tool calls) over raw text
+  let textContent = result.text;
+  const capturedWriteValues = Object.values(result.capturedWrites);
+  if (capturedWriteValues.length > 0 && capturedWriteValues[0].trim()) {
+    textContent = capturedWriteValues[0];
+    console.log('[planning] Using captured write content as raw output');
+  }
 
   if (!textContent.trim()) {
     throw new Error('LLM returned empty text');
@@ -327,11 +363,11 @@ async function runPlanningSession(prompt: string): Promise<ParsePlanningResult> 
 
   console.log('[planning] Raw LLM output:\n', textContent);
 
-  return parsePlanningV1(textContent);
+  return parsePlanningV1Jsonl(textContent);
 }
 
-async function runPlanningSessionWithRepair(prompt: string): Promise<ParsePlanningResult> {
-  const firstResult = await runPlanningSession(prompt);
+async function runPlanningSessionWithRepair(prompt: string, workingDir?: string): Promise<ParsePlanningResult> {
+  const firstResult = await runPlanningSession(prompt, workingDir);
   if (firstResult.success) {
     return firstResult;
   }
@@ -339,7 +375,9 @@ async function runPlanningSessionWithRepair(prompt: string): Promise<ParsePlanni
   console.log('[planning] First parse/validation failed, attempting repair pass');
   console.error(`[planning] First pass errors:\n${firstResult.errors.map((e) => `  - ${e}`).join('\n')}`);
 
-  const repairPrompt = `The previous planning output was invalid. Here is the raw output:
+  const repairPrompt = `The previous planning output was invalid. The output should be JSONL: line 1 is a header with version, pre_flight, and clarification_needed; each subsequent line is one task object.
+
+Here is the raw output:
 
 ---
 ${firstResult.raw}
@@ -348,9 +386,9 @@ ${firstResult.raw}
 Here are the errors:
 ${firstResult.errors.map((e) => `- ${e}`).join('\n')}
 
-Please return ONLY a valid \`planning.v1\` JSON object that fixes these issues. Do not include markdown code fences or any extra text.`;
+Please return ONLY valid JSONL that fixes these issues. Line 1 = header, lines 2+ = tasks. Do not include markdown code fences or any extra text.`;
 
-  const repairResult = await runPlanningSession(repairPrompt);
+  const repairResult = await runPlanningSession(repairPrompt, workingDir);
   if (repairResult.success) {
     console.log('[planning] Repair pass succeeded');
     return repairResult;
@@ -499,8 +537,9 @@ async function delegatePlanning(
     // Attempt LLM-based subtask planning with repair
     let result: ParsePlanningResult = { success: false, errors: ['Not attempted'], raw: '' };
     try {
+      const workingDir = typeof card.payload?.working_dir === 'string' ? card.payload.working_dir.trim() : undefined;
       const context = extractCardContext(card);
-      result = await runPlanningSessionWithRepair(buildPlanningPrompt(context));
+      result = await runPlanningSessionWithRepair(buildPlanningPrompt(context), workingDir);
     } catch (llmErr) {
       const message = llmErr instanceof Error ? llmErr.message : String(llmErr);
       console.error(`[planning] LLM planning failed, continuing with clone: ${message}`);
