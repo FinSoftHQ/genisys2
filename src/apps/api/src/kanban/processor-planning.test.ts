@@ -180,7 +180,7 @@ describe('planning processor routes', () => {
   });
 
   describe('POST /api/kanban-processor/planning/on-enter', () => {
-    it('creates a single clone card and stores planned tasks', async () => {
+    it('creates multiple task cards and stores planned tasks', async () => {
       mockGetBoardById.mockReturnValue(mockDevBoard);
       mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
       mockParseProtocolFromString.mockReturnValue({
@@ -198,12 +198,19 @@ describe('planning processor routes', () => {
         ],
       } as unknown as Awaited<ReturnType<typeof mockComplete>>);
 
-      mockCreateCard.mockReturnValue({
-        uid: '550e8400-e29b-41d4-a716-446655440010',
-        board_uid: mockTaskBoard.uid,
-        display_id: 'TSK-10',
-        title: 'Implement auth system',
-      });
+      mockCreateCard
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440010',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-10',
+          title: 'Implement login endpoint',
+        })
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440011',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-11',
+          title: 'Implement signup endpoint',
+        });
 
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440020';
       const response = await app.inject({
@@ -225,13 +232,41 @@ describe('planning processor routes', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(mockCreateCard).toHaveBeenCalledTimes(1);
-      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(1);
+      expect(mockCreateCard).toHaveBeenCalledTimes(2);
+      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(2);
 
-      // Verify the clone uses parent's title and description
-      const createCall = mockCreateCard.mock.calls[0];
-      expect(createCall[2].title).toBe(mockParentCard.title);
-      expect(createCall[2].description).toBe(mockParentCard.description);
+      // Verify first task card uses task title and body
+      const firstCreateCall = mockCreateCard.mock.calls[0];
+      expect(firstCreateCall[2].title).toBe('Implement login endpoint');
+      expect(firstCreateCall[2].description).toContain('Create the POST /login endpoint');
+      expect(firstCreateCall[2].current_status).toBe('todo');
+
+      // Verify second task card
+      const secondCreateCall = mockCreateCard.mock.calls[1];
+      expect(secondCreateCall[2].title).toBe('Implement signup endpoint');
+      expect(secondCreateCall[2].description).toContain('Create the POST /signup endpoint');
+
+      // Verify parent→child relationships
+      expect(mockCreateCardRelationship).toHaveBeenNthCalledWith(
+        1,
+        {},
+        mockParentCard.board_uid,
+        mockParentCard.uid,
+        '550e8400-e29b-41d4-a716-446655440010',
+        'dependency',
+        mockParentCard.board_uid,
+        mockTaskBoard.uid,
+      );
+      expect(mockCreateCardRelationship).toHaveBeenNthCalledWith(
+        2,
+        {},
+        mockParentCard.board_uid,
+        mockParentCard.uid,
+        '550e8400-e29b-41d4-a716-446655440011',
+        'dependency',
+        mockParentCard.board_uid,
+        mockTaskBoard.uid,
+      );
 
       const callbackCall = fetchSpy.mock.calls.find((call) => {
         const url = call[0] as string;
@@ -242,7 +277,10 @@ describe('planning processor routes', () => {
       const payload = JSON.parse(init.body);
       expect(payload.status).toBe('success');
       expect(payload.move_to_column).toBe('delegated');
-      expect(payload.payload_updates.payload.task_card_uid).toBe('550e8400-e29b-41d4-a716-446655440010');
+      expect(payload.payload_updates.payload.task_card_uids).toEqual([
+        '550e8400-e29b-41d4-a716-446655440010',
+        '550e8400-e29b-41d4-a716-446655440011',
+      ]);
       expect(payload.payload_updates.payload.task_board_uid).toBe(mockTaskBoard.uid);
       expect(payload.payload_updates.payload.planned_tasks).toHaveLength(2);
       expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
@@ -272,7 +310,7 @@ describe('planning processor routes', () => {
         uid: '550e8400-e29b-41d4-a716-446655440010',
         board_uid: mockTaskBoard.uid,
         display_id: 'TSK-10',
-        title: 'Implement auth system',
+        title: 'Implement login endpoint',
       });
 
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440020';
@@ -290,6 +328,8 @@ describe('planning processor routes', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 300));
 
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+
       const callbackCall = fetchSpy.mock.calls.find((call) => {
         const url = call[0] as string;
         return typeof url === 'string' && url.includes('/api/callbacks/');
@@ -297,10 +337,89 @@ describe('planning processor routes', () => {
       expect(callbackCall).toBeDefined();
       const init = callbackCall![1] as { body: string };
       const payload = JSON.parse(init.body);
+      expect(payload.payload_updates.payload.task_card_uids).toEqual([
+        '550e8400-e29b-41d4-a716-446655440010',
+      ]);
       expect(payload.payload_updates.payload.planned_tasks).toHaveLength(1);
       expect(payload.payload_updates.payload.planned_tasks[0].instructions).toEqual({
         dev: 'Implement the login endpoint\nAdd validation middleware',
       });
+    });
+
+    it('creates inter-task dependency relationships when tasks depend on each other', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue({
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: '<<<PRE_FLIGHT>>>\nComplexity: Standard (2 subtasks).\nPrimary Type: implementation\n<<<TASK>>>\n<<<TITLE>>>\nDefine auth schema\n<<<TYPE>>>\ninfrastructure\n<<<BODY>>>\nDefine the user schema and migration.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- Schema is defined.\n<<<INSTRUCTIONS>>>\ndev: Define schema\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<TASK>>>\n<<<TITLE>>>\nImplement login endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /login endpoint.\n<<<DEPENDS_ON>>>\nDefine auth schema\n<<<ACCEPTANCE>>>\n- POST /login returns 200.\n<<<INSTRUCTIONS>>>\ndev: Implement login\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<END>>>',
+          },
+        ],
+      } as unknown as Awaited<ReturnType<typeof mockComplete>>);
+
+      mockCreateCard
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440030',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-30',
+          title: 'Define auth schema',
+        })
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440031',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-31',
+          title: 'Implement login endpoint',
+        });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440025';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440015',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockCreateCard).toHaveBeenCalledTimes(2);
+      // 2 parent→child + 1 inter-task dependency
+      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(3);
+
+      // Verify inter-task dependency: schema → login
+      expect(mockCreateCardRelationship).toHaveBeenNthCalledWith(
+        3,
+        {},
+        mockTaskBoard.uid,
+        '550e8400-e29b-41d4-a716-446655440030',
+        '550e8400-e29b-41d4-a716-446655440031',
+        'dependency',
+        mockTaskBoard.uid,
+        mockTaskBoard.uid,
+      );
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.payload_updates.payload.task_card_uids).toEqual([
+        '550e8400-e29b-41d4-a716-446655440030',
+        '550e8400-e29b-41d4-a716-446655440031',
+      ]);
     });
 
     it('falls back to single card when LLM fails', async () => {

@@ -411,52 +411,140 @@ async function delegatePlanning(
       console.error(`[planning] LLM planning failed, continuing with clone: ${message}`);
     }
 
-    // Create a single clone child card on the task board (1:1 with parent)
-    const clonedPayload = {
-      ...card.payload,
-      parent_board_uid: card.board_uid,
-      parent_card_uid: card.uid,
-    };
+    if (result.tasks.length > 0) {
+      // Multi-subtask path: create one card per planned task
+      const createdTaskCards: { uid: string; title: string }[] = [];
 
-    const taskCard = createCard(
-      {},
-      taskBoard.uid,
-      {
-        title: card.title,
-        description: card.description,
-        current_status: 'todo',
-        payload: clonedPayload,
-      },
-      'system:planning',
-    );
-
-    createCardRelationship(
-      {},
-      card.board_uid,
-      card.uid,
-      taskCard.uid,
-      'dependency',
-      card.board_uid,
-      taskBoard.uid,
-    );
-
-    console.log(`[planning] Created clone task card ${taskCard.display_id} / ${taskCard.title}`);
-
-    fireAndForgetCallback(callbackUrl, {
-      status: 'success',
-      move_to_column: 'delegated',
-      payload_updates: {
-        payload: {
+      for (const task of result.tasks) {
+        const taskPayload = {
           ...card.payload,
-          delegated: true,
-          task_card_uid: taskCard.uid,
-          task_board_uid: taskBoard.uid,
-          planned_tasks: result.tasks,
-          pre_flight: result.pre_flight,
-          clarification_needed: result.clarification_needed,
+          parent_board_uid: card.board_uid,
+          parent_card_uid: card.uid,
+          task_type: task.type,
+          instructions: task.instructions,
+          depends_on: task.depends_on,
+          acceptance: task.acceptance,
+          risk: task.risk,
+        };
+
+        const descriptionParts = [task.body];
+        if (task.acceptance) {
+          descriptionParts.push(`\n---\n**Acceptance:**\n${task.acceptance}`);
+        }
+        if (task.risk && task.risk !== 'none') {
+          descriptionParts.push(`\n---\n**Risk:**\n${task.risk}`);
+        }
+        const description = descriptionParts.join('');
+
+        const taskCard = createCard(
+          {},
+          taskBoard.uid,
+          {
+            title: task.title,
+            description,
+            current_status: 'todo',
+            payload: taskPayload,
+          },
+          'system:planning',
+        );
+
+        createCardRelationship(
+          {},
+          card.board_uid,
+          card.uid,
+          taskCard.uid,
+          'dependency',
+          card.board_uid,
+          taskBoard.uid,
+        );
+
+        createdTaskCards.push({ uid: taskCard.uid, title: task.title });
+        console.log(`[planning] Created task card ${taskCard.display_id} / ${taskCard.title}`);
+      }
+
+      // Create inter-task dependency relationships
+      const titleToUid = new Map(createdTaskCards.map((c) => [c.title, c.uid]));
+      for (const [index, task] of result.tasks.entries()) {
+        if (task.depends_on && task.depends_on !== 'none') {
+          const parentTaskUid = titleToUid.get(task.depends_on);
+          if (parentTaskUid) {
+            const childUid = createdTaskCards[index].uid;
+            createCardRelationship(
+              {},
+              taskBoard.uid,
+              parentTaskUid,
+              childUid,
+              'dependency',
+              taskBoard.uid,
+              taskBoard.uid,
+            );
+          }
+        }
+      }
+
+      fireAndForgetCallback(callbackUrl, {
+        status: 'success',
+        move_to_column: 'delegated',
+        payload_updates: {
+          payload: {
+            ...card.payload,
+            delegated: true,
+            task_card_uids: createdTaskCards.map((c) => c.uid),
+            task_board_uid: taskBoard.uid,
+            planned_tasks: result.tasks,
+            pre_flight: result.pre_flight,
+            clarification_needed: result.clarification_needed,
+          },
         },
-      },
-    });
+      });
+    } else {
+      // Fallback: create a single clone child card on the task board (1:1 with parent)
+      const clonedPayload = {
+        ...card.payload,
+        parent_board_uid: card.board_uid,
+        parent_card_uid: card.uid,
+      };
+
+      const taskCard = createCard(
+        {},
+        taskBoard.uid,
+        {
+          title: card.title,
+          description: card.description,
+          current_status: 'todo',
+          payload: clonedPayload,
+        },
+        'system:planning',
+      );
+
+      createCardRelationship(
+        {},
+        card.board_uid,
+        card.uid,
+        taskCard.uid,
+        'dependency',
+        card.board_uid,
+        taskBoard.uid,
+      );
+
+      console.log(`[planning] Created clone task card ${taskCard.display_id} / ${taskCard.title}`);
+
+      fireAndForgetCallback(callbackUrl, {
+        status: 'success',
+        move_to_column: 'delegated',
+        payload_updates: {
+          payload: {
+            ...card.payload,
+            delegated: true,
+            task_card_uid: taskCard.uid,
+            task_board_uid: taskBoard.uid,
+            planned_tasks: result.tasks,
+            pre_flight: result.pre_flight,
+            clarification_needed: result.clarification_needed,
+          },
+        },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[planning] Planning failed: ${message}`);
