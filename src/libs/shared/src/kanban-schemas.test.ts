@@ -14,6 +14,7 @@ import {
   EventLogRowSchema,
   MoveCardRequestSchema,
   OnEnterDispatchRequestSchema,
+  PlanningV1Schema,
   ProcessingStateTransitionSchema,
   ProcessorCallbackRequestSchema,
   ProcessorRegistryEntitySchema,
@@ -466,5 +467,111 @@ describe('kanban contracts', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  describe('planning.v1 schema', () => {
+    const validPlanningV1 = {
+      version: 'planning.v1',
+      pre_flight: {
+        complexity_level: 'standard',
+        justification: 'Two well-defined endpoints.',
+        primary_type: 'implementation',
+        ambiguity_status: 'none',
+        missing_info: [],
+        validation: {
+          coverage_complete: true,
+          fits_one_day: true,
+          independently_testable: true,
+          forward_dependencies_only: true,
+          notes: [],
+        },
+      },
+      clarification_needed: {
+        required: false,
+        questions: [],
+      },
+      tasks: [
+        {
+          id: 'T1',
+          title: 'Implement login endpoint',
+          type: 'implementation',
+          body: ['Create the POST /login endpoint with email/password validation and JWT generation.'],
+          depends_on: [],
+          acceptance: ['POST /login returns 200 with valid JWT for correct credentials.'],
+          instructions: { agent_name: 'dev', notes: ['Implement the login endpoint'] },
+          risk: [],
+        },
+        {
+          id: 'T2',
+          title: 'Implement signup endpoint',
+          type: 'implementation',
+          body: ['Create the POST /signup endpoint with password hashing and user creation.'],
+          depends_on: ['T1'],
+          acceptance: ['POST /signup creates a new user and returns 201.'],
+          instructions: { agent_name: null, notes: [] },
+          risk: ['Password hashing library choice may affect performance.'],
+        },
+      ],
+    };
+
+    it('accepts a valid planning.v1 payload with two tasks and dependencies', () => {
+      const result = PlanningV1Schema.safeParse(validPlanningV1);
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a task with an invalid type', () => {
+      const invalid = {
+        ...validPlanningV1,
+        tasks: [
+          {
+            ...validPlanningV1.tasks[0],
+            type: 'design',
+          },
+        ],
+      };
+      const result = PlanningV1Schema.safeParse(invalid);
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects clarification_needed.required=true when tasks is non-empty', () => {
+      const invalid = {
+        ...validPlanningV1,
+        clarification_needed: { required: true, questions: ['What is the auth provider?'] },
+      };
+      const result = PlanningV1Schema.safeParse(invalid);
+      expect(result.success).toBe(false);
+    });
+
+    it('accepts clarification_needed.required=true when tasks is empty', () => {
+      const valid = {
+        ...validPlanningV1,
+        clarification_needed: { required: true, questions: ['What is the auth provider?'] },
+        tasks: [],
+      };
+      const result = PlanningV1Schema.safeParse(valid);
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects missing required fields', () => {
+      const invalid = {
+        version: 'planning.v1',
+        pre_flight: validPlanningV1.pre_flight,
+        clarification_needed: validPlanningV1.clarification_needed,
+        tasks: [
+          {
+            id: 'T1',
+            title: '',
+            type: 'implementation',
+            body: [],
+            depends_on: [],
+            acceptance: [],
+            instructions: { agent_name: null, notes: [] },
+            risk: [],
+          },
+        ],
+      };
+      const result = PlanningV1Schema.safeParse(invalid);
+      expect(result.success).toBe(false);
+    });
   });
 });

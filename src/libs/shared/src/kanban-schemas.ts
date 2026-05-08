@@ -1073,6 +1073,88 @@ export const CreateBoardResponseSchema = z
   })
   .strict();
 
+/* ------------------------------------------------------------------ */
+/*  Planning Processor Output Contract (planning.v1)                   */
+/* ------------------------------------------------------------------ */
+
+export const PlanningV1TaskTypeSchema = z.enum([
+  'implementation',
+  'infrastructure',
+  'research',
+  'refactor',
+  'bugfix',
+]);
+
+export const PlanningV1TaskSchema = z
+  .object({
+    id: z.string().min(1).max(20),
+    title: z.string().min(1).max(200),
+    type: PlanningV1TaskTypeSchema,
+    body: z.array(z.string().min(1)).min(1),
+    depends_on: z.array(z.string().min(1)).default([]),
+    acceptance: z.array(z.string().min(1)).min(1),
+    instructions: z
+      .object({
+        agent_name: z.string().max(200).nullable().default(null),
+        notes: z.array(z.string()).default([]),
+      })
+      .strict()
+      .default({ agent_name: null, notes: [] }),
+    risk: z.array(z.string()).default([]),
+  })
+  .strict();
+
+export const PlanningV1PreFlightValidationSchema = z
+  .object({
+    coverage_complete: z.boolean(),
+    fits_one_day: z.boolean(),
+    independently_testable: z.boolean(),
+    forward_dependencies_only: z.boolean(),
+    notes: z.array(z.string()).default([]),
+  })
+  .strict();
+
+export const PlanningV1PreFlightSchema = z
+  .object({
+    complexity_level: z.enum(['trivial', 'standard', 'complex', 'epic']),
+    justification: z.string().min(1),
+    primary_type: PlanningV1TaskTypeSchema,
+    ambiguity_status: z.enum(['none', 'needs_clarification']),
+    missing_info: z.array(z.string()).default([]),
+    validation: PlanningV1PreFlightValidationSchema,
+  })
+  .strict();
+
+export const PlanningV1ClarificationSchema = z
+  .object({
+    required: z.boolean(),
+    questions: z.array(z.string()).default([]),
+  })
+  .strict();
+
+export const PlanningV1Schema = z
+  .object({
+    version: z.literal('planning.v1'),
+    pre_flight: PlanningV1PreFlightSchema,
+    clarification_needed: PlanningV1ClarificationSchema,
+    tasks: z.array(PlanningV1TaskSchema),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.clarification_needed.required && value.tasks.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tasks'],
+        message: 'tasks must be empty when clarification_needed.required is true',
+      });
+    }
+  });
+
+export type PlanningV1Task = z.infer<typeof PlanningV1TaskSchema>;
+export type PlanningV1PreFlight = z.infer<typeof PlanningV1PreFlightSchema>;
+export type PlanningV1Clarification = z.infer<typeof PlanningV1ClarificationSchema>;
+export type PlanningV1 = z.infer<typeof PlanningV1Schema>;
+
 export type BoardPathParams = z.infer<typeof BoardPathParamsSchema>;
 export type CardPathParams = z.infer<typeof CardPathParamsSchema>;
 export type BoardEntity = z.infer<typeof BoardEntitySchema>;
@@ -1156,3 +1238,5 @@ export type HealthCheckResponse = z.infer<typeof HealthCheckResponseSchema>;
 export type TriggerActionRequest = z.infer<typeof TriggerActionRequestSchema>;
 export type TriggerActionResponse = z.infer<typeof TriggerActionResponseSchema>;
 export type ListBoardsResponse = z.infer<typeof ListBoardsResponseSchema>;
+export type PlanningV1TaskType = z.infer<typeof PlanningV1TaskTypeSchema>;
+export type PlanningV1PreFlightValidation = z.infer<typeof PlanningV1PreFlightValidationSchema>;
