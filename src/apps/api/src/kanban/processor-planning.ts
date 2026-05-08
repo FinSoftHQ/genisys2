@@ -109,12 +109,26 @@ function buildPlanningPrompt(context: {
 
 ---
 
+**Grounding Rules**
+- Use only information present in the task title, task body, global instructions, or files you explicitly read with tools.
+- Do not invent APIs, filenames, services, users, business rules, metrics, deadlines, or requirements.
+- If essential information is missing and no useful task breakdown can be made, set \`clarification_needed.required\` to \`true\` and output only the header line.
+- If the plan can proceed with reasonable assumptions, keep assumptions minimal and record uncertainty in \`pre_flight.validation.notes\` or task \`risk\`.
+- Do not implement code. Do not create or modify project source files. Your final answer, or any file written for final output, must contain only the planning JSONL.
+
+---
+
 **Output Format**
-Return ONLY valid JSONL (JSON Lines). Wrap the JSONL in a \` \`\`\`jsonl \` markdown code block. Do not add conversational filler before or after the code block.
+Return ONLY raw valid JSONL (JSON Lines). Do not wrap the output in markdown fences. Do not add conversational filler before or after the JSONL.
 
-Each line must be a standalone, minified JSON object. Use exactly one line per object.
+JSONL rules:
+- Each physical line must be one complete, standalone, minified JSON object.
+- Do not output a JSON array.
+- Do not pretty-print JSON.
+- Do not put commas between lines.
+- Do not include comments or blank lines.
 
-Example:
+Example (shown in a code block for readability only; do not include the fences in your response):
 
 \`\`\`jsonl
 {"version":"planning.v1","pre_flight":{"complexity_level":"trivial|standard|complex|epic","justification":"One-sentence rationale.","primary_type":"implementation|infrastructure|research|refactor|bugfix","ambiguity_status":"none|needs_clarification","missing_info":[],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":[]}},"clarification_needed":{"required":false,"questions":[]}}
@@ -144,7 +158,7 @@ ${context.body}
 ${instructionsBlock}---
 
 **Final Output Rules**
-- Output ONLY valid JSONL inside a \` \`\`\`jsonl \` code block. No prose before or after the block, no bullet summaries outside it.
+- Output ONLY raw valid JSONL. No markdown code fences, no prose, no summaries, no comments, and no blank lines.
 - Ensure all \`depends_on\` references use task \`id\` values that appear earlier in the output.
 - The first line must be the header object. Every subsequent line must be one task object.`;
 }
@@ -335,7 +349,7 @@ async function runPlanningSession(prompt: string, workingDir?: string): Promise<
     model: preferredModel,
     apiKey,
     systemPrompt: prompt,
-    userMessage: 'Please produce the task breakdown as valid JSON conforming to the planning.v1 schema above.',
+    userMessage: 'Produce the task breakdown as valid JSONL conforming to the planning.v1 schema above. Return raw JSONL only, with no markdown fences or extra prose.',
     workingDir,
     tools: [readFileTool, writeToFileTool],
     maxRounds: 1,
@@ -375,7 +389,7 @@ async function runPlanningSessionWithRepair(prompt: string, workingDir?: string)
   console.log('[planning] First parse/validation failed, attempting repair pass');
   console.error(`[planning] First pass errors:\n${firstResult.errors.map((e) => `  - ${e}`).join('\n')}`);
 
-  const repairPrompt = `The previous planning output was invalid. The output should be JSONL: line 1 is a header with version, pre_flight, and clarification_needed; each subsequent line is one task object.
+  const repairPrompt = `The previous planning output was invalid. The output must be raw JSONL: line 1 is a header with version, pre_flight, and clarification_needed; each subsequent line is one task object.
 
 Here is the raw output:
 
@@ -386,7 +400,7 @@ ${firstResult.raw}
 Here are the errors:
 ${firstResult.errors.map((e) => `- ${e}`).join('\n')}
 
-Please return ONLY valid JSONL that fixes these issues. Line 1 = header, lines 2+ = tasks. Do not include markdown code fences or any extra text.`;
+Please return ONLY valid JSONL that fixes these issues. Line 1 = header, lines 2+ = tasks. Do not include markdown code fences, prose, comments, blank lines, a surrounding JSON array, or commas between lines.`;
 
   const repairResult = await runPlanningSession(repairPrompt, workingDir);
   if (repairResult.success) {
