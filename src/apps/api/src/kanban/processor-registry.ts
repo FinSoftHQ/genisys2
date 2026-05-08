@@ -71,7 +71,7 @@ function persistHealthResult(
       .get();
     if (existing) {
       db.update(processorRegistry)
-        .set({ status: result.status, last_health_check: result.checked_at })
+        .set({ status: result.status as 'healthy' | 'degraded' | 'unhealthy', last_health_check: result.checked_at })
         .where(eq(processorRegistry.processor_id, result.processor_id))
         .run();
     }

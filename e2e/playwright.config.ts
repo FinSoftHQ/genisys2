@@ -18,13 +18,13 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `KANBAN_DB_PATH=${dbPath} PORT=8080 node ../src/apps/api/dist/index.js`,
+      command: `KANBAN_DB_PATH=${dbPath} PORT=8080 pnpm exec node ../src/apps/api/dist/index.js > /tmp/api-playwright.log 2>&1`,
       url: 'http://localhost:8080/api/health',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },
     {
-      command: 'PORT=3000 pnpm --filter @repo/web exec nuxt dev',
+      command: 'PORT=3000 NUXT_PUBLIC_API_BASE_URL=http://localhost:8080 pnpm --filter @repo/web exec nuxt dev',
       url: 'http://localhost:3000',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,

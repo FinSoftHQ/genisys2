@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format esm --out-dir dist --target node22",
+    "build": "tsup src/index.ts --format esm --out-dir dist --target node22 && cp -r src/db/migrations dist/migrations",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"
   },
