@@ -183,7 +183,13 @@ type ParsePlanningResult =
   | { success: false; errors: string[]; raw: string };
 
 function extractJsonFromText(text: string): string {
-  // Tolerate markdown fences: find first '{' and last '}'
+  // Explicit markdown code block extraction
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    return fenceMatch[1].trim();
+  }
+
+  // Fallback: find first '{' and last '}'
   const firstBrace = text.indexOf('{');
   const lastBrace = text.lastIndexOf('}');
   if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
@@ -230,12 +236,18 @@ function parsePlanningV1(rawText: string): ParsePlanningResult {
     parsed = JSON.parse(jsonText);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error(`[planning] JSON parse error: ${message}`);
+    console.error(`[planning] Extracted JSON text (first 2000 chars):\n${jsonText.slice(0, 2000)}`);
     return { success: false, errors: [`JSON parse error: ${message}`], raw: rawText };
   }
 
   const zodResult = PlanningV1Schema.safeParse(parsed);
   if (!zodResult.success) {
     const issues = zodResult.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+    console.error(`[planning] Schema validation failed with ${issues.length} issue(s):`);
+    for (const issue of issues) {
+      console.error(`[planning]   - ${issue}`);
+    }
     return { success: false, errors: [`Schema validation failed: ${issues.join('; ')}`], raw: rawText };
   }
 
@@ -265,6 +277,10 @@ function parsePlanningV1(rawText: string): ParsePlanningResult {
   }
 
   if (semanticErrors.length > 0) {
+    console.error(`[planning] Semantic validation failed with ${semanticErrors.length} error(s):`);
+    for (const err of semanticErrors) {
+      console.error(`[planning]   - ${err}`);
+    }
     return { success: false, errors: semanticErrors, raw: rawText };
   }
 
@@ -321,6 +337,7 @@ async function runPlanningSessionWithRepair(prompt: string): Promise<ParsePlanni
   }
 
   console.log('[planning] First parse/validation failed, attempting repair pass');
+  console.error(`[planning] First pass errors:\n${firstResult.errors.map((e) => `  - ${e}`).join('\n')}`);
 
   const repairPrompt = `The previous planning output was invalid. Here is the raw output:
 
@@ -340,6 +357,7 @@ Please return ONLY a valid \`planning.v1\` JSON object that fixes these issues. 
   }
 
   console.log('[planning] Repair pass also failed');
+  console.error(`[planning] Repair pass errors:\n${repairResult.errors.map((e) => `  - ${e}`).join('\n')}`);
   return {
     success: false,
     errors: [...firstResult.errors, `Repair pass failed: ${repairResult.errors.join('; ')}`],
