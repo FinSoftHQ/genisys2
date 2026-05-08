@@ -231,6 +231,77 @@ describe('delegated processor routes', () => {
       expect(payload.move_to_column).toBeUndefined();
     });
 
+    it('moves the first related todo card to explore when parent has task_card_uids (multi-subtask)', async () => {
+      const multiSubtaskParentCard = {
+        ...mockParentCard,
+        payload: {
+          task_card_uids: ['550e8400-e29b-41d4-a716-446655440004', '550e8400-e29b-41d4-a716-446655440005'],
+          task_board_uid: mockTaskBoard.uid,
+        },
+      };
+
+      const firstTaskCard = {
+        ...mockTaskCard,
+        uid: '550e8400-e29b-41d4-a716-446655440004',
+        display_id: 'TSK-1',
+        created_at: '2026-04-26T08:30:00.000Z',
+      };
+      const secondTaskCard = {
+        ...mockTaskCard,
+        uid: '550e8400-e29b-41d4-a716-446655440005',
+        display_id: 'TSK-2',
+        created_at: '2026-04-26T08:31:00.000Z',
+      };
+
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      // No explicit task_card_uid, so falls through to snapshot search
+      mockGetCardById.mockReturnValue(undefined);
+      mockGetSnapshot.mockReturnValue({ board: mockTaskBoard, cards: [secondTaskCard, firstTaskCard] });
+      mockMoveCard.mockReturnValue({ ...firstTaskCard, current_status: 'explore', version: 2 });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440030';
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/delegated/on-enter',
+        payload: {
+          card: multiSubtaskParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440030',
+        },
+      });
+
+      expect(response.statusCode).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(mockMoveCard).toHaveBeenCalledTimes(1);
+      expect(mockMoveCard).toHaveBeenCalledWith(
+        {},
+        mockTaskBoard.uid,
+        firstTaskCard.uid,
+        'explore',
+        'system:delegated',
+      );
+      expect(mockStartProcessing).toHaveBeenCalledWith(
+        {},
+        mockTaskBoard,
+        expect.objectContaining({ uid: firstTaskCard.uid, current_status: 'explore' }),
+        expect.objectContaining({ uid: 'explore', type: 'Processing' }),
+      );
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBeUndefined();
+    });
+
     it('does not move an unrelated todo card', async () => {
       const unrelatedTaskCard = {
         ...mockTaskCard,
