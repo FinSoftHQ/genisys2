@@ -270,7 +270,7 @@ function trimForPrompt(name: string, content: string): string {
   return `${content.slice(0, PROMPT_FILE_CHAR_LIMIT)}\n\n[TRUNCATED ${omitted} characters from ${name}]`;
 }
 
-function buildExtractTargetPrompt(workingDir: string, sowContent: string, llmContextContent: string): string {
+function buildExtractTargetPrompt(workingDir: string, sowContent: string): string {
   return `${EXTRACT_TARGET_PROMPT}
 
 ## Repository root path
@@ -281,10 +281,6 @@ ${workingDir}
 ### BEGIN ${SOW_PATH}
 ${trimForPrompt(SOW_PATH, sowContent)}
 ### END ${SOW_PATH}
-
-### BEGIN ${LLM_CONTEXT_PATH}
-${trimForPrompt(LLM_CONTEXT_PATH, llmContextContent)}
-### END ${LLM_CONTEXT_PATH}
 
 Follow all rules above strictly. Output only JSONL.`;
 }
@@ -503,10 +499,11 @@ async function generateExtractorTargets(workingDir: string): Promise<void> {
   const response = await complete(
     preferredModel,
     {
+      systemPrompt: trimForPrompt(LLM_CONTEXT_PATH, llmContextContent),
       messages: [
         {
           role: 'user',
-          content: buildExtractTargetPrompt(workingDir, sowContent, llmContextContent),
+          content: buildExtractTargetPrompt(workingDir, sowContent),
           timestamp: Date.now(),
         },
       ],

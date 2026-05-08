@@ -218,6 +218,15 @@ describe('explore processor routes', () => {
 
       expect(mockComplete).toHaveBeenCalledTimes(1);
       expect(mockGetModel).toHaveBeenCalledWith('opencode-go', 'deepseek-v4-flash');
+
+      const completeCall = mockComplete.mock.calls[0];
+      const completeContext = completeCall?.[1] as { systemPrompt?: string; messages: Array<{ role: string; content: string }> };
+      expect(completeContext.systemPrompt).toContain('# Repo Context');
+      expect(completeContext.messages).toHaveLength(1);
+      expect(completeContext.messages[0].role).toBe('user');
+      expect(completeContext.messages[0].content).toContain('# Mission');
+      expect(completeContext.messages[0].content).not.toContain('# Repo Context');
+      expect(completeContext.messages[0].content).toContain('Output only JSONL');
       expect(mockWriteFile).toHaveBeenCalledWith(
         '/tmp/workspaces/TST-1/.dossier/sow.md',
         expect.stringContaining('Initial task body'),

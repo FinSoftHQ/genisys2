@@ -193,21 +193,6 @@ Phase 1.4's `definePiProcessor` becomes load-bearing here.
 - [ ] **C.4** Regenerate `llm_context.md` at the end of each phase.
 - [ ] **C.5** Track per-PR refactor progress by checking off boxes in `docs/refactoring-plan.md`. Do **not** add refactor entries to `CHANGELOG.md` — that file is reserved for features/slices and shouldn't be diluted by refactor noise.
 
-## Estimated effort
-
-| Phase | Effort | Net LOC |
-|------:|:-------|--------:|
-| 0 | 2 h | +50 |
-| 1 | 1 d | −600 |
-| 2 | 3–4 d | ~0 (reorganized) |
-| 3 | 2 d | −300 |
-| 4 | 1 d | ~0 (safer) |
-| 5 | 1 d | +200 helpers / −400 in tests |
-| 6 | 1 d | ~0 |
-| 7 | 0.5 d | small |
-
-**Total:** ~10 working days, ~1,000 LOC net reduction, dramatically improved navigability.
-
 ## What this plan deliberately does NOT do
 
 - Change the HTTP API surface, SSE event shape, or SQLite schema.
