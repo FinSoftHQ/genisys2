@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import {
   OnEnterDispatchRequestSchema,
@@ -74,6 +75,21 @@ function extractCardContext(card: {
   }
 
   return { title: card.title, body, instructions };
+}
+
+function resolveWorkingDir(card: { payload: Record<string, unknown>; display_id?: string }): string | undefined {
+  const fromPayload = typeof card.payload?.working_dir === 'string' ? card.payload.working_dir.trim() : undefined;
+  if (fromPayload) {
+    return resolve(fromPayload);
+  }
+  // Fallback: construct workspace path from display_id if available
+  if (card.display_id) {
+    const fallback = resolve(process.cwd(), '.workspaces', card.display_id);
+    console.warn(`[planning] card.payload.working_dir missing — falling back to ${fallback}`);
+    return fallback;
+  }
+  console.warn('[planning] card.payload.working_dir missing and no display_id — planning will have no file access');
+  return undefined;
 }
 
 /* ------------------------------------------------------------------ */
@@ -274,6 +290,7 @@ function extractJsonlFromText(text: string): {
   header: unknown;
   tasks: unknown[];
   lineErrors: string[];
+  allObjects: unknown[];
 } {
   // Strip reasoning preamble (<think> blocks, etc.) before any line analysis.
   const cleanText = stripReasoningPreamble(text);
@@ -372,13 +389,13 @@ function extractJsonlFromText(text: string): {
   }
 
   if (parsedObjects.length === 0) {
-    return { header: null, tasks: [], lineErrors: [...lineErrors, 'No valid JSONL lines found'] };
+    return { header: null, tasks: [], lineErrors: [...lineErrors, 'No valid JSONL lines found'], allObjects: [] };
   }
 
   const header = parsedObjects[0];
   const tasks = parsedObjects.slice(1);
 
-  return { header, tasks, lineErrors };
+  return { header, tasks, lineErrors, allObjects: parsedObjects };
 }
 
 function hasDependencyCycle(tasks: PlanningV1['tasks']): boolean {
@@ -413,7 +430,7 @@ function hasDependencyCycle(tasks: PlanningV1['tasks']): boolean {
 }
 
 function parsePlanningV1Jsonl(rawText: string): ParsePlanningResult {
-  const { header, tasks, lineErrors } = extractJsonlFromText(rawText);
+  const { header, tasks, lineErrors, allObjects } = extractJsonlFromText(rawText);
 
   if (header === null) {
     console.error(`[planning] JSONL parse failed: ${lineErrors.join('; ')}`);
@@ -421,11 +438,36 @@ function parsePlanningV1Jsonl(rawText: string): ParsePlanningResult {
     return { success: false, errors: lineErrors, raw: rawText };
   }
 
+  // Detect missing header: if the first object is not a valid planning header
+  // but every object looks like a task, inject a default header so the plan
+  // can still succeed.
+  const firstObj = header as Record<string, unknown> | undefined;
+  const isValidHeader = firstObj && firstObj['version'] === 'planning.v1';
+  let effectiveHeader: unknown = header;
+  let effectiveTasks: unknown[] = tasks;
+
+  if (!isValidHeader && allObjects.length > 0) {
+    const allLookLikeTasks = allObjects.every(
+      (obj) =>
+        obj &&
+        typeof obj === 'object' &&
+        typeof (obj as Record<string, unknown>)['id'] === 'string' &&
+        typeof (obj as Record<string, unknown>)['title'] === 'string' &&
+        typeof (obj as Record<string, unknown>)['type'] === 'string',
+    );
+
+    if (allLookLikeTasks) {
+      console.warn('[planning] LLM omitted planning header — injecting default header and treating all objects as tasks');
+      effectiveHeader = { version: 'planning.v1', clarification_needed: { required: false, questions: [] } };
+      effectiveTasks = allObjects;
+    }
+  }
+
   // Warn about unrecognized task keys that were stripped by Zod.
   // Do this before safeParse so we report against the original raw objects.
   const allowedTaskKeys = new Set(['id', 'title', 'type', 'body', 'depends_on', 'acceptance', 'instructions', 'risk']);
   const strippedKeyWarnings: string[] = [];
-  for (const [i, rawTask] of tasks.entries()) {
+  for (const [i, rawTask] of effectiveTasks.entries()) {
     if (rawTask && typeof rawTask === 'object') {
       const extraKeys = Object.keys(rawTask as object).filter((k) => !allowedTaskKeys.has(k));
       if (extraKeys.length > 0) {
@@ -443,8 +485,8 @@ function parsePlanningV1Jsonl(rawText: string): ParsePlanningResult {
 
   // Assemble into PlanningV1 shape
   const assembled = {
-    ...(typeof header === 'object' && header !== null ? header : {}),
-    tasks,
+    ...(typeof effectiveHeader === 'object' && effectiveHeader !== null ? effectiveHeader : {}),
+    tasks: effectiveTasks,
   };
 
   const zodResult = PlanningV1Schema.safeParse(assembled);
@@ -530,7 +572,7 @@ async function runPlanningSession(
     userMessage,
     workingDir,
     tools: [readFileTool],   // writeToFileTool removed: system prompt says don't create files
-    maxRounds: 3,
+    maxRounds: 6,
     maxFilesPerRound: 3,
     maxTokens: planningMaxTokens,
   });
@@ -905,7 +947,7 @@ async function delegatePlanning(
     // Attempt LLM-based subtask planning with repair
     let result: ParsePlanningResult = { success: false, errors: ['Not attempted'], raw: '' };
     try {
-      const workingDir = typeof card.payload?.working_dir === 'string' ? card.payload.working_dir.trim() : undefined;
+      const workingDir = resolveWorkingDir(card);
       const context = extractCardContext(card);
       result = await runPlanningSessionWithRetry(
         buildPlanningSystemPrompt(),

@@ -20,10 +20,19 @@ export const readFileTool: Tool = {
   description:
     'Read a file from the workspace to inspect its contents. ' +
     'Use this when you need to verify file contents, line ranges, or implementation details before producing your final answer. ' +
-    'Every file you read costs tokens. Only read files where you cannot determine correct answers from the context already provided.',
+    'Every file you read costs tokens. Only read files where you cannot determine correct answers from the context already provided. ' +
+    'For large files, use offset and limit to read specific portions rather than the entire file.',
   parameters: Type.Object({
     path: Type.String({
       description: 'Relative path from the workspace root',
+    }),
+    offset: Type.Number({
+      description: 'Byte offset to start reading from (0-based). Use this to read large files in chunks.',
+      default: 0,
+    }),
+    limit: Type.Number({
+      description: 'Maximum number of bytes to read. Use this to limit the amount of content returned.',
+      default: 8000,
     }),
   }),
 };
@@ -153,6 +162,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
 
   for (let round = 0; round < maxRounds; round++) {
     totalRounds = round + 1;
+    console.log(`[llm-tool-loop] Round ${totalRounds}/${maxRounds} starting…`);
 
     const context: {
       systemPrompt?: string;
@@ -206,8 +216,11 @@ export async function runLlmWithToolLoop<TApi extends Api>(
         .filter((c): c is TextContent => c.type === 'text')
         .map((c) => c.text)
         .join('');
+      console.log(`[llm-tool-loop] Round ${totalRounds} completed with final answer (stopReason=${response.stopReason})`);
       return { text, stopReason: response.stopReason, usage: response.usage, totalRounds, capturedWrites };
     }
+
+    console.log(`[llm-tool-loop] Round ${totalRounds}: ${toolCalls.length} tool call(s) requested`);
 
     // Limit files per round
     const limitedCalls = toolCalls.slice(0, maxFilesPerRound);
@@ -232,8 +245,12 @@ export async function runLlmWithToolLoop<TApi extends Api>(
     // Execute tool calls in parallel
     const toolResults = await Promise.all(
       limitedCalls.map(async (call): Promise<ToolResultMessage> => {
+        console.log(`[llm-tool-loop] Executing ${call.name}(${JSON.stringify(call.arguments)}) workingDir=${workingDir ?? '<none>'}`);
+
         if (call.name === 'read_file') {
           if (!workingDir) {
+            const errorText = 'Error: No working directory is configured. You cannot read files.';
+            console.log(`[llm-tool-loop] ${call.name} result: success=false, error="${errorText}"`);
             return {
               role: 'toolResult',
               toolCallId: call.id,
@@ -241,7 +258,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
               content: [
                 {
                   type: 'text',
-                  text: 'Error: No working directory is configured. You cannot read files.',
+                  text: errorText,
                 },
               ],
               isError: true,
@@ -253,6 +270,8 @@ export async function runLlmWithToolLoop<TApi extends Api>(
           const absolutePath = join(workingDir, relativePath);
 
           if (!isWithinDirectory(workingDir, absolutePath)) {
+            const errorText = `Error: Path traversal blocked. "${relativePath}" resolves outside the workspace.`;
+            console.log(`[llm-tool-loop] ${call.name} result: success=false, error="${errorText}"`);
             return {
               role: 'toolResult',
               toolCallId: call.id,
@@ -260,7 +279,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
               content: [
                 {
                   type: 'text',
-                  text: `Error: Path traversal blocked. "${relativePath}" resolves outside the workspace.`,
+                  text: errorText,
                 },
               ],
               isError: true,
@@ -269,8 +288,16 @@ export async function runLlmWithToolLoop<TApi extends Api>(
           }
 
           try {
-            const content = await readFile(absolutePath, 'utf8');
-            const truncated = truncateFileContent(relativePath, content, fileTruncateChars);
+            const fullContent = await readFile(absolutePath, 'utf8');
+            const offset = typeof call.arguments.offset === 'number' ? Math.max(0, call.arguments.offset) : 0;
+            const limit = typeof call.arguments.limit === 'number' ? Math.max(1, call.arguments.limit) : fileTruncateChars;
+            const slicedContent = fullContent.slice(offset, offset + limit);
+            const headerLine = `[Showing bytes ${offset}–${offset + slicedContent.length} of ${fullContent.length} total]`;
+            const contentWithHeader = slicedContent.length < fullContent.length
+              ? `${headerLine}\n\n${slicedContent}\n\n[${fullContent.length - slicedContent.length - offset} more bytes available — use offset=${offset + slicedContent.length} to continue reading]`
+              : `${headerLine}\n\n${slicedContent}`;
+            const truncated = truncateFileContent(relativePath, contentWithHeader, fileTruncateChars);
+            console.log(`[llm-tool-loop] ${call.name} result: success=true, chars=${truncated.length}, file=${relativePath}, offset=${offset}, limit=${limit}`);
             return {
               role: 'toolResult',
               toolCallId: call.id,
@@ -281,6 +308,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
             };
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            console.log(`[llm-tool-loop] ${call.name} result: success=false, error="${message}"`);
             return {
               role: 'toolResult',
               toolCallId: call.id,
@@ -294,6 +322,8 @@ export async function runLlmWithToolLoop<TApi extends Api>(
 
         if (call.name === 'write_to_file') {
           if (!workingDir) {
+            const errorText = 'Error: No working directory is configured. You cannot write files.';
+            console.log(`[llm-tool-loop] ${call.name} result: success=false, error="${errorText}"`);
             return {
               role: 'toolResult',
               toolCallId: call.id,
@@ -301,7 +331,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
               content: [
                 {
                   type: 'text',
-                  text: 'Error: No working directory is configured. You cannot write files.',
+                  text: errorText,
                 },
               ],
               isError: true,
@@ -313,6 +343,8 @@ export async function runLlmWithToolLoop<TApi extends Api>(
           const absolutePath = join(workingDir, relativePath);
 
           if (!isWithinDirectory(workingDir, absolutePath)) {
+            const errorText = `Error: Path traversal blocked. "${relativePath}" resolves outside the workspace.`;
+            console.log(`[llm-tool-loop] ${call.name} result: success=false, error="${errorText}"`);
             return {
               role: 'toolResult',
               toolCallId: call.id,
@@ -320,7 +352,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
               content: [
                 {
                   type: 'text',
-                  text: `Error: Path traversal blocked. "${relativePath}" resolves outside the workspace.`,
+                  text: errorText,
                 },
               ],
               isError: true,
@@ -330,6 +362,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
 
           const content = typeof call.arguments.content === 'string' ? call.arguments.content : '';
           capturedWrites[relativePath] = content;
+          console.log(`[llm-tool-loop] ${call.name} result: success=true, chars=${content.length}, file=${relativePath}`);
 
           return {
             role: 'toolResult',
@@ -346,6 +379,8 @@ export async function runLlmWithToolLoop<TApi extends Api>(
           };
         }
 
+        const errorText = `Error: Unknown tool "${call.name}". Available tools: read_file, write_to_file.`;
+        console.log(`[llm-tool-loop] ${call.name} result: success=false, error="${errorText}"`);
         return {
           role: 'toolResult',
           toolCallId: call.id,
@@ -353,7 +388,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
           content: [
             {
               type: 'text',
-              text: `Error: Unknown tool "${call.name}". Available tools: read_file, write_to_file.`,
+              text: errorText,
             },
           ],
           isError: true,
@@ -366,7 +401,15 @@ export async function runLlmWithToolLoop<TApi extends Api>(
   }
 
   // Max rounds reached — force final answer without tools
-  console.warn(`[llm-tool-loop] Max rounds (${maxRounds}) reached. Forcing final answer without tools.`);
+  totalRounds++;
+  console.warn(`[llm-tool-loop] Max rounds (${maxRounds}) reached. Forcing final answer without tools (round ${totalRounds}).`);
+
+  // Append a strong instruction so the LLM knows it must output its final answer now
+  messages.push({
+    role: 'user',
+    content: 'You have used all available tool rounds. STOP requesting tools. Output your final answer now.',
+    timestamp: Date.now(),
+  });
 
   const finalContext: { systemPrompt?: string; messages: Message[] } = { messages };
   if (effectiveSystemPrompt && effectiveSystemPrompt.trim().length > 0) {
@@ -380,5 +423,6 @@ export async function runLlmWithToolLoop<TApi extends Api>(
     .map((c) => c.text)
     .join('');
 
+  console.log(`[llm-tool-loop] Round ${totalRounds} completed with forced final answer (stopReason=${finalResponse.stopReason})`);
   return { text, stopReason: finalResponse.stopReason, usage: finalResponse.usage, totalRounds, capturedWrites };
 }

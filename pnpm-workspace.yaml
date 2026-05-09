@@ -11,8 +11,8 @@ catalog:
   '@fastify/rate-limit': ^10.2.1
   '@fastify/websocket': ^11.0.1
   '@iconify-json/lucide': ^1.2.103
-  '@mariozechner/pi-ai': ^0.72.1
-  '@mariozechner/pi-coding-agent': ^0.72.1
+  '@mariozechner/pi-ai': ^0.73.1
+  '@mariozechner/pi-coding-agent': ^0.73.1
   '@nuxt/ui': ^4.7.0
   '@octokit/rest': ^21.1.1
   '@playwright/test': ^1.49.0
