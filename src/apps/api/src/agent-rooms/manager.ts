@@ -7,17 +7,38 @@ import type { FastifyReply } from "fastify";
 import { parseProtocol, type Protocol, parseAgentPromptFile } from "@repo/shared";
 import { attachJsonlReader } from "./internal/jsonl.js";
 import { RoomLogger, loggingEnabled } from "./internal/room-logger.js";
+import {
+	type Room,
+	type AgentState,
+	type RoomCreateOptions,
+	type RoomCloseReason,
+	type ExecutionMode,
+} from "./types.js";
+import { pushEvent, broadcast } from "./event-store.js";
+import { routeMessageToAgents, shouldCheckCompletionAfterTaskMarker } from "./router.js";
 
-export type RoomStatus =
-	| "initialized"
-	| "running"
-	| "suspended"
-	| "error"
-	| "completed";
+// Re-export types and event-store for backward compatibility during transition
+export type {
+	Room,
+	RoomStatus,
+	RoomCreateOptions,
+	StoredEvent,
+	StoredEventInput,
+	AgentState,
+	RoutingStrategy,
+	RoomCloseReason,
+	ExecutionMode,
+	ReturnedEvent,
+} from "./types.js";
+export { pushEvent, broadcast, getRoomEvents } from "./event-store.js";
+export {
+	determineRecipients,
+	resolveMessageTargets,
+	shouldCheckCompletionAfterTaskMarker,
+	routeMessageToAgents,
+} from "./router.js";
+export type { RouterDeps } from "./router.js";
 
-const EVENT_BUFFER_CAP = 2500;
-const DEFAULT_EVENT_LIMIT = 100;
-const MAX_EVENT_FIELD_LENGTH = 4000;
 const TASK_COMPLETION_MARKER = "[@TASK: VIPER-RTB]";
 const idleCompletionGraceMsRaw = Number(process.env.AGENT_ROOM_IDLE_COMPLETION_MS ?? 60_000);
 const IDLE_COMPLETION_GRACE_MS = Number.isFinite(idleCompletionGraceMsRaw)
@@ -40,79 +61,6 @@ function killAgentProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"
 	}
 }
 
-type StoredEventBase = { id: number; from: string; at: string };
-
-export type StoredEvent =
-	| (StoredEventBase & { type: "thinking"; thinking: string })
-	| (StoredEventBase & { type: "message"; text: string })
-	| (StoredEventBase & { type: "tool_start"; toolName: string; args: unknown })
-	| (StoredEventBase & { type: "tool_end"; toolName: string; result: string; isError: boolean })
-	| (StoredEventBase & { type: "retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string })
-	| (StoredEventBase & { type: "retry_end"; success: boolean; attempt: number; finalError?: string })
-	| (StoredEventBase & { type: "agent_start" })
-	| (StoredEventBase & { type: "agent_end" })
-	| (StoredEventBase & { type: "room_error"; reason: string })
-	| (StoredEventBase & { type: "room_closed"; reason: "completed" });
-
-// Distributive Omit so pushEvent accepts each union member without the id field.
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-type StoredEventInput = DistributiveOmit<StoredEvent, "id">;
-
-type ExecutionMode = "session" | "single-shot";
-type RoomCloseReason = "completed" | "manual" | "expired";
-
-export interface RoomCreateOptions {
-	callbackUrl?: string;
-	callbackSecret?: string;
-}
-
-interface AgentState {
-	proc: ChildProcess | null;
-	executionMode: ExecutionMode;
-	piArgs: string[];
-	name: string;
-	role: string;
-	isStreaming: boolean;
-	pendingUiRequest: boolean;
-	status: "idle" | "streaming" | "error";
-	logger: RoomLogger;
-	// Event coalescing buffers (mirrors RoomLogger internals)
-	_textBuf: string;
-	_thinkingBuf: string;
-	_msgTs: number;
-	ready: boolean;
-	taskCompleted: boolean;
-	hasParticipated: boolean;
-	_readyResolve?: () => void;
-	_readyReject?: (err: Error) => void;
-	_readyTimeout?: ReturnType<typeof setTimeout>;
-}
-
-export type RoutingStrategy = "broadcast" | "explicit";
-
-export interface Room {
-	id: string;
-	status: RoomStatus;
-	agents: Map<string, AgentState>;
-	sseClients: Set<FastifyReply>;
-	createdAt: number;
-	lastActivityAt: number;
-	protocolBody: string;
-	routes?: Record<string, string[]>;
-	facilitator?: string;
-	routingStrategy: RoutingStrategy;
-	failedAgent?: string;
-	failedReason?: string;
-	expireTimeout?: ReturnType<typeof setTimeout>;
-	events: StoredEvent[];
-	eventSeq: number;
-	promptDir: string;
-	workingDir?: string;
-	idleCompletionTimeout?: ReturnType<typeof setTimeout>;
-	callbackUrl?: string;
-	callbackSecret?: string;
-}
-
 const rooms = new Map<string, Room>();
 const EXPIRY_MS = 1000 * 60 * 60 * 2; // 2 hours
 
@@ -127,29 +75,9 @@ function resetExpiry(room: Room): void {
 	}, EXPIRY_MS);
 }
 
-function pushEvent(room: Room, event: StoredEventInput): void {
-	room.eventSeq += 1;
-	const record = { id: room.eventSeq, ...event } as StoredEvent;
-	room.events.push(record);
-	if (room.events.length > EVENT_BUFFER_CAP) {
-		room.events.shift();
-	}
-}
-
 function updateActivity(room: Room): void {
 	room.lastActivityAt = Date.now();
 	resetExpiry(room);
-}
-
-function broadcast(room: Room, payload: object): void {
-	const data = `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
-	for (const client of room.sseClients) {
-		try {
-			client.raw.write(data);
-		} catch {
-			// ignore
-		}
-	}
 }
 
 function sendToAgent(agent: AgentState, cmd: object): void {
@@ -206,72 +134,6 @@ async function notifyRoomClosedCallback(
 	}
 }
 
-export function determineRecipients(room: Room, fromAgent: string, text: string): string[] {
-	if (room.routingStrategy === "broadcast") {
-		return [...room.agents.keys()].filter((name) => name !== fromAgent);
-	}
-
-	// Explicit mode: combine dynamic @attn: mentions with static routes
-	const pool = new Set<string>();
-
-	// Dynamic targeting (inline mentions)
-	const mentionRegex = /@attn:([\w-]+)/g;
-	let match: RegExpExecArray | null;
-	while ((match = mentionRegex.exec(text)) !== null) {
-		const identifier = match[1];
-		// Name match
-		if (room.agents.has(identifier)) {
-			pool.add(identifier);
-		}
-		// Role match — route to all agents with this role
-		for (const [name, agent] of room.agents) {
-			if (agent.role === identifier) {
-				pool.add(name);
-			}
-		}
-	}
-
-	// Static targeting (configured routes)
-	if (room.routes && room.routes[fromAgent]) {
-		for (const name of room.routes[fromAgent]) {
-			if (room.agents.has(name)) {
-				pool.add(name);
-			}
-		}
-	}
-
-	// Self-exclusion
-	pool.delete(fromAgent);
-
-	return Array.from(pool);
-}
-
-export function resolveMessageTargets(room: Room, fromAgent: string, text: string): string[] {
-	const recipients = determineRecipients(room, fromAgent, text);
-	if (recipients.length > 0) {
-		return recipients;
-	}
-
-	if (!room.facilitator) {
-		return [];
-	}
-	if (room.facilitator === fromAgent) {
-		return [];
-	}
-	if (!room.agents.has(room.facilitator)) {
-		return [];
-	}
-	return [room.facilitator];
-}
-
-export function shouldCheckCompletionAfterTaskMarker(room: Room, fromAgent: string, text: string): boolean {
-	const targets = resolveMessageTargets(room, fromAgent, text);
-	if (targets.length === 0) {
-		return true;
-	}
-	return targets.every((targetName) => room.agents.get(targetName)?.taskCompleted === true);
-}
-
 function allActiveAgentsCompleted(room: Room): boolean {
 	const activeAgents = Array.from(room.agents.values()).filter((a) => a.hasParticipated);
 	return activeAgents.length > 0 && activeAgents.every((a) => a.taskCompleted);
@@ -319,69 +181,6 @@ function handleTaskCompletionMarker(room: Room, fromAgent: string, text: string)
 	if (allActiveAgentsCompleted(room)) {
 		completeRoom(room.id);
 	}
-}
-
-export function routeMessageToAgents(room: Room, fromAgent: string, text: string): void {
-	const recipients = determineRecipients(room, fromAgent, text);
-
-	if (recipients.length > 0) {
-		clearIdleCompletionTimeout(room);
-		const formattedMessage = `[${fromAgent}]: ${text}`;
-		for (const recipientName of recipients) {
-			const agent = room.agents.get(recipientName);
-			if (!agent) continue;
-
-			if (agent.executionMode === "single-shot" && agent.proc === null) {
-				spawnAndSendToSingleShot(room, recipientName, formattedMessage).catch((err: unknown) => {
-					const reason = err instanceof Error ? err.message : String(err);
-					pushEvent(room, {
-						type: "room_error",
-						from: recipientName,
-						at: new Date().toISOString(),
-						reason,
-					});
-					broadcast(room, { type: "room_error", from: recipientName, reason });
-				});
-				continue;
-			}
-
-			sendToAgent(agent, {
-				type: agent.isStreaming ? "follow_up" : "prompt",
-				message: formattedMessage,
-			});
-		}
-		return;
-	}
-
-	// Phase 3: Fallback Protocol
-	if (!room.facilitator) {
-		console.warn(
-			`[SYSTEM WARNING] Dropped message from ${fromAgent}: no recipients and no facilitator configured.`,
-		);
-		return;
-	}
-
-	if (room.facilitator === fromAgent) {
-		console.error(
-			`[CRITICAL ERROR] Facilitator ${fromAgent} sent a message with no recipients. This creates an infinite loop. Configure routes for the facilitator agent.`,
-		);
-		return;
-	}
-
-	const facilitatorAgent = room.agents.get(room.facilitator);
-	if (!facilitatorAgent) {
-		console.warn(
-			`[SYSTEM WARNING] Facilitator ${room.facilitator} not found in room. Dropping message from ${fromAgent}.`,
-		);
-		return;
-	}
-
-	clearIdleCompletionTimeout(room);
-	const wrappedMessage = `[SYSTEM_ROUTING_FAILURE]\n**Original Sender:** ${fromAgent}\n**Status:** This message reached no one because no attention tags were used and no static routes exist.\n**Content:**\n> ---\n${text}`;
-	sendToAgent(facilitatorAgent, {
-		type: facilitatorAgent.isStreaming ? "follow_up" : "prompt",
-		message: wrappedMessage,
-	});
 }
 
 export async function createRoomFromMarkdown(
@@ -813,7 +612,11 @@ function attachAgentEventHandlers(room: Room, agent: AgentState): void {
 
 		// ── Inter-agent routing ───────────────────────────────────────────────
 		if (type === "message_end" && messageText && room.status !== "completed" && room.status !== "error") {
-			routeMessageToAgents(room, name, messageText);
+			routeMessageToAgents(room, name, messageText, {
+				sendToAgent,
+				clearIdleCompletionTimeout,
+				spawnAndSendToSingleShot,
+			});
 		}
 	});
 }
@@ -1005,55 +808,6 @@ export function getRoomStatus(room: Room): object {
 	};
 }
 
-export type ReturnedEvent = StoredEvent & { _fieldTruncated?: boolean };
-
-export function getRoomEvents(
-	room: Room,
-	since?: number,
-	limit?: number,
-): { events: ReturnedEvent[]; hasMore: boolean } {
-	let events = room.events;
-	if (since !== undefined) {
-		events = events.filter((e) => e.id > since);
-	}
-	const effectiveLimit = limit ?? DEFAULT_EVENT_LIMIT;
-	const clampedLimit = Math.max(1, effectiveLimit);
-	const hasMore = events.length > clampedLimit;
-	const limitedEvents = events.slice(0, clampedLimit);
-	return { events: truncateEvents(limitedEvents), hasMore };
-}
-
-function truncateEvents(events: StoredEvent[]): ReturnedEvent[] {
-	return events.map((event) => {
-		let truncated = false;
-		const copy = { ...event } as ReturnedEvent;
-		switch (copy.type) {
-			case "thinking":
-				if (copy.thinking.length > MAX_EVENT_FIELD_LENGTH) {
-					copy.thinking = copy.thinking.slice(0, MAX_EVENT_FIELD_LENGTH) + "... [truncated]";
-					truncated = true;
-				}
-				break;
-			case "message":
-				if (copy.text.length > MAX_EVENT_FIELD_LENGTH) {
-					copy.text = copy.text.slice(0, MAX_EVENT_FIELD_LENGTH) + "... [truncated]";
-					truncated = true;
-				}
-				break;
-			case "tool_end":
-				if (copy.result.length > MAX_EVENT_FIELD_LENGTH) {
-					copy.result = copy.result.slice(0, MAX_EVENT_FIELD_LENGTH) + "... [truncated]";
-					truncated = true;
-				}
-				break;
-		}
-		if (truncated) {
-			copy._fieldTruncated = true;
-		}
-		return copy;
-	});
-}
-
 export function addSseClient(room: Room, reply: FastifyReply): void {
 	room.sseClients.add(reply);
 	reply.raw.on("close", () => {
@@ -1142,6 +896,9 @@ export function destroyRoom(id: string, reason: Exclude<RoomCloseReason, "comple
 		// ignore cleanup failure
 	}
 }
+
+// Temporary exports for test deps until PR 3 extracts spawn.ts
+export { sendToAgent, clearIdleCompletionTimeout, spawnAndSendToSingleShot };
 
 export function completeRoom(id: string): void {
 	const room = rooms.get(id);
