@@ -1098,11 +1098,14 @@ export const PlanningV1TaskSchema = z
         agent_name: z.string().max(200).nullable().default(null),
         notes: z.array(z.string()).default([]),
       })
-      .strict()
+      // No .strict() — extra keys from the LLM are silently stripped; a warning
+      // is emitted in the processor after parsing.
       .default({ agent_name: null, notes: [] }),
     risk: z.array(z.string()).default([]),
-  })
-  .strict();
+  });
+  // No .strict() on the task schema — unrecognized keys (e.g. "phase",
+  // "estimated_effort") are stripped instead of causing a hard failure.
+  // The processor logs a warning whenever keys are stripped.
 
 export const PlanningV1PreFlightValidationSchema = z
   .object({
@@ -1135,7 +1138,11 @@ export const PlanningV1ClarificationSchema = z
 export const PlanningV1Schema = z
   .object({
     version: z.literal('planning.v1'),
-    pre_flight: PlanningV1PreFlightSchema,
+    // pre_flight is optional: if the LLM omits it the plan can still succeed
+    // and create child cards. The processor will skip the summary section and
+    // log a warning. clarification_needed remains required — it is the gating
+    // boolean that controls whether task cards are created.
+    pre_flight: PlanningV1PreFlightSchema.optional(),
     clarification_needed: PlanningV1ClarificationSchema,
     tasks: z.array(PlanningV1TaskSchema),
   })

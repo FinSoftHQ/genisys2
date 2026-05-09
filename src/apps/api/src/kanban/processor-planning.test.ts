@@ -645,7 +645,8 @@ describe('planning processor routes', () => {
             })
           )
         )
-        .mockResolvedValueOnce(makeLlmResponse('not json'));
+        .mockResolvedValueOnce(makeLlmResponse('not json'))
+        .mockResolvedValueOnce(makeLlmResponse('still not json'));
 
       mockCreateCard.mockReturnValue({
         uid: '550e8400-e29b-41d4-a716-446655440020',
@@ -670,7 +671,7 @@ describe('planning processor routes', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       expect(mockCreateCard).toHaveBeenCalledTimes(1);
-      expect(mockComplete).toHaveBeenCalledTimes(2);
+      expect(mockComplete).toHaveBeenCalledTimes(3);
 
       const callbackCall = fetchSpy.mock.calls.find((call) => {
         const url = call[0] as string;

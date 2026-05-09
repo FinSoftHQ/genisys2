@@ -15,7 +15,7 @@ import {
 import type { PlanningV1 } from '@repo/shared';
 import { getModel } from '@mariozechner/pi-ai';
 import { getApiKey } from '../lib/ai-auth.js';
-import { readFileTool, runLlmWithToolLoop, writeToFileTool } from '../lib/llm-tool-loop.js';
+import { readFileTool, runLlmWithToolLoop } from '../lib/llm-tool-loop.js';
 import { createCard, createCardRelationship, getBoardById, listBoards } from './repository.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
@@ -102,14 +102,15 @@ You are a senior engineering project planner. Your job is to break a parent deve
 **Core Principles for Sizing**
 - **Scope:** Each subtask must represent roughly a half-day to a full day of work for a single developer (a single, easily reviewable Pull Request). If a subtask exceeds this, you must break it down further.
 - **Independence:** Each subtask must be independently implementable and testable. Minimize blocking dependencies. If two subtasks absolutely must share a foundation (e.g., a shared contract or schema), the foundational piece must be its own subtask that appears first in the sequence.
-- **Count:** Generate at most 38 tasks. If the natural breakdown exceeds 38, consolidate closely related items into one scoped task.
+- **Count:** Generate at most 48 tasks. If the natural breakdown exceeds 48, consolidate closely related items into one scoped task.
 
 **Grounding Rules**
 - Use only information present in the task title, task body, global instructions, or files you explicitly read with tools.
 - Do not invent APIs, filenames, services, users, business rules, metrics, deadlines, or requirements.
 - If essential information is missing and no useful task breakdown can be made, set \`clarification_needed.required\` to \`true\` and output only the header line.
 - If the plan can proceed with reasonable assumptions, keep assumptions minimal and record uncertainty in \`pre_flight.validation.notes\` or task \`risk\`.
-- Do not implement code. Do not create or modify project source files. Your final answer, or any file written for final output, must contain only the planning JSONL.`;
+- Do not implement code. Do not create or modify project source files. Your final answer, or any file written for final output, must contain only the planning JSONL.
+- If your model supports \`<think>\` blocks, keep ALL reasoning inside \`<think>...</think>\` tags. The visible response — everything outside those tags — must start immediately with \`{\`.`;
 }
 
 function buildPlanningUserPrompt(context: {
@@ -128,7 +129,7 @@ function buildPlanningUserPrompt(context: {
   return `⚠️ START YOUR RESPONSE IMMEDIATELY WITH \`{\` — NO TEXT BEFORE IT.
 Do not write analysis, acknowledgements, code fences, or any prose. The first character of your response must be an opening brace.
 After reading any files with tools, do NOT summarise what you found — output ONLY the JSONL plan.
-Generate at most 38 tasks; consolidate related items if the natural count exceeds 38.
+Generate at most 48 tasks; consolidate related items if the natural count exceeds 48.
 
 **Output Format**
 Return valid JSONL (JSON Lines). Do not add conversational filler before or after the JSONL.
@@ -140,46 +141,32 @@ JSONL rules:
 - Do not put commas between lines.
 - Do not include comments or blank lines.
 
-**JSON Schema (MUST follow exactly)**
+**JSON Schema — Line 1 (header, exactly one)**
+
+The first line of your output must be this header object and nothing else:
+
 \`\`\`json
-{
-  "version": "planning.v1",
-  "pre_flight": {
-    "complexity_level": "standard|complex|simple",
-    "justification": "string",
-    "primary_type": "implementation|infrastructure|research|refactor|bugfix",
-    "ambiguity_status": "none|minor|needs_clarification",
-    "missing_info": ["string"],
-    "validation": {
-      "coverage_complete": true,
-      "fits_one_day": true,
-      "independently_testable": true,
-      "forward_dependencies_only": true,
-      "notes": ["string"]
-    }
-  },
-  "clarification_needed": {
-    "required": false,
-    "questions": ["string"]
-  }
-}
-// Then one line per task:
-{
-  "id": "string (e.g. T1)",
-  "title": "string",
-  "type": "implementation|infrastructure|research|refactor|bugfix",
-  "body": ["string paragraph"],
-  "depends_on": ["T1"],
-  "acceptance": ["string"],
-  "instructions": {"agent_name": null, "notes": ["string"]},
-  "risk": ["string"]
-}
+{"version":"planning.v1","pre_flight":{"complexity_level":"trivial|standard|complex|epic","justification":"string","primary_type":"implementation|infrastructure|research|refactor|bugfix","ambiguity_status":"none|needs_clarification","missing_info":["string"],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":["string"]}},"clarification_needed":{"required":false,"questions":["string"]}}
+\`\`\`
+
+**JSON Schema — Lines 2–N (one task object per line)**
+
+Every subsequent line must be exactly one task object. Task lines must NEVER contain \`version\`, \`pre_flight\`, or \`clarification_needed\` — those fields belong only in the header.
+
+\`\`\`json
+{"id":"T1","title":"string","type":"implementation|infrastructure|research|refactor|bugfix","body":["string paragraph"],"depends_on":["T1"],"acceptance":["string"],"instructions":{"agent_name":null,"notes":["string"]},"risk":["string"]}
 \`\`\`
 
 **Forbidden fields — NEVER use these**
-Do NOT output fields like \`task_id\`, \`phase\`, \`description\`, \`status\`, \`recommended_file\`, \`recommended_test_file\`, \`dependencies\`, \`rule_ids\`, or \`estimated_effort\`. Use ONLY the fields shown in the schema above.
+Do NOT output fields like \`task_id\`, \`phase\`, \`description\`, \`status\`, \`recommended_file\`, \`recommended_test_file\`, \`dependencies\`, \`rule_ids\`, or \`estimated_effort\`. Use ONLY the fields shown in the schemas above.
+Do NOT add \`version\`, \`pre_flight\`, or \`clarification_needed\` to task lines — those are header-only fields.
 
-Example successful plan:
+**Header-only vs task-only keys (must follow exactly)**
+- Header-only keys (line 1 only): \`version\`, \`pre_flight\`, \`clarification_needed\`
+- Task-only keys (lines 2–N only): \`id\`, \`title\`, \`type\`, \`body\`, \`depends_on\`, \`acceptance\`, \`instructions\`, \`risk\`
+- Never mix these key sets.
+
+Canonical end-to-end JSONL example (header + 2 tasks, follow this ordering exactly):
 
 \`\`\`jsonl
 {"version":"planning.v1","pre_flight":{"complexity_level":"standard","justification":"The task can be split into independently reviewable implementation steps.","primary_type":"implementation","ambiguity_status":"none","missing_info":[],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":[]}},"clarification_needed":{"required":false,"questions":[]}}
@@ -220,7 +207,7 @@ ${instructionsBlock}---
 - The FIRST CHARACTER of your response must be \`{\`. Do not write anything before the opening brace.
 - Ensure all \`depends_on\` references use task \`id\` values that appear earlier in the output.
 - The first line must be the header object. Every subsequent line must be one task object.
-- Maximum 38 task lines. Fewer is better if the breakdown is still complete.`;
+- Maximum 48 task lines. Fewer is better if the breakdown is still complete.`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -231,12 +218,54 @@ type ParsePlanningResult =
   | { success: true; data: PlanningV1 }
   | { success: false; errors: string[]; raw: string };
 
+/**
+ * Strip reasoning wrappers emitted by thinking/reasoning models before parsing.
+ * Removes <think>...</think> blocks (DeepSeek, QwQ, o-series) so the remaining
+ * text starts cleanly with the JSONL output.
+ */
+function stripReasoningPreamble(text: string): string {
+  const stripped = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  return stripped.length > 0 ? stripped : text;
+}
+
+/**
+ * Scan the raw text for a planning header object that may appear mid-line after
+ * prose preamble (e.g. "Let me produce the JSONL.{\"version\":\"planning.v1\",...}").
+ * Returns the parsed header object or null if not found.
+ */
+function tryFindHeaderObject(text: string): unknown | null {
+  // Match the opening of a planning header anywhere in the text.
+  const pattern = /\{\s*"version"\s*:\s*"planning\.v1"/;
+  const match = pattern.exec(text);
+  if (!match) return null;
+
+  // Balance braces from the match position to extract the complete JSON object.
+  const start = match.index;
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function extractJsonlFromText(text: string): {
   header: unknown;
   tasks: unknown[];
   lineErrors: string[];
 } {
-  const allLines = text.split(/\r?\n/).map((line) => line.trim());
+  // Strip reasoning preamble (<think> blocks, etc.) before any line analysis.
+  const cleanText = stripReasoningPreamble(text);
+  const allLines = cleanText.split(/\r?\n/).map((line) => line.trim());
 
   // Detect markdown code fences.
   // Enhanced: the opening fence may appear at the END of a prose line
@@ -316,6 +345,18 @@ function extractJsonlFromText(text: string): {
         lineErrors.push(`JSON parse error${isLastLine ? ' (truncated?)' : ''}: ${message}`);
       }
     }
+
+    // Rescue: if the first parsed object is not the planning header (e.g. the
+    // LLM appended the header JSON to a prose sentence on the same line so it
+    // didn't start with '{'), scan the full text for the header and prepend it.
+    const firstObj = parsedObjects[0] as Record<string, unknown> | undefined;
+    if (!firstObj || firstObj['version'] !== 'planning.v1') {
+      const rescued = tryFindHeaderObject(cleanText);
+      if (rescued) {
+        console.warn('[planning] Header was embedded mid-line after prose — rescued via full-text scan');
+        parsedObjects.unshift(rescued);
+      }
+    }
   }
 
   if (parsedObjects.length === 0) {
@@ -368,6 +409,26 @@ function parsePlanningV1Jsonl(rawText: string): ParsePlanningResult {
     return { success: false, errors: lineErrors, raw: rawText };
   }
 
+  // Warn about unrecognized task keys that were stripped by Zod.
+  // Do this before safeParse so we report against the original raw objects.
+  const allowedTaskKeys = new Set(['id', 'title', 'type', 'body', 'depends_on', 'acceptance', 'instructions', 'risk']);
+  const strippedKeyWarnings: string[] = [];
+  for (const [i, rawTask] of tasks.entries()) {
+    if (rawTask && typeof rawTask === 'object') {
+      const extraKeys = Object.keys(rawTask as object).filter((k) => !allowedTaskKeys.has(k));
+      if (extraKeys.length > 0) {
+        const taskId = (rawTask as Record<string, unknown>).id ?? `index ${i}`;
+        strippedKeyWarnings.push(`Task ${String(taskId)}: stripped unknown keys [${extraKeys.join(', ')}]`);
+      }
+    }
+  }
+  if (strippedKeyWarnings.length > 0) {
+    console.warn(`[planning] Stripped unrecognized keys from task objects (not a failure):`);
+    for (const w of strippedKeyWarnings) {
+      console.warn(`[planning]   - ${w}`);
+    }
+  }
+
   // Assemble into PlanningV1 shape
   const assembled = {
     ...(typeof header === 'object' && header !== null ? header : {}),
@@ -385,6 +446,10 @@ function parsePlanningV1Jsonl(rawText: string): ParsePlanningResult {
   }
 
   const data = zodResult.data;
+
+  if (!data.pre_flight) {
+    console.warn('[planning] LLM omitted pre_flight from the header — plan will proceed but summary will be skipped');
+  }
   const semanticErrors: string[] = [...lineErrors];
 
   // Semantic checks
@@ -421,17 +486,28 @@ function parsePlanningV1Jsonl(rawText: string): ParsePlanningResult {
 }
 
 /* ------------------------------------------------------------------ */
-/*  LLM session with repair                                            */
+/*  LLM session runner                                                 */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Cap output tokens for planning sessions.
+ * The model registry reports 384,000 as the model's maximum, but that is far
+ * more than any planning output ever needs. A realistic cap keeps reasoning
+ * phases short and avoids silently overflowing any lower provider-side limit.
+ * Override with the PLANNING_MAX_OUTPUT_TOKENS env var if needed.
+ */
+const PLANNING_MAX_OUTPUT_TOKENS = Number(process.env.PLANNING_MAX_OUTPUT_TOKENS ?? '32768');
 
 async function runPlanningSession(
   systemPrompt: string,
   userMessage: string,
   workingDir?: string,
+  tierLabel = 'T?',
 ): Promise<ParsePlanningResult> {
-  const preferredModel = getModel('opencode-go', 'deepseek-v4-pro');
+  const preferredModel = getModel('opencode-go', 'deepseek-v4-flash');
+  const planningMaxTokens = Math.min(preferredModel.maxTokens, PLANNING_MAX_OUTPUT_TOKENS);
 
-  console.log('[planning] Starting AI planning completion');
+  console.log(`[planning] [${tierLabel}] Starting LLM call (maxTokens=${planningMaxTokens})`);
 
   const apiKey = await getApiKey(preferredModel.provider);
 
@@ -441,87 +517,243 @@ async function runPlanningSession(
     systemPrompt,
     userMessage,
     workingDir,
-    tools: [readFileTool, writeToFileTool],
+    tools: [readFileTool],   // writeToFileTool removed: system prompt says don't create files
     maxRounds: 3,
     maxFilesPerRound: 3,
-    maxTokens: preferredModel.maxTokens,
+    maxTokens: planningMaxTokens,
   });
 
-  if (result.stopReason === 'error') {
-    throw new Error('LLM provider error');
+  if (result.stopReason === 'error' || result.stopReason === 'aborted') {
+    throw new Error(`LLM provider error (stopReason=${result.stopReason})`);
   }
 
-  console.log(`[planning] LLM completed in ${result.totalRounds} round(s)`);
-
-  // Prefer captured writes (e.g., from write_to_file tool calls) over raw text
-  let textContent = result.text;
-  const capturedWriteValues = Object.values(result.capturedWrites);
-  if (capturedWriteValues.length > 0 && capturedWriteValues[0].trim()) {
-    textContent = capturedWriteValues[0];
-    console.log('[planning] Using captured write content as raw output');
+  const wasTruncatedByApi = result.stopReason === 'length';
+  console.log(`[planning] [${tierLabel}] LLM completed: stopReason=${result.stopReason} rounds=${result.totalRounds}`);
+  if (result.usage) {
+    const u = result.usage;
+    console.log(
+      `[planning] [${tierLabel}] Token usage:` +
+      ` input=${u.input} output=${u.output} cacheRead=${u.cacheRead}` +
+      ` total=${u.totalTokens} cost=$${u.cost.total.toFixed(4)}`,
+    );
   }
+  if (wasTruncatedByApi) {
+    console.warn(
+      `[planning] [${tierLabel}] ⚠️ Output truncated by API (stopReason=length) — plan is likely incomplete`,
+    );
+  }
+
+  const textContent = result.text;
 
   if (!textContent.trim()) {
     throw new Error('LLM returned empty text');
   }
 
-  console.log('[planning] Raw LLM output:\n', textContent);
+  console.log(`[planning] [${tierLabel}] Raw LLM output (${textContent.length} chars):\n`, textContent);
 
-  return parsePlanningV1Jsonl(textContent);
-}
+  const parseResult = parsePlanningV1Jsonl(textContent);
 
-async function runPlanningSessionWithRepair(
-  systemPrompt: string,
-  userMessage: string,
-  workingDir?: string,
-): Promise<ParsePlanningResult> {
-  const firstResult = await runPlanningSession(systemPrompt, userMessage, workingDir);
-  if (firstResult.success) {
-    return firstResult;
+  // If the API itself signalled truncation, inject a clear error so the retry
+  // classifier reliably detects it even when the last JSON line happened to be
+  // syntactically complete (edge case: last task was fully written but more
+  // tasks were silently dropped by the token cap).
+  if (parseResult.success && wasTruncatedByApi) {
+    console.warn(
+      `[planning] [${tierLabel}] ⚠️ Parsed successfully but API signaled truncation — plan may be incomplete (${parseResult.data.tasks.length} tasks)`,
+    );
+  }
+  if (!parseResult.success && wasTruncatedByApi) {
+    const truncationMsg = 'API stop reason: output was truncated (max tokens reached)';
+    if (!parseResult.errors.some((e) => e.toLowerCase().includes('truncated'))) {
+      return { success: false, errors: [...parseResult.errors, truncationMsg], raw: parseResult.raw };
+    }
   }
 
-  console.log('[planning] First parse/validation failed, attempting repair pass');
-  console.error(`[planning] First pass errors:\n${firstResult.errors.map((e) => `  - ${e}`).join('\n')}`);
+  return parseResult;
+}
 
-  // Determine whether the failure was due to truncation so we can give a targeted hint.
-  const wasTruncated = firstResult.errors.some((e) => e.toLowerCase().includes('truncated'));
-  const rawSnippet = firstResult.raw.slice(0, 3000);
-  const rawSection = wasTruncated
-    ? `The previous output was truncated before it could finish. Here are the first 3000 characters for context (do NOT copy them — produce a fresh, complete, shorter plan):
+/* ------------------------------------------------------------------ */
+/*  Multi-tier retry helpers                                           */
+/* ------------------------------------------------------------------ */
+
+function classifyTier1Failure(errors: string[]): {
+  wasTruncated: boolean;
+  wasSchemaDrift: boolean;
+  wasEmpty: boolean;
+} {
+  const joined = errors.join(' ').toLowerCase();
+  return {
+    wasTruncated: joined.includes('truncated'),
+    wasSchemaDrift: joined.includes('unrecognized key') ||
+      joined.includes('invalid input') ||
+      joined.includes('invalid option') ||
+      joined.includes('invalid enum value'),
+    wasEmpty: joined.includes('empty text') || joined.includes('no lines'),
+  };
+}
+
+function buildRepairPrompt(
+  firstResult: { errors: string[]; raw: string },
+  classification: { wasTruncated: boolean; wasSchemaDrift: boolean },
+  taskLimit: number,
+  taskContext: { title: string; body: string },
+): string {
+  const bodySnippet =
+    taskContext.body.length > 800
+      ? taskContext.body.slice(0, 800) + '\n[...body truncated — full body was in your original context...]'
+      : taskContext.body;
+  const taskSection =
+    `TASK TO PLAN (same as original — scope has not changed):\n` +
+    `Title: ${taskContext.title}\n` +
+    `Body:\n${bodySnippet}\n`;
+
+  // For schema drift, do NOT include raw output — it anchors the model to wrong schema.
+  // For truncation, show a small snippet so the model can preserve the plan structure.
+  let rawSection: string;
+  if (classification.wasTruncated) {
+    const snippet = firstResult.raw.slice(0, 3000);
+    rawSection = `The previous output was truncated before it could finish. Here are the first 3000 characters for context (do NOT copy them — produce a fresh, complete, shorter plan):
 
 ---
-${rawSnippet}${firstResult.raw.length > 3000 ? `\n[… ${firstResult.raw.length - 3000} more characters truncated]` : ''}
+${snippet}${firstResult.raw.length > 3000 ? `\n[… ${firstResult.raw.length - 3000} more characters truncated]` : ''}
 ---
 
-To avoid truncation again, generate at most 30 tasks total and keep each task body concise (2–3 sentences maximum).`
-    : `Here is the raw output that failed:
-
+To avoid truncation again, generate at most ${taskLimit} tasks total and keep each task body concise (1–2 sentences maximum).`;
+  } else if (classification.wasSchemaDrift) {
+    rawSection = `The previous output used wrong field names or a wrong format. Do NOT look at the previous output — it will mislead you. Start fresh with the correct schema below.`;
+  } else {
+    const snippet = firstResult.raw.slice(0, 2000);
+    rawSection = `Here is the raw output that failed (use only for content ideas, NOT for format):
 ---
-${rawSnippet}${firstResult.raw.length > 3000 ? `\n[… ${firstResult.raw.length - 3000} more characters truncated]` : ''}
+${snippet}${firstResult.raw.length > 2000 ? `\n[… ${firstResult.raw.length - 2000} more characters truncated]` : ''}
 ---`;
+  }
 
-  const repairPrompt = `The previous planning output was invalid. The output must be raw JSONL: line 1 is a header with version, pre_flight, and clarification_needed; each subsequent line is one task object.
+  return `${taskSection}
+The previous planning output was invalid. Return ONLY raw JSONL that fixes the errors below.
+
+REQUIRED EXACT SCHEMA (deviate at all and it will fail again):
+
+Line 1 — header object (only these fields, no wrapper):
+${'```json'}
+{"version":"planning.v1","pre_flight":{"complexity_level":"trivial|standard|complex|epic","justification":"string","primary_type":"implementation|infrastructure|research|refactor|bugfix","ambiguity_status":"none|needs_clarification","missing_info":["string"],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":["string"]}},"clarification_needed":{"required":false,"questions":["string"]}}
+${'```'}
+
+Lines 2–N — task objects (only these fields, no others):
+${'```json'}
+{"id":"T1","title":"string","type":"implementation|infrastructure|research|refactor|bugfix","body":["string paragraph"],"depends_on":["T1"],"acceptance":["string"],"instructions":{"agent_name":null,"notes":["string"]},"risk":["string"]}
+${'```'}
+
+CRITICAL:
+- version MUST be "planning.v1" (not "1.0" or anything else).
+- Do NOT wrap the header in a {"header":{...}} envelope — the header IS the object.
+- Task fields are id, title, type, body, depends_on, acceptance, instructions, risk — NOT task_id, phase, description.
+- Maximum ${taskLimit} total task lines. Each task body array item must be a short paragraph (1–2 sentences).
+- If clarification_needed.required is true, output ONLY the header line (no tasks).
 
 ${rawSection}
 
 Errors from the previous attempt:
 ${firstResult.errors.map((e) => `- ${e}`).join('\n')}
 
-⚠️ YOUR RESPONSE MUST BEGIN WITH \`{\`. The first character must be an opening brace — no prose, no fences, no blank lines before it.
-Please return ONLY valid JSONL that fixes these issues. Line 1 = header, lines 2+ = tasks. Do not include markdown code fences, prose, comments, blank lines, a surrounding JSON array, or commas between lines.`;
+⚠️ YOUR RESPONSE MUST BEGIN WITH \`{\`. No prose, no fences, no blank lines. Output raw JSONL only.`;
+}
 
-  const repairResult = await runPlanningSession(systemPrompt, repairPrompt, workingDir);
-  if (repairResult.success) {
-    console.log('[planning] Repair pass succeeded');
-    return repairResult;
+function buildTier3UserMessage(
+  originalUserMessage: string,
+  errorsTier1: string[],
+  errorsTier2: string[],
+  taskLimit: number,
+): string {
+  const allErrors = [...new Set([...errorsTier1, ...errorsTier2])];
+  const errorSummary = allErrors
+    .slice(0, 10)
+    .map((e) => `- ${e}`)
+    .join('\n');
+
+  // Re-use the original user message so the model has the full task description
+  // and schema instructions, then append strict brevity constraints.
+  return (
+    originalUserMessage +
+    `\n\n---\n\n` +
+    `⚠️ RETRY NOTICE — two previous attempts both failed validation. ` +
+    `Ignore any previous output. Start completely fresh.\n\n` +
+    `STRICT LIMITS FOR THIS ATTEMPT:\n` +
+    `- Maximum ${taskLimit} task lines total. Fewer is better than an incomplete or invalid plan.\n` +
+    `- Each body[] item: 1 short sentence maximum.\n` +
+    `- Each acceptance[] item: 1 short pass/fail criterion maximum.\n` +
+    `- version MUST be "planning.v1" exactly.\n` +
+    `- Task fields: id, title, type, body, depends_on, acceptance, instructions, risk — ONLY these.\n` +
+    `- First character of your response MUST be {. No prose, no fences, no blank lines.\n\n` +
+    `Previous errors to NOT repeat:\n${errorSummary}\n\n` +
+    `Output valid JSONL now. First character must be {.`
+  );
+}
+
+async function runPlanningSessionWithRetry(
+  systemPrompt: string,
+  userMessage: string,
+  workingDir?: string,
+  taskContext?: { title: string; body: string },
+): Promise<ParsePlanningResult> {
+  // ── Tier 1: Normal attempt ──────────────────────────────────────────
+  console.log('[planning] ═══ Tier 1: Normal attempt ═══');
+  const t1 = await runPlanningSession(systemPrompt, userMessage, workingDir, 'T1');
+  if (t1.success) {
+    console.log('[planning] ✅ Tier 1 succeeded');
+    return t1;
   }
 
-  console.log('[planning] Repair pass also failed');
-  console.error(`[planning] Repair pass errors:\n${repairResult.errors.map((e) => `  - ${e}`).join('\n')}`);
+  const t1Class = classifyTier1Failure(t1.errors);
+  console.log('[planning] ❌ Tier 1 failed');
+  console.log(`[planning]    Classification → truncated=${t1Class.wasTruncated} schemaDrift=${t1Class.wasSchemaDrift} empty=${t1Class.wasEmpty}`);
+  console.log(`[planning]    Errors (${t1.errors.length}):`);
+  for (const e of t1.errors) console.log(`[planning]      • ${e}`);
+
+  // ── Tier 2: Targeted repair ─────────────────────────────────────────
+  const t2TaskLimit = t1Class.wasTruncated ? 16 : t1Class.wasSchemaDrift ? 24 : 32;
+  console.log(`[planning] ═══ Tier 2: Repair pass (max ${t2TaskLimit} tasks) ═══`);
+
+  // Always provide the original task context so the model knows what to plan
+  // even when the raw previous output is withheld (schema-drift path).
+  const ctx = taskContext ?? { title: '(task title unavailable — see system context)', body: '' };
+  const repairPrompt = buildRepairPrompt({ errors: t1.errors, raw: t1.raw }, t1Class, t2TaskLimit, ctx);
+  const t2 = await runPlanningSession(systemPrompt, repairPrompt, workingDir, 'T2');
+  if (t2.success) {
+    console.log('[planning] ✅ Tier 2 succeeded');
+    return t2;
+  }
+
+  console.log('[planning] ❌ Tier 2 failed');
+  console.log(`[planning]    Errors (${t2.errors.length}):`);
+  for (const e of t2.errors) console.log(`[planning]      • ${e}`);
+
+  // ── Tier 3: Full-context fresh retry ───────────────────────────────
+  // Re-uses the original userMessage so the model keeps full task context and
+  // schema instructions, then appends strict brevity constraints plus a compact
+  // error summary so the model knows what mistakes to avoid.
+  const t3TaskLimit = t1Class.wasTruncated ? 10 : t1Class.wasSchemaDrift ? 16 : 20;
+  console.log(`[planning] ═══ Tier 3: Full-context fresh retry (max ${t3TaskLimit} tasks) ═══`);
+
+  const t3UserMessage = buildTier3UserMessage(userMessage, t1.errors, t2.errors, t3TaskLimit);
+  const t3 = await runPlanningSession(systemPrompt, t3UserMessage, workingDir, 'T3');
+  if (t3.success) {
+    console.log('[planning] ✅ Tier 3 succeeded');
+    return t3;
+  }
+
+  console.log('[planning] ❌ All three tiers exhausted — planning failed');
+  console.log(`[planning]    Tier 3 errors (${t3.errors.length}):`);
+  for (const e of t3.errors) console.log(`[planning]      • ${e}`);
+
   return {
     success: false,
-    errors: [...firstResult.errors, `Repair pass failed: ${repairResult.errors.join('; ')}`],
-    raw: firstResult.raw,
+    errors: [
+      `Tier 1: ${t1.errors.join('; ')}`,
+      `Tier 2: ${t2.errors.join('; ')}`,
+      `Tier 3: ${t3.errors.join('; ')}`,
+    ],
+    raw: t1.raw,
   };
 }
 
@@ -534,24 +766,26 @@ function generatePlanningSummary(data: PlanningV1): string {
   lines.push('# Planning Summary');
   lines.push('');
 
-  const pf = data.pre_flight;
-  lines.push(`**Complexity:** ${pf.complexity_level}`);
-  lines.push(`**Justification:** ${pf.justification}`);
-  lines.push(`**Primary Type:** ${pf.primary_type}`);
-  lines.push(`**Ambiguity:** ${pf.ambiguity_status}`);
-  if (pf.missing_info.length > 0) {
-    lines.push(`**Missing Info:** ${pf.missing_info.join(', ')}`);
+  if (data.pre_flight) {
+    const pf = data.pre_flight;
+    lines.push(`**Complexity:** ${pf.complexity_level}`);
+    lines.push(`**Justification:** ${pf.justification}`);
+    lines.push(`**Primary Type:** ${pf.primary_type}`);
+    lines.push(`**Ambiguity:** ${pf.ambiguity_status}`);
+    if (pf.missing_info.length > 0) {
+      lines.push(`**Missing Info:** ${pf.missing_info.join(', ')}`);
+    }
+    lines.push('');
+    lines.push('**Validation:**');
+    lines.push(`- Coverage complete: ${pf.validation.coverage_complete ? 'Yes' : 'No'}`);
+    lines.push(`- Fits one day: ${pf.validation.fits_one_day ? 'Yes' : 'No'}`);
+    lines.push(`- Independently testable: ${pf.validation.independently_testable ? 'Yes' : 'No'}`);
+    lines.push(`- Forward dependencies only: ${pf.validation.forward_dependencies_only ? 'Yes' : 'No'}`);
+    if (pf.validation.notes.length > 0) {
+      lines.push(`- Notes: ${pf.validation.notes.join('; ')}`);
+    }
+    lines.push('');
   }
-  lines.push('');
-  lines.push('**Validation:**');
-  lines.push(`- Coverage complete: ${pf.validation.coverage_complete ? 'Yes' : 'No'}`);
-  lines.push(`- Fits one day: ${pf.validation.fits_one_day ? 'Yes' : 'No'}`);
-  lines.push(`- Independently testable: ${pf.validation.independently_testable ? 'Yes' : 'No'}`);
-  lines.push(`- Forward dependencies only: ${pf.validation.forward_dependencies_only ? 'Yes' : 'No'}`);
-  if (pf.validation.notes.length > 0) {
-    lines.push(`- Notes: ${pf.validation.notes.join('; ')}`);
-  }
-  lines.push('');
 
   if (data.clarification_needed.required) {
     lines.push('**Clarification Needed:**');
@@ -661,10 +895,11 @@ async function delegatePlanning(
     try {
       const workingDir = typeof card.payload?.working_dir === 'string' ? card.payload.working_dir.trim() : undefined;
       const context = extractCardContext(card);
-      result = await runPlanningSessionWithRepair(
+      result = await runPlanningSessionWithRetry(
         buildPlanningSystemPrompt(),
         buildPlanningUserPrompt(context),
         workingDir,
+        { title: context.title, body: context.body },
       );
 
     } catch (llmErr) {
