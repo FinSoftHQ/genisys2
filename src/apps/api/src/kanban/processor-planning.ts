@@ -102,15 +102,14 @@ You are a senior engineering project planner. Your job is to break a parent deve
 **Core Principles for Sizing**
 - **Scope:** Each subtask must represent roughly a half-day to a full day of work for a single developer (a single, easily reviewable Pull Request). If a subtask exceeds this, you must break it down further.
 - **Independence:** Each subtask must be independently implementable and testable. Minimize blocking dependencies. If two subtasks absolutely must share a foundation (e.g., a shared contract or schema), the foundational piece must be its own subtask that appears first in the sequence.
-- **Count:** Generate at most 48 tasks. If the natural breakdown exceeds 48, consolidate closely related items into one scoped task.
+- **Count:** Generate at most 38 tasks. If the natural breakdown exceeds 38, consolidate closely related items into one scoped task.
 
 **Grounding Rules**
 - Use only information present in the task title, task body, global instructions, or files you explicitly read with tools.
 - Do not invent APIs, filenames, services, users, business rules, metrics, deadlines, or requirements.
 - If essential information is missing and no useful task breakdown can be made, set \`clarification_needed.required\` to \`true\` and output only the header line.
 - If the plan can proceed with reasonable assumptions, keep assumptions minimal and record uncertainty in \`pre_flight.validation.notes\` or task \`risk\`.
-- Do not implement code. Do not create or modify project source files. Your final answer, or any file written for final output, must contain only the planning JSONL.
-- If your model supports \`<think>\` blocks, keep ALL reasoning inside \`<think>...</think>\` tags. The visible response — everything outside those tags — must start immediately with \`{\`.`;
+- Do not implement code. Do not create or modify project source files. Your final answer, or any file written for final output, must contain only the planning JSONL.`;
 }
 
 function buildPlanningUserPrompt(context: {
@@ -129,7 +128,7 @@ function buildPlanningUserPrompt(context: {
   return `⚠️ START YOUR RESPONSE IMMEDIATELY WITH \`{\` — NO TEXT BEFORE IT.
 Do not write analysis, acknowledgements, code fences, or any prose. The first character of your response must be an opening brace.
 After reading any files with tools, do NOT summarise what you found — output ONLY the JSONL plan.
-Generate at most 48 tasks; consolidate related items if the natural count exceeds 48.
+Generate at most 38 tasks; consolidate related items if the natural count exceeds 38.
 
 **Output Format**
 Return valid JSONL (JSON Lines). Do not add conversational filler before or after the JSONL.
@@ -141,32 +140,46 @@ JSONL rules:
 - Do not put commas between lines.
 - Do not include comments or blank lines.
 
-**JSON Schema — Line 1 (header, exactly one)**
-
-The first line of your output must be this header object and nothing else:
-
+**JSON Schema (MUST follow exactly)**
 \`\`\`json
-{"version":"planning.v1","pre_flight":{"complexity_level":"trivial|standard|complex|epic","justification":"string","primary_type":"implementation|infrastructure|research|refactor|bugfix","ambiguity_status":"none|needs_clarification","missing_info":["string"],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":["string"]}},"clarification_needed":{"required":false,"questions":["string"]}}
-\`\`\`
-
-**JSON Schema — Lines 2–N (one task object per line)**
-
-Every subsequent line must be exactly one task object. Task lines must NEVER contain \`version\`, \`pre_flight\`, or \`clarification_needed\` — those fields belong only in the header.
-
-\`\`\`json
-{"id":"T1","title":"string","type":"implementation|infrastructure|research|refactor|bugfix","body":["string paragraph"],"depends_on":["T1"],"acceptance":["string"],"instructions":{"agent_name":null,"notes":["string"]},"risk":["string"]}
+{
+  "version": "planning.v1",
+  "pre_flight": {
+    "complexity_level": "trivial|standard|complex|epic",
+    "justification": "string",
+    "primary_type": "implementation|infrastructure|research|refactor|bugfix",
+    "ambiguity_status": "none|needs_clarification",
+    "missing_info": ["string"],
+    "validation": {
+      "coverage_complete": true,
+      "fits_one_day": true,
+      "independently_testable": true,
+      "forward_dependencies_only": true,
+      "notes": ["string"]
+    }
+  },
+  "clarification_needed": {
+    "required": false,
+    "questions": ["string"]
+  }
+}
+// Then one line per task:
+{
+  "id": "string (e.g. T1)",
+  "title": "string",
+  "type": "implementation|infrastructure|research|refactor|bugfix",
+  "body": ["string paragraph"],
+  "depends_on": ["T1"],
+  "acceptance": ["string"],
+  "instructions": {"agent_name": null, "notes": ["string"]},
+  "risk": ["string"]
+}
 \`\`\`
 
 **Forbidden fields — NEVER use these**
-Do NOT output fields like \`task_id\`, \`phase\`, \`description\`, \`status\`, \`recommended_file\`, \`recommended_test_file\`, \`dependencies\`, \`rule_ids\`, or \`estimated_effort\`. Use ONLY the fields shown in the schemas above.
-Do NOT add \`version\`, \`pre_flight\`, or \`clarification_needed\` to task lines — those are header-only fields.
+Do NOT output fields like \`task_id\`, \`phase\`, \`description\`, \`status\`, \`recommended_file\`, \`recommended_test_file\`, \`dependencies\`, \`rule_ids\`, or \`estimated_effort\`. Use ONLY the fields shown in the schema above.
 
-**Header-only vs task-only keys (must follow exactly)**
-- Header-only keys (line 1 only): \`version\`, \`pre_flight\`, \`clarification_needed\`
-- Task-only keys (lines 2–N only): \`id\`, \`title\`, \`type\`, \`body\`, \`depends_on\`, \`acceptance\`, \`instructions\`, \`risk\`
-- Never mix these key sets.
-
-Canonical end-to-end JSONL example (header + 2 tasks, follow this ordering exactly):
+Example successful plan:
 
 \`\`\`jsonl
 {"version":"planning.v1","pre_flight":{"complexity_level":"standard","justification":"The task can be split into independently reviewable implementation steps.","primary_type":"implementation","ambiguity_status":"none","missing_info":[],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":[]}},"clarification_needed":{"required":false,"questions":[]}}
@@ -206,8 +219,7 @@ ${instructionsBlock}---
 - Output ONLY raw valid JSONL. No markdown code fences, no prose, no summaries, no comments, and no blank lines.
 - The FIRST CHARACTER of your response must be \`{\`. Do not write anything before the opening brace.
 - Ensure all \`depends_on\` references use task \`id\` values that appear earlier in the output.
-- The first line must be the header object. Every subsequent line must be one task object.
-- Maximum 48 task lines. Fewer is better if the breakdown is still complete.`;
+- The first line must be the header object. Every subsequent line must be one task object.`;
 }
 
 /* ------------------------------------------------------------------ */
