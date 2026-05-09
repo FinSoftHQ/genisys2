@@ -89,11 +89,20 @@ function formatInstructionsEntry(name: string, value: string): string {
 }
 
 function buildPlanningSystemPrompt(): string {
-  return `You are a senior engineering project planner. Your job is to break a parent development task into small, highly manageable subtasks.
+  return `CRITICAL OUTPUT CONSTRAINT — READ FIRST:
+Your response must consist of raw JSONL and absolutely nothing else.
+- The VERY FIRST CHARACTER you output must be \`{\`.
+- Do NOT write any thinking, analysis, reasoning, preamble, or explanation before the JSONL.
+- Do NOT wrap the output in markdown code fences (no \`\`\`jsonl or \`\`\` of any kind).
+- Do NOT add prose, summaries, or blank lines between or after the JSONL lines.
+- If you reason about the problem internally before answering, that reasoning must NOT appear in your response.
+
+You are a senior engineering project planner. Your job is to break a parent development task into small, highly manageable subtasks.
 
 **Core Principles for Sizing**
 - **Scope:** Each subtask must represent roughly a half-day to a full day of work for a single developer (a single, easily reviewable Pull Request). If a subtask exceeds this, you must break it down further.
 - **Independence:** Each subtask must be independently implementable and testable. Minimize blocking dependencies. If two subtasks absolutely must share a foundation (e.g., a shared contract or schema), the foundational piece must be its own subtask that appears first in the sequence.
+- **Count:** Generate at most 38 tasks. If the natural breakdown exceeds 38, consolidate closely related items into one scoped task.
 
 **Grounding Rules**
 - Use only information present in the task title, task body, global instructions, or files you explicitly read with tools.
@@ -116,7 +125,12 @@ function buildPlanningUserPrompt(context: {
         '\n\n'
       : '';
 
-  return `**Output Format**
+  return `⚠️ START YOUR RESPONSE IMMEDIATELY WITH \`{\` — NO TEXT BEFORE IT.
+Do not write analysis, acknowledgements, code fences, or any prose. The first character of your response must be an opening brace.
+After reading any files with tools, do NOT summarise what you found — output ONLY the JSONL plan.
+Generate at most 38 tasks; consolidate related items if the natural count exceeds 38.
+
+**Output Format**
 Return valid JSONL (JSON Lines). Do not add conversational filler before or after the JSONL.
 
 JSONL rules:
@@ -203,8 +217,10 @@ ${instructionsBlock}---
 
 **Final Output Rules**
 - Output ONLY raw valid JSONL. No markdown code fences, no prose, no summaries, no comments, and no blank lines.
+- The FIRST CHARACTER of your response must be \`{\`. Do not write anything before the opening brace.
 - Ensure all \`depends_on\` references use task \`id\` values that appear earlier in the output.
-- The first line must be the header object. Every subsequent line must be one task object.`;
+- The first line must be the header object. Every subsequent line must be one task object.
+- Maximum 38 task lines. Fewer is better if the breakdown is still complete.`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -222,57 +238,83 @@ function extractJsonlFromText(text: string): {
 } {
   const allLines = text.split(/\r?\n/).map((line) => line.trim());
 
-  // Detect markdown code fences and extract content between them
+  // Detect markdown code fences.
+  // Enhanced: the opening fence may appear at the END of a prose line
+  // (e.g. "...description.```jsonl") in addition to being on its own line.
+  // We match any line that ENDS with the fence marker rather than requiring it
+  // to occupy the entire line.
   let jsonlLines: string[] = [];
-  const fenceOpenRegex = /^```(?:jsonl)?\s*$/;
-  const fenceCloseRegex = /^```\s*$/;
-
   let insideFence = false;
+  let foundFence = false;
+  const fenceOpenRegex = /```(?:jsonl)?\s*$/;  // fence at end of any line
+  const fenceCloseRegex = /^```\s*$/;           // closing fence must be its own line
+
   for (const line of allLines) {
-    if (!insideFence && fenceOpenRegex.test(line)) {
-      insideFence = true;
-      continue;
-    }
-    if (insideFence && fenceCloseRegex.test(line)) {
-      insideFence = false;
-      continue;
-    }
-    if (insideFence) {
+    if (!insideFence) {
+      if (fenceOpenRegex.test(line)) {
+        insideFence = true;
+        foundFence = true;
+        // If the fence marker was preceded by prose on the same line, discard the whole line.
+        continue;
+      }
+    } else {
+      if (fenceCloseRegex.test(line)) {
+        insideFence = false;
+        continue;
+      }
       jsonlLines.push(line);
     }
   }
 
-  // If fences were found, use only fenced content; otherwise fall back to all non-empty lines
-  const lines =
-    jsonlLines.length > 0
-      ? jsonlLines.filter((line) => line.length > 0)
-      : allLines.filter((line) => line.length > 0 && !line.startsWith('```'));
+  // If an unclosed fence was found (e.g. output was truncated), jsonlLines still
+  // contains everything captured so far — that is correct behaviour.
 
   const parsedObjects: unknown[] = [];
   const lineErrors: string[] = [];
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const isLastLine = i === lines.length - 1;
+  if (foundFence) {
+    // Fenced mode: parse every non-empty line inside the fence.
+    const lines = jsonlLines.filter((line) => line.length > 0);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const isLastLine = i === lines.length - 1;
 
-    if (!line.startsWith('{') || !line.endsWith('}')) {
-      if (isLastLine) {
-        lineErrors.push(`Line ${i + 1} appears truncated (incomplete JSON object)`);
+      if (!line.startsWith('{') || !line.endsWith('}')) {
+        if (isLastLine) {
+          lineErrors.push('Last line appears truncated (incomplete JSON object)');
+        } else {
+          lineErrors.push(`Fenced line ${i + 1} is not a valid JSON object`);
+        }
         continue;
       }
-      lineErrors.push(`Line ${i + 1} is not a valid JSON object`);
-      continue;
+
+      try {
+        parsedObjects.push(JSON.parse(line));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        lineErrors.push(`Fenced line ${i + 1} JSON parse error${isLastLine ? ' (truncated?)' : ''}: ${message}`);
+      }
     }
+  } else {
+    // Fallback mode: no fences found. Silently skip prose lines; only attempt to
+    // parse lines that look like JSON objects (start with '{').
+    const jsonLookingLines = allLines.filter((line) => line.startsWith('{'));
+    for (let i = 0; i < jsonLookingLines.length; i++) {
+      const line = jsonLookingLines[i];
+      const isLastLine = i === jsonLookingLines.length - 1;
 
-    try {
-      parsedObjects.push(JSON.parse(line));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (isLastLine) {
-        lineErrors.push(`Line ${i + 1} JSON parse error (truncated?): ${message}`);
+      if (!line.endsWith('}')) {
+        // Starts with '{' but doesn't close — truncated.
+        lineErrors.push('Last JSON line appears truncated (incomplete JSON object)');
         continue;
       }
-      lineErrors.push(`Line ${i + 1} JSON parse error: ${message}`);
+
+      try {
+        parsedObjects.push(JSON.parse(line));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        lineErrors.push(`JSON parse error${isLastLine ? ' (truncated?)' : ''}: ${message}`);
+      }
     }
   }
 
@@ -400,7 +442,7 @@ async function runPlanningSession(
     userMessage,
     workingDir,
     tools: [readFileTool, writeToFileTool],
-    maxRounds: 1,
+    maxRounds: 3,
     maxFilesPerRound: 3,
     maxTokens: preferredModel.maxTokens,
   });
@@ -441,17 +483,31 @@ async function runPlanningSessionWithRepair(
   console.log('[planning] First parse/validation failed, attempting repair pass');
   console.error(`[planning] First pass errors:\n${firstResult.errors.map((e) => `  - ${e}`).join('\n')}`);
 
+  // Determine whether the failure was due to truncation so we can give a targeted hint.
+  const wasTruncated = firstResult.errors.some((e) => e.toLowerCase().includes('truncated'));
+  const rawSnippet = firstResult.raw.slice(0, 3000);
+  const rawSection = wasTruncated
+    ? `The previous output was truncated before it could finish. Here are the first 3000 characters for context (do NOT copy them — produce a fresh, complete, shorter plan):
+
+---
+${rawSnippet}${firstResult.raw.length > 3000 ? `\n[… ${firstResult.raw.length - 3000} more characters truncated]` : ''}
+---
+
+To avoid truncation again, generate at most 30 tasks total and keep each task body concise (2–3 sentences maximum).`
+    : `Here is the raw output that failed:
+
+---
+${rawSnippet}${firstResult.raw.length > 3000 ? `\n[… ${firstResult.raw.length - 3000} more characters truncated]` : ''}
+---`;
+
   const repairPrompt = `The previous planning output was invalid. The output must be raw JSONL: line 1 is a header with version, pre_flight, and clarification_needed; each subsequent line is one task object.
 
-Here is the raw output:
+${rawSection}
 
----
-${firstResult.raw}
----
-
-Here are the errors:
+Errors from the previous attempt:
 ${firstResult.errors.map((e) => `- ${e}`).join('\n')}
 
+⚠️ YOUR RESPONSE MUST BEGIN WITH \`{\`. The first character must be an opening brace — no prose, no fences, no blank lines before it.
 Please return ONLY valid JSONL that fixes these issues. Line 1 = header, lines 2+ = tasks. Do not include markdown code fences, prose, comments, blank lines, a surrounding JSON array, or commas between lines.`;
 
   const repairResult = await runPlanningSession(systemPrompt, repairPrompt, workingDir);
@@ -610,6 +666,7 @@ async function delegatePlanning(
         buildPlanningUserPrompt(context),
         workingDir,
       );
+
     } catch (llmErr) {
       const message = llmErr instanceof Error ? llmErr.message : String(llmErr);
       console.error(`[planning] LLM planning failed, continuing with clone: ${message}`);
