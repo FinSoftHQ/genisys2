@@ -1,3 +1,14 @@
+/**
+ * Processor registry + health polling.
+ *
+ * This module owns:
+ *   - DB-backed processor registry queries (re-exported from repository)
+ *   - Health-check execution and result persistence
+ *   - Background health polling lifecycle
+ *
+ * It is NOT an HTTP route module; route handling lives in kanban/routes/ or
+ * individual processor files under kanban/processors/.
+ */
 export { openDb, closeDb, upsertProcessorRegistry, getProcessorById, resolveDb } from './repository.js';
 import {
   ProcessorHealthPollConfigSchema,

@@ -13,7 +13,7 @@ import { createLogger } from '@repo/logger';
 import { agentRoomRoutes } from './agent-rooms/index.js';
 import { proxyRoomRoutes } from './proxy-room/index.js';
 import { kanbanRoutes, suiteRoutes, callbackRoutes } from './kanban/routes.js';
-import { processorRoutes } from './kanban/processor-routes.js';
+import { processorRoutes } from './kanban/processors/context-routes.js';
 import { prepProcessorRoutes } from './kanban/processor-prep.js';
 import { planningProcessorRoutes } from './kanban/processor-planning.js';
 import { wrapProcessorRoutes } from './kanban/processor-wrap.js';
