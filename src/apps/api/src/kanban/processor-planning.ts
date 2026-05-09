@@ -119,7 +119,7 @@ function buildPlanningPrompt(context: {
 ---
 
 **Output Format**
-Return ONLY raw valid JSONL (JSON Lines). Do not wrap the output in markdown fences. Do not add conversational filler before or after the JSONL.
+Return valid JSONL (JSON Lines). Do not add conversational filler before or after the JSONL.
 
 JSONL rules:
 - Each physical line must be one complete, standalone, minified JSON object.
@@ -128,11 +128,18 @@ JSONL rules:
 - Do not put commas between lines.
 - Do not include comments or blank lines.
 
-Example (shown in a code block for readability only; do not include the fences in your response):
+Example successful plan:
 
 \`\`\`jsonl
-{"version":"planning.v1","pre_flight":{"complexity_level":"trivial|standard|complex|epic","justification":"One-sentence rationale.","primary_type":"implementation|infrastructure|research|refactor|bugfix","ambiguity_status":"none|needs_clarification","missing_info":[],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":[]}},"clarification_needed":{"required":false,"questions":[]}}
-{"id":"T1","title":"Subtask title","type":"implementation|infrastructure|research|refactor|bugfix","body":["Paragraph chunk 1","Paragraph chunk 2"],"depends_on":[],"acceptance":["Pass/fail criterion 1","Pass/fail criterion 2"],"instructions":{"agent_name":"none","notes":[]},"risk":[]}
+{"version":"planning.v1","pre_flight":{"complexity_level":"standard","justification":"The task can be split into independently reviewable implementation steps.","primary_type":"implementation","ambiguity_status":"none","missing_info":[],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":[]}},"clarification_needed":{"required":false,"questions":[]}}
+{"id":"T1","title":"Define the shared API contract","type":"implementation","body":["Add or update the shared schema/types required by the feature so later implementation tasks can depend on a stable contract."],"depends_on":[],"acceptance":["The shared contract exists in the appropriate shared module.","The contract has validation or type coverage where applicable."],"instructions":{"agent_name":null,"notes":[]},"risk":["The exact file location should be verified before editing."]}
+{"id":"T2","title":"Implement the backend behavior","type":"implementation","body":["Implement the server-side behavior using the shared contract from T1."],"depends_on":["T1"],"acceptance":["The backend accepts valid requests that match the shared contract.","Relevant backend tests pass."],"instructions":{"agent_name":null,"notes":[]},"risk":[]}
+\`\`\`
+
+Example clarification-only output:
+
+\`\`\`jsonl
+{"version":"planning.v1","pre_flight":{"complexity_level":"standard","justification":"A useful implementation plan cannot be created until the missing decision is provided.","primary_type":"implementation","ambiguity_status":"needs_clarification","missing_info":["The required integration target is not specified."],"validation":{"coverage_complete":false,"fits_one_day":false,"independently_testable":false,"forward_dependencies_only":true,"notes":["Clarification is required before task breakdown."]}},"clarification_needed":{"required":true,"questions":["Which integration target should this task use?"]}}
 \`\`\`
 
 **Line structure**
