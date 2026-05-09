@@ -18,7 +18,7 @@ import { prepProcessorRoutes } from './kanban/processor-prep.js';
 import { planningProcessorRoutes } from './kanban/processor-planning.js';
 import { wrapProcessorRoutes } from './kanban/processor-wrap.js';
 import { commitProcessorRoutes } from './kanban/processor-commit.js';
-import { doneProcessorRoutes } from './kanban/processor-done.js';
+import { doneProcessorRoutes } from './kanban/processors/done.js';
 import { delegatedProcessorRoutes } from './kanban/processor-delegated.js';
 import { agenticTeamProcessorRoutes } from './kanban/processor-agentic-team.js';
 import { exploreProcessorRoutes } from './kanban/processor-explore.js';
