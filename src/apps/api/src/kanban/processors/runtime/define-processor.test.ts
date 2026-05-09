@@ -33,7 +33,7 @@ const mockBoard = {
       {
         uid: 'backlog',
         title: 'Backlog',
-        type: 'Normal' as const,
+        type: 'Processing' as const,
         processor_id: 'default-manual',
         exit_logic: { default: 'in-progress' },
         order: 0,

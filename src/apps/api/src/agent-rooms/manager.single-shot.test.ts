@@ -90,7 +90,10 @@ afterEach(() => {
 
 describe('single-shot lifecycle', () => {
 	it('re-spawns single-shot agent after completion marker termination', async () => {
-		const { createRoomFromMarkdown, getRoom, routeMessageToAgents, destroyRoom, sendToAgent, clearIdleCompletionTimeout, spawnAndSendToSingleShot } = await import('./manager.js');
+		const { createRoomFromMarkdown, spawnAndSendToSingleShot } = await import('./manager.js');
+		const { getRoom, destroyRoom, clearIdleCompletionTimeout } = await import('./lifecycle.js');
+		const { routeMessageToAgents } = await import('./router.js');
+		const { sendToAgent } = await import('./spawn.js');
 
 		const routeDeps = {
 			sendToAgent,

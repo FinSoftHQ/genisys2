@@ -14,7 +14,8 @@ vi.mock('child_process', async () => {
 });
 
 import { spawn as mockSpawn } from 'child_process';
-import { createRoomFromMarkdown, getRoom, destroyRoom } from './manager.js';
+import { createRoomFromMarkdown } from './manager.js';
+import { getRoom, destroyRoom } from './lifecycle.js';
 
 function createMockProc(): ChildProcess & { _stdout: EventEmitter; _stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> } } {
 	const stdout = new EventEmitter();

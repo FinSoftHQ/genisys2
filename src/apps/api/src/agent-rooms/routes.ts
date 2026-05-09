@@ -1,16 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { createRoomFromMarkdown } from "./manager.js";
 import {
-	createRoomFromMarkdown,
 	listRooms,
 	getRoom,
 	getRoomStatus,
-	getRoomEvents,
 	addSseClient,
 	removeSseClient,
 	sendInstructions,
 	destroyRoom,
-} from "./manager.js";
+} from "./lifecycle.js";
+import { getRoomEvents } from "./event-store.js";
 
 const InstructionsBodySchema = z.object({
 	targetAgents: z.array(z.string().min(1)).min(1),

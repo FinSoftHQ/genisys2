@@ -2,17 +2,17 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createRoomFromMarkdown } from './manager.js';
 import {
-	createRoomFromMarkdown,
 	listRooms,
 	getRoom,
 	getRoomStatus,
-	getRoomEvents,
 	sendInstructions,
 	completeRoom,
 	destroyRoom,
-	type Room,
-} from './manager.js';
+} from './lifecycle.js';
+import { getRoomEvents } from './event-store.js';
+import type { Room } from './types.js';
 
 describe('agent-rooms manager', () => {
 	let roomId: string;
