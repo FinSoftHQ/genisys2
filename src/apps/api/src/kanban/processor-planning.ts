@@ -88,7 +88,22 @@ function formatInstructionsEntry(name: string, value: string): string {
   return `  ${name}: ${value}`;
 }
 
-function buildPlanningPrompt(context: {
+function buildPlanningSystemPrompt(): string {
+  return `You are a senior engineering project planner. Your job is to break a parent development task into small, highly manageable subtasks.
+
+**Core Principles for Sizing**
+- **Scope:** Each subtask must represent roughly a half-day to a full day of work for a single developer (a single, easily reviewable Pull Request). If a subtask exceeds this, you must break it down further.
+- **Independence:** Each subtask must be independently implementable and testable. Minimize blocking dependencies. If two subtasks absolutely must share a foundation (e.g., a shared contract or schema), the foundational piece must be its own subtask that appears first in the sequence.
+
+**Grounding Rules**
+- Use only information present in the task title, task body, global instructions, or files you explicitly read with tools.
+- Do not invent APIs, filenames, services, users, business rules, metrics, deadlines, or requirements.
+- If essential information is missing and no useful task breakdown can be made, set \`clarification_needed.required\` to \`true\` and output only the header line.
+- If the plan can proceed with reasonable assumptions, keep assumptions minimal and record uncertainty in \`pre_flight.validation.notes\` or task \`risk\`.
+- Do not implement code. Do not create or modify project source files. Your final answer, or any file written for final output, must contain only the planning JSONL.`;
+}
+
+function buildPlanningUserPrompt(context: {
   title: string;
   body: string;
   instructions: Record<string, string>;
@@ -101,24 +116,7 @@ function buildPlanningPrompt(context: {
         '\n\n'
       : '';
 
-  return `You are a senior engineering project planner. Your job is to break a parent development task into small, highly manageable subtasks.
-
-**Core Principles for Sizing**
-- **Scope:** Each subtask must represent roughly a half-day to a full day of work for a single developer (a single, easily reviewable Pull Request). If a subtask exceeds this, you must break it down further.
-- **Independence:** Each subtask must be independently implementable and testable. Minimize blocking dependencies. If two subtasks absolutely must share a foundation (e.g., a shared contract or schema), the foundational piece must be its own subtask that appears first in the sequence.
-
----
-
-**Grounding Rules**
-- Use only information present in the task title, task body, global instructions, or files you explicitly read with tools.
-- Do not invent APIs, filenames, services, users, business rules, metrics, deadlines, or requirements.
-- If essential information is missing and no useful task breakdown can be made, set \`clarification_needed.required\` to \`true\` and output only the header line.
-- If the plan can proceed with reasonable assumptions, keep assumptions minimal and record uncertainty in \`pre_flight.validation.notes\` or task \`risk\`.
-- Do not implement code. Do not create or modify project source files. Your final answer, or any file written for final output, must contain only the planning JSONL.
-
----
-
-**Output Format**
+  return `**Output Format**
 Return valid JSONL (JSON Lines). Do not add conversational filler before or after the JSONL.
 
 JSONL rules:
@@ -127,6 +125,45 @@ JSONL rules:
 - Do not pretty-print JSON.
 - Do not put commas between lines.
 - Do not include comments or blank lines.
+
+**JSON Schema (MUST follow exactly)**
+\`\`\`json
+{
+  "version": "planning.v1",
+  "pre_flight": {
+    "complexity_level": "standard|complex|simple",
+    "justification": "string",
+    "primary_type": "implementation|infrastructure|research|refactor|bugfix",
+    "ambiguity_status": "none|minor|needs_clarification",
+    "missing_info": ["string"],
+    "validation": {
+      "coverage_complete": true,
+      "fits_one_day": true,
+      "independently_testable": true,
+      "forward_dependencies_only": true,
+      "notes": ["string"]
+    }
+  },
+  "clarification_needed": {
+    "required": false,
+    "questions": ["string"]
+  }
+}
+// Then one line per task:
+{
+  "id": "string (e.g. T1)",
+  "title": "string",
+  "type": "implementation|infrastructure|research|refactor|bugfix",
+  "body": ["string paragraph"],
+  "depends_on": ["T1"],
+  "acceptance": ["string"],
+  "instructions": {"agent_name": null, "notes": ["string"]},
+  "risk": ["string"]
+}
+\`\`\`
+
+**Forbidden fields — NEVER use these**
+Do NOT output fields like \`task_id\`, \`phase\`, \`description\`, \`status\`, \`recommended_file\`, \`recommended_test_file\`, \`dependencies\`, \`rule_ids\`, or \`estimated_effort\`. Use ONLY the fields shown in the schema above.
 
 Example successful plan:
 
@@ -345,7 +382,11 @@ function parsePlanningV1Jsonl(rawText: string): ParsePlanningResult {
 /*  LLM session with repair                                            */
 /* ------------------------------------------------------------------ */
 
-async function runPlanningSession(prompt: string, workingDir?: string): Promise<ParsePlanningResult> {
+async function runPlanningSession(
+  systemPrompt: string,
+  userMessage: string,
+  workingDir?: string,
+): Promise<ParsePlanningResult> {
   const preferredModel = getModel('opencode-go', 'deepseek-v4-pro');
 
   console.log('[planning] Starting AI planning completion');
@@ -355,8 +396,8 @@ async function runPlanningSession(prompt: string, workingDir?: string): Promise<
   const result = await runLlmWithToolLoop({
     model: preferredModel,
     apiKey,
-    systemPrompt: prompt,
-    userMessage: 'Produce the task breakdown as valid JSONL conforming to the planning.v1 schema above. Return raw JSONL only, with no markdown fences or extra prose.',
+    systemPrompt,
+    userMessage,
     workingDir,
     tools: [readFileTool, writeToFileTool],
     maxRounds: 1,
@@ -387,8 +428,12 @@ async function runPlanningSession(prompt: string, workingDir?: string): Promise<
   return parsePlanningV1Jsonl(textContent);
 }
 
-async function runPlanningSessionWithRepair(prompt: string, workingDir?: string): Promise<ParsePlanningResult> {
-  const firstResult = await runPlanningSession(prompt, workingDir);
+async function runPlanningSessionWithRepair(
+  systemPrompt: string,
+  userMessage: string,
+  workingDir?: string,
+): Promise<ParsePlanningResult> {
+  const firstResult = await runPlanningSession(systemPrompt, userMessage, workingDir);
   if (firstResult.success) {
     return firstResult;
   }
@@ -409,7 +454,7 @@ ${firstResult.errors.map((e) => `- ${e}`).join('\n')}
 
 Please return ONLY valid JSONL that fixes these issues. Line 1 = header, lines 2+ = tasks. Do not include markdown code fences, prose, comments, blank lines, a surrounding JSON array, or commas between lines.`;
 
-  const repairResult = await runPlanningSession(repairPrompt, workingDir);
+  const repairResult = await runPlanningSession(systemPrompt, repairPrompt, workingDir);
   if (repairResult.success) {
     console.log('[planning] Repair pass succeeded');
     return repairResult;
@@ -560,7 +605,11 @@ async function delegatePlanning(
     try {
       const workingDir = typeof card.payload?.working_dir === 'string' ? card.payload.working_dir.trim() : undefined;
       const context = extractCardContext(card);
-      result = await runPlanningSessionWithRepair(buildPlanningPrompt(context), workingDir);
+      result = await runPlanningSessionWithRepair(
+        buildPlanningSystemPrompt(),
+        buildPlanningUserPrompt(context),
+        workingDir,
+      );
     } catch (llmErr) {
       const message = llmErr instanceof Error ? llmErr.message : String(llmErr);
       console.error(`[planning] LLM planning failed, continuing with clone: ${message}`);
