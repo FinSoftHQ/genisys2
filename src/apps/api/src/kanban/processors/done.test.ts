@@ -208,6 +208,66 @@ describe('done processor routes', () => {
       );
     });
 
+    it('returns 202 before parent-wake async work completes (non-blocking)', async () => {
+      mockGetCardById.mockImplementation((_db: unknown, boardUid: string, cardUid: string) => {
+        if (boardUid === mockDevBoard.uid && cardUid === mockParentCard.uid) {
+          return mockParentCard;
+        }
+        if (boardUid === mockTaskBoard.uid && cardUid === mockChildCard.uid) {
+          return mockChildCard;
+        }
+        return undefined;
+      });
+      mockGetCardFamily.mockReturnValue({
+        parents: [],
+        children: [{ uid: mockChildCard.uid, board_uid: mockChildCard.board_uid, display_id: mockChildCard.display_id, status: mockChildCard.current_status, title: mockChildCard.title, processing_state: mockChildCard.processing_state }],
+      });
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockMoveCard.mockReturnValue({ ...mockParentCard, current_status: 'wrap', version: 2 });
+      // Simulate slow async startProcessing
+      mockStartProcessing.mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 300));
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440012';
+      const startTime = Date.now();
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/done/on-enter',
+        payload: {
+          card: mockChildCard,
+          board: mockTaskBoard,
+          column: mockTaskBoard.schema.columns[2],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440013',
+        },
+      });
+      const elapsed = Date.now() - startTime;
+
+      expect(response.statusCode).toBe(202);
+      // HTTP response must return before the 300ms async work finishes
+      expect(elapsed).toBeLessThan(200);
+
+      // Allow the async wakeParentIfAllChildrenDone to complete
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      expect(mockGetCardFamily).toHaveBeenCalledWith({}, mockDevBoard.uid, mockParentCard.uid);
+      expect(mockMoveCard).toHaveBeenCalledWith(
+        {},
+        mockDevBoard.uid,
+        mockParentCard.uid,
+        'wrap',
+        'system:task-complete',
+      );
+      expect(mockStartProcessing).toHaveBeenCalledWith(
+        {},
+        mockDevBoard,
+        expect.objectContaining({ uid: mockParentCard.uid, current_status: 'wrap' }),
+        expect.objectContaining({ uid: 'wrap', type: 'Processing' }),
+      );
+    });
+
     it('wakes parent to wrap when all children are done (including current child in PROCESSING)', async () => {
       mockGetCardById.mockImplementation((_db: unknown, boardUid: string, cardUid: string) => {
         if (boardUid === mockDevBoard.uid && cardUid === mockParentCard.uid) {
@@ -371,7 +431,7 @@ describe('done processor routes', () => {
       expect(mockStartProcessing).not.toHaveBeenCalled();
     });
 
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for invalid body with VALIDATION_ERROR code', async () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/kanban-processor/done/on-enter',
@@ -381,6 +441,9 @@ describe('done processor routes', () => {
       expect(response.statusCode).toBe(400);
       const body = response.json();
       expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toBe('Invalid request body');
+      expect(Array.isArray(body.error.details.issues)).toBe(true);
     });
   });
 

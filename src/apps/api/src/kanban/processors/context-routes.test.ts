@@ -45,7 +45,7 @@ const mockCard = {
   updated_at: '2026-04-26T08:30:00.000Z',
 };
 
-describe('processor routes', () => {
+describe('processor routes (context-routes)', () => {
   let app: FastifyInstance;
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
@@ -60,7 +60,7 @@ describe('processor routes', () => {
     fetchSpy.mockRestore();
   });
 
-describe('todo processor routes', () => {
+  describe('todo processor routes', () => {
     let todoApp: FastifyInstance;
 
     beforeEach(async () => {
@@ -136,82 +136,6 @@ describe('todo processor routes', () => {
     });
   });
 
-  describe('done processor routes', () => {
-    let doneApp: FastifyInstance;
-
-    beforeEach(async () => {
-      doneApp = fastify();
-      await doneApp.register(processorRoutes, { prefix: '/api/kanban-processor/done' });
-    });
-
-    afterEach(async () => {
-      await doneApp.close();
-    });
-
-    it('returns 200 with healthy status', async () => {
-      const response = await doneApp.inject({
-        method: 'GET',
-        url: '/api/kanban-processor/done/health',
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = response.json();
-      expect(HealthCheckResponseSchema.safeParse(body).success).toBe(true);
-      expect(body.status).toBe('healthy');
-    });
-
-    it('returns 200 with allowed: true for can-exit', async () => {
-      const response = await doneApp.inject({
-        method: 'POST',
-        url: '/api/kanban-processor/done/can-exit',
-        payload: {
-          card: mockCard,
-          target_column: 'in-progress',
-          actor: 'user:test@example.com',
-        },
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = response.json();
-      expect(CanExitHookResponseSchema.safeParse(body).success).toBe(true);
-      expect(body.allowed).toBe(true);
-    });
-
-    it('returns 202 accepted and fires callback for on-enter', async () => {
-      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440003';
-      const response = await doneApp.inject({
-        method: 'POST',
-        url: '/api/kanban-processor/done/on-enter',
-        payload: {
-          card: mockCard,
-          board: mockBoard,
-          column: { uid: 'in-review', title: 'In Review', type: 'Processing', processor_id: 'manager-approval', exit_logic: { approved: 'done' }, order: 1 },
-          callback_url: callbackUrl,
-          idempotency_key: '550e8400-e29b-41d4-a716-446655440004',
-        },
-      });
-
-      expect(response.statusCode).toBe(202);
-      const body = response.json();
-      expect(OnEnterDispatchAcceptedResponseSchema.safeParse(body).success).toBe(true);
-      expect(body.status).toBe('accepted');
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      expect(fetchSpy).toHaveBeenCalledWith(
-        callbackUrl,
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer processor',
-          }),
-          body: expect.stringContaining('"status":"success"'),
-        }),
-      );
-    });
-  });
-
   describe('GET /api/kanban-processor/default/health', () => {
     it('returns 200 with healthy status', async () => {
       const response = await app.inject({
@@ -244,7 +168,7 @@ describe('todo processor routes', () => {
       expect(body.allowed).toBe(true);
     });
 
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for invalid body with VALIDATION_ERROR code', async () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/kanban-processor/default/can-exit',
@@ -254,6 +178,9 @@ describe('todo processor routes', () => {
       expect(response.statusCode).toBe(400);
       const body = response.json();
       expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toBe('Invalid request body');
+      expect(Array.isArray(body.error.details.issues)).toBe(true);
     });
   });
 
@@ -276,7 +203,7 @@ describe('todo processor routes', () => {
       expect(body.transformed_payload).toBeUndefined();
     });
 
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for invalid body with VALIDATION_ERROR code', async () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/kanban-processor/default/on-update',
@@ -286,6 +213,9 @@ describe('todo processor routes', () => {
       expect(response.statusCode).toBe(400);
       const body = response.json();
       expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toBe('Invalid request body');
+      expect(Array.isArray(body.error.details.issues)).toBe(true);
     });
   });
 
@@ -325,7 +255,7 @@ describe('todo processor routes', () => {
       );
     });
 
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for invalid body with VALIDATION_ERROR code', async () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/kanban-processor/default/on-enter',
@@ -335,6 +265,9 @@ describe('todo processor routes', () => {
       expect(response.statusCode).toBe(400);
       const body = response.json();
       expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toBe('Invalid request body');
+      expect(Array.isArray(body.error.details.issues)).toBe(true);
     });
   });
 
@@ -375,7 +308,7 @@ describe('todo processor routes', () => {
       );
     });
 
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for invalid body with VALIDATION_ERROR code', async () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/kanban-processor/default/on-action',
@@ -385,6 +318,9 @@ describe('todo processor routes', () => {
       expect(response.statusCode).toBe(400);
       const body = response.json();
       expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toBe('Invalid request body');
+      expect(Array.isArray(body.error.details.issues)).toBe(true);
     });
   });
 
@@ -405,7 +341,7 @@ describe('todo processor routes', () => {
       expect(body.status).toBe('acknowledged');
     });
 
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for invalid body with VALIDATION_ERROR code', async () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/kanban-processor/default/on-exit',
@@ -415,6 +351,9 @@ describe('todo processor routes', () => {
       expect(response.statusCode).toBe(400);
       const body = response.json();
       expect(ApiErrorSchema.safeParse(body).success).toBe(true);
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toBe('Invalid request body');
+      expect(Array.isArray(body.error.details.issues)).toBe(true);
     });
   });
 });
