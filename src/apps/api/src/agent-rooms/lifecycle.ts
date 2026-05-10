@@ -169,6 +169,7 @@ export async function createRoom(
 		promptDir,
 		workingDir,
 		idleCompletionTimeout: undefined,
+		facilitatorConsecutiveOrphanFailures: 0,
 		callbackUrl: options?.callbackUrl,
 		callbackSecret: options?.callbackSecret,
 		tag: options?.tag,

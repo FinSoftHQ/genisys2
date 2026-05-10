@@ -72,6 +72,7 @@ export interface Room {
 	failedAgent?: string;
 	failedReason?: string;
 	expireTimeout?: ReturnType<typeof setTimeout>;
+	facilitatorConsecutiveOrphanFailures?: number;
 	events: StoredEvent[];
 	eventSeq: number;
 	promptDir: string;

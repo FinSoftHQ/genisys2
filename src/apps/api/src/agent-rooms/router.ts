@@ -100,6 +100,11 @@ export function routeMessageToAgents(
 	const recipients = determineRecipients(room, fromAgent, text);
 
 	if (recipients.length > 0) {
+		// Reset facilitator orphan counter on successful routing from facilitator
+		if (fromAgent === room.facilitator) {
+			room.facilitatorConsecutiveOrphanFailures = 0;
+		}
+
 		deps.clearIdleCompletionTimeout(room);
 		const formattedMessage = `[${fromAgent}]: ${text}`;
 		for (const recipientName of recipients) {
@@ -144,9 +149,26 @@ export function routeMessageToAgents(
 	}
 
 	if (room.facilitator === fromAgent) {
-		console.error(
-			`[CRITICAL ERROR] Facilitator ${fromAgent} sent a message with no recipients. This creates an infinite loop. Configure routes for the facilitator agent.`,
-		);
+		const failures = room.facilitatorConsecutiveOrphanFailures ?? 0;
+		if (failures >= 1) {
+			console.error(
+				`[CRITICAL ERROR] Facilitator ${fromAgent} sent a message with no recipients. This creates an infinite loop. Configure routes for the facilitator agent.`,
+			);
+			return;
+		}
+
+		room.facilitatorConsecutiveOrphanFailures = failures + 1;
+
+		const facilitatorAgent = room.agents.get(fromAgent);
+		if (facilitatorAgent) {
+			deps.clearIdleCompletionTimeout(room);
+			const retryMessage =
+				`[SYSTEM_ROUTING_FAILURE]\n**Original Sender:** ${fromAgent}\n**Status:** No recipients resolved. One retry allowed before drop. Please use @attn:<name|role> or configured routes.\n**Content:**\n> ---\n${text}`;
+			deps.sendToAgent(facilitatorAgent, {
+				type: facilitatorAgent.isStreaming ? "follow_up" : "prompt",
+				message: retryMessage,
+			});
+		}
 		return;
 	}
 

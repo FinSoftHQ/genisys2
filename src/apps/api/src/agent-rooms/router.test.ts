@@ -333,6 +333,7 @@ describe("router", () => {
 			agents: any[],
 			routes?: Record<string, string[]>,
 			facilitator?: string,
+			facilitatorConsecutiveOrphanFailures?: number,
 		): Room {
 			return {
 				id: "test",
@@ -345,6 +346,7 @@ describe("router", () => {
 				routingStrategy,
 				routes,
 				facilitator,
+				facilitatorConsecutiveOrphanFailures,
 				events: [],
 				eventSeq: 0,
 				promptDir: "",
@@ -400,7 +402,27 @@ describe("router", () => {
 			);
 		});
 
-		it("logs critical error when facilitator is the sender with no recipients", () => {
+		it("sends one retry message when facilitator is the sender with no recipients the first time", () => {
+			const facilitator = makeAgent("facilitator");
+			const room = makeRoom(
+				"explicit",
+				[makeAgent("alpha"), facilitator],
+				undefined,
+				"facilitator",
+				0,
+			);
+			routeMessageToAgents(room, "facilitator", "hello", mockDeps);
+			expect(facilitator.proc.stdin.write).toHaveBeenCalledWith(
+				`${JSON.stringify({
+					type: "prompt",
+					message:
+						"[SYSTEM_ROUTING_FAILURE]\n**Original Sender:** facilitator\n**Status:** No recipients resolved. One retry allowed before drop. Please use @attn:<name|role> or configured routes.\n**Content:**\n> ---\nhello",
+				})}\n`,
+			);
+			expect(room.facilitatorConsecutiveOrphanFailures).toBe(1);
+		});
+
+		it("logs critical error when facilitator is the sender with no recipients consecutively", () => {
 			const errorSpy = vi
 				.spyOn(console, "error")
 				.mockImplementation(() => {});
@@ -410,6 +432,7 @@ describe("router", () => {
 				[makeAgent("alpha"), facilitator],
 				undefined,
 				"facilitator",
+				1,
 			);
 			routeMessageToAgents(room, "facilitator", "hello", mockDeps);
 			expect(errorSpy).toHaveBeenCalledWith(
@@ -417,6 +440,64 @@ describe("router", () => {
 			);
 			expect(facilitator.proc.stdin.write).not.toHaveBeenCalled();
 			errorSpy.mockRestore();
+		});
+
+		it("resets facilitator orphan counter after a successful routed message", () => {
+			const beta = makeAgent("beta");
+			const facilitator = makeAgent("facilitator");
+			const room = makeRoom(
+				"explicit",
+				[makeAgent("alpha"), beta, facilitator],
+				{ facilitator: ["beta"] },
+				"facilitator",
+				1,
+			);
+			routeMessageToAgents(room, "facilitator", "hello", mockDeps);
+			expect(beta.proc.stdin.write).toHaveBeenCalledWith(
+				`${JSON.stringify({ type: "prompt", message: "[facilitator]: hello" })}\n`,
+			);
+			expect(room.facilitatorConsecutiveOrphanFailures).toBe(0);
+		});
+
+		it("allows retry again after a successful routed message resets counter", () => {
+			const beta = makeAgent("beta");
+			const facilitator = makeAgent("facilitator");
+			const room = makeRoom(
+				"explicit",
+				[makeAgent("alpha"), beta, facilitator],
+				undefined,
+				"facilitator",
+				1,
+			);
+			// First: orphan with counter=1 should drop (critical error)
+			const errorSpy = vi
+				.spyOn(console, "error")
+				.mockImplementation(() => {});
+			routeMessageToAgents(room, "facilitator", "first orphan", mockDeps);
+			expect(errorSpy).toHaveBeenCalledWith(
+				"[CRITICAL ERROR] Facilitator facilitator sent a message with no recipients. This creates an infinite loop. Configure routes for the facilitator agent.",
+			);
+			expect(facilitator.proc.stdin.write).not.toHaveBeenCalled();
+			errorSpy.mockRestore();
+
+			// Successful route resets counter to 0
+			routeMessageToAgents(room, "facilitator", "hey @attn:beta", mockDeps);
+			expect(room.facilitatorConsecutiveOrphanFailures).toBe(0);
+			expect(beta.proc.stdin.write).toHaveBeenCalled();
+
+			// Next orphan should get retry again
+			beta.proc.stdin.write.mockClear();
+			facilitator.proc.stdin.write.mockClear();
+			routeMessageToAgents(room, "facilitator", "second orphan", mockDeps);
+			expect(beta.proc.stdin.write).not.toHaveBeenCalled();
+			expect(facilitator.proc.stdin.write).toHaveBeenCalledWith(
+				`${JSON.stringify({
+					type: "prompt",
+					message:
+						"[SYSTEM_ROUTING_FAILURE]\n**Original Sender:** facilitator\n**Status:** No recipients resolved. One retry allowed before drop. Please use @attn:<name|role> or configured routes.\n**Content:**\n> ---\nsecond orphan",
+				})}\n`,
+			);
+			expect(room.facilitatorConsecutiveOrphanFailures).toBe(1);
 		});
 
 		it("warns and drops when facilitator is defined but not in room", () => {

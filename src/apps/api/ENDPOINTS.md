@@ -218,7 +218,7 @@ Notes
   1. Scanning the message text for inline `@attn:<identifier>` tags (dynamic targeting). An identifier is resolved against **both agent names and roles** — if it matches a name, that agent is targeted; if it matches a role, all agents with that role are targeted.
   2. Looking up the sender's statically configured recipients in the `routes:` block.
   3. Merging both pools, deduplicating them, and excluding the sender.
-  4. If no valid recipients remain, the message is forwarded to the designated `facilitator:` agent (if configured) with a `[SYSTEM_ROUTING_FAILURE]` wrapper. If no facilitator is configured, the message is dropped with a system warning. If the sender *is* the facilitator, the message is dropped with a critical error to prevent infinite loops.
+  4. If no valid recipients remain, the message is forwarded to the designated `facilitator:` agent (if configured) with a `[SYSTEM_ROUTING_FAILURE]` wrapper. If no facilitator is configured, the message is dropped with a system warning. If the sender *is* the facilitator, the system grants **one retry**: the first consecutive orphan message is sent back to the facilitator wrapped in `[SYSTEM_ROUTING_FAILURE]` with a retry notice; a second consecutive orphan message is dropped with a critical error to prevent infinite loops. The retry counter resets to zero whenever the facilitator successfully routes a message to other agents.
 - You can optionally declare a `facilitator:` key in the front matter to designate a fallback agent for orphaned messages in Explicit Mode.
 - You can optionally declare a `routes:` block in the front matter to control which agents receive messages from which sender.
 - You can optionally declare a `tailor_shop:` block in the front matter to point to a directory containing agent-specific prompt files (`agents/<agent_name>.md`, falling back to `agents/<role>.md`) and an optional shared protocol (`working_protocol.md`). These files are passed as `--append-system-prompt` to each `pi` process. Agent files may include an optional YAML front matter with `model:` to override the model for that agent.
@@ -520,7 +520,7 @@ Event types (overview)
 Key behavioral difference from squads
 - When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
 - **Broadcast Mode** (no `routes:` block): messages are broadcast to all other agents.
-- **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists.
+- **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists. If the sender *is* the facilitator, one self-retry is allowed before the message is dropped with a critical error; the retry counter resets when the facilitator successfully routes a message.
 
 ---
 
