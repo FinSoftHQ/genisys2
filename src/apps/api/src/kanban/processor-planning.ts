@@ -208,7 +208,6 @@ JSONL rules:
   "body": ["string paragraph"],
   "depends_on": ["T1"],
   "acceptance": ["string"],
-  "instructions": {"agent_name": null, "notes": ["string"]},
   "risk": ["string"]
 }
 \`\`\`
@@ -220,8 +219,8 @@ Example successful plan:
 
 \`\`\`jsonl
 {"version":"planning.v1","pre_flight":{"complexity_level":"standard","justification":"The task can be split into independently reviewable implementation steps.","primary_type":"implementation","ambiguity_status":"none","missing_info":[],"validation":{"coverage_complete":true,"fits_one_day":true,"independently_testable":true,"forward_dependencies_only":true,"notes":[]}},"clarification_needed":{"required":false,"questions":[]}}
-{"id":"T1","title":"Define the shared API contract","type":"implementation","body":["Add or update the shared schema/types required by the feature so later implementation tasks can depend on a stable contract."],"depends_on":[],"acceptance":["The shared contract exists in the appropriate shared module.","The contract has validation or type coverage where applicable."],"instructions":{"agent_name":null,"notes":[]},"risk":["The exact file location should be verified before editing."]}
-{"id":"T2","title":"Implement the backend behavior","type":"implementation","body":["Implement the server-side behavior using the shared contract from T1."],"depends_on":["T1"],"acceptance":["The backend accepts valid requests that match the shared contract.","Relevant backend tests pass."],"instructions":{"agent_name":null,"notes":[]},"risk":[]}
+{"id":"T1","title":"Define the shared API contract","type":"implementation","body":["Add or update the shared schema/types required by the feature so later implementation tasks can depend on a stable contract."],"depends_on":[],"acceptance":["The shared contract exists in the appropriate shared module.","The contract has validation or type coverage where applicable."],"risk":["The exact file location should be verified before editing."]}
+{"id":"T2","title":"Implement the backend behavior","type":"implementation","body":["Implement the server-side behavior using the shared contract from T1."],"depends_on":["T1"],"acceptance":["The backend accepts valid requests that match the shared contract.","Relevant backend tests pass."],"risk":[]}
 \`\`\`
 
 Example clarification-only output:
@@ -716,13 +715,13 @@ ${'```'}
 
 Lines 2–N — task objects (only these fields, no others):
 ${'```json'}
-{"id":"T1","title":"string","type":"implementation|infrastructure|research|refactor|bugfix","body":["string paragraph"],"depends_on":["T1"],"acceptance":["string"],"instructions":{"agent_name":null,"notes":["string"]},"risk":["string"]}
+{"id":"T1","title":"string","type":"implementation|infrastructure|research|refactor|bugfix","body":["string paragraph"],"depends_on":["T1"],"acceptance":["string"],"risk":["string"]}
 ${'```'}
 
 CRITICAL:
 - version MUST be "planning.v1" (not "1.0" or anything else).
 - Do NOT wrap the header in a {"header":{...}} envelope — the header IS the object.
-- Task fields are id, title, type, body, depends_on, acceptance, instructions, risk — NOT task_id, phase, description.
+- Task fields are id, title, type, body, depends_on, acceptance, risk — NOT task_id, phase, description.
 - Maximum ${taskLimit} total task lines. Each task body array item must be a short paragraph (1–2 sentences).
 - If clarification_needed.required is true, output ONLY the header line (no tasks).
 
@@ -758,7 +757,7 @@ function buildTier3UserMessage(
     `- Each body[] item: 1 short sentence maximum.\n` +
     `- Each acceptance[] item: 1 short pass/fail criterion maximum.\n` +
     `- version MUST be "planning.v1" exactly.\n` +
-    `- Task fields: id, title, type, body, depends_on, acceptance, instructions, risk — ONLY these.\n` +
+    `- Task fields: id, title, type, body, depends_on, acceptance, risk — ONLY these.\n` +
     `- First character of your response MUST be {. No prose, no fences, no blank lines.\n\n` +
     `Previous errors to NOT repeat:\n${errorSummary}\n\n` +
     `Output valid JSONL now. First character must be {.`
@@ -889,7 +888,7 @@ function generatePlanningSummary(data: PlanningV1): string {
       for (const acc of task.acceptance) {
         lines.push(`- ${acc}`);
       }
-      if (task.instructions.agent_name || task.instructions.notes.length > 0) {
+      if (task.instructions && (task.instructions.agent_name || task.instructions.notes.length > 0)) {
         lines.push('');
         lines.push('**Instructions:**');
         if (task.instructions.agent_name) {
@@ -1025,16 +1024,17 @@ async function delegatePlanning(
         return;
       }
 
-      // Inject team contact into tasks where the LLM left agent_name as null
-      if (contactAgentName) {
-        for (const task of data.tasks) {
-          if (task.instructions.agent_name === null) {
-            task.instructions.agent_name = contactAgentName;
-            task.instructions.notes = [
-              'Coordinate the team to implement the Scope of Work described in this card.',
-              ...task.instructions.notes,
-            ];
-          }
+      // Normalize instructions and inject team contact where needed
+      for (const task of data.tasks) {
+        if (!task.instructions) {
+          task.instructions = { agent_name: null, notes: [] };
+        }
+        if (contactAgentName && task.instructions.agent_name === null) {
+          task.instructions.agent_name = contactAgentName;
+          task.instructions.notes = [
+            'Coordinate the team to implement the Scope of Work described in this card.',
+            ...task.instructions.notes,
+          ];
         }
       }
 
@@ -1043,12 +1043,18 @@ async function delegatePlanning(
         const createdTaskCards: { uid: string; id: string; title: string }[] = [];
 
         for (const task of data.tasks) {
+          // Convert internal { agent_name, notes } to Record<string, string> for payload
+          const instructionsPayload: Record<string, string> | undefined =
+            task.instructions?.agent_name
+              ? { [task.instructions.agent_name]: task.instructions.notes.join('\n\n') }
+              : undefined;
+
           const taskPayload = {
             ...card.payload,
             parent_board_uid: card.board_uid,
             parent_card_uid: card.uid,
             task_type: task.type,
-            instructions: task.instructions,
+            ...(instructionsPayload ? { instructions: instructionsPayload } : {}),
             depends_on: task.depends_on,
             acceptance: task.acceptance,
             risk: task.risk,

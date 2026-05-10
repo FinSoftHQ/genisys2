@@ -245,7 +245,6 @@ describe('planning processor routes', () => {
                 body: ['Create the POST /login endpoint with email/password validation and JWT generation.'],
                 depends_on: [],
                 acceptance: ['POST /login returns 200 with valid JWT for correct credentials.'],
-                instructions: { agent_name: 'dev', notes: ['Implement the login endpoint'] },
                 risk: [],
               },
               {
@@ -255,7 +254,6 @@ describe('planning processor routes', () => {
                 body: ['Create the POST /signup endpoint with password hashing and user creation.'],
                 depends_on: [],
                 acceptance: ['POST /signup creates a new user and returns 201.'],
-                instructions: { agent_name: null, notes: [] },
                 risk: [],
               },
             ],
@@ -371,7 +369,6 @@ describe('planning processor routes', () => {
                 body: ['Define the user schema and migration.'],
                 depends_on: [],
                 acceptance: ['Schema is defined.'],
-                instructions: { agent_name: null, notes: [] },
                 risk: [],
               },
               {
@@ -381,7 +378,6 @@ describe('planning processor routes', () => {
                 body: ['Create the POST /login endpoint.'],
                 depends_on: ['T1'],
                 acceptance: ['POST /login returns 200.'],
-                instructions: { agent_name: null, notes: [] },
                 risk: [],
               },
             ],
@@ -523,7 +519,6 @@ describe('planning processor routes', () => {
                   body: ['Create the POST /login endpoint.'],
                   depends_on: [],
                   acceptance: ['POST /login returns 200.'],
-                  instructions: { agent_name: null, notes: [] },
                   risk: [],
                 },
               ],
@@ -644,7 +639,6 @@ describe('planning processor routes', () => {
                   body: ['Body.'],
                   depends_on: ['T1'],
                   acceptance: ['Acc.'],
-                  instructions: { agent_name: null, notes: [] },
                   risk: [],
                 },
               ],
@@ -714,7 +708,6 @@ ${makePlanningV1Response({
       body: ['Create the POST /login endpoint.'],
       depends_on: [],
       acceptance: ['POST /login returns 200.'],
-      instructions: { agent_name: null, notes: [] },
       risk: [],
     },
   ],
@@ -785,7 +778,6 @@ ${makePlanningV1Response({
       body: ['Create the POST /login endpoint.'],
       depends_on: [],
       acceptance: ['POST /login returns 200.'],
-      instructions: { agent_name: null, notes: [] },
       risk: [],
     },
   ],
@@ -851,7 +843,6 @@ ${makePlanningV1Response({
             body: ['Create the POST /login endpoint.'],
             depends_on: [],
             acceptance: ['POST /login returns 200.'],
-            instructions: { agent_name: null, notes: [] },
             risk: [],
           },
         ],
@@ -870,7 +861,6 @@ ${makePlanningV1Response({
                   body: ['Create the POST /login endpoint.'],
                   depends_on: [],
                   acceptance: ['POST /login returns 200.'],
-                  instructions: { agent_name: null, notes: [] },
                   risk: [],
                 },
                 {
@@ -880,7 +870,6 @@ ${makePlanningV1Response({
                   body: ['Create the POST /signup endpoint.'],
                   depends_on: [],
                   acceptance: ['POST /signup returns 201.'],
-                  instructions: { agent_name: null, notes: [] },
                   risk: [],
                 },
               ],
@@ -951,7 +940,6 @@ ${makePlanningV1Response({
                 body: ['Create the POST /login endpoint.'],
                 depends_on: [],
                 acceptance: ['POST /login returns 200.'],
-                instructions: { agent_name: null, notes: [] },
                 risk: [],
               },
             ],
@@ -1012,7 +1000,6 @@ ${makePlanningV1Response({
           body: ['Create the POST /login endpoint.'],
           depends_on: [],
           acceptance: ['POST /login returns 200.'],
-          instructions: { agent_name: null, notes: [] },
           risk: [],
         }),
         JSON.stringify({
@@ -1022,7 +1009,6 @@ ${makePlanningV1Response({
           body: ['Create the POST /signup endpoint.'],
           depends_on: [],
           acceptance: ['POST /signup returns 201.'],
-          instructions: { agent_name: null, notes: [] },
           risk: [],
         }),
       ].join('\n');
@@ -1148,7 +1134,6 @@ ${makePlanningV1Response({
                 body: ['Create the POST /login endpoint.'],
                 depends_on: [],
                 acceptance: ['POST /login returns 200.'],
-                instructions: { agent_name: null, notes: [] },
                 risk: [],
               },
             ],
@@ -1186,8 +1171,7 @@ ${makePlanningV1Response({
       expect(mockParseProtocol).toHaveBeenCalledWith('/workspace/teams/dev/working_protocol.md', { requireTeam: true });
       expect(mockCreateCard).toHaveBeenCalledTimes(1);
       const createCall = mockCreateCard.mock.calls[0];
-      expect(createCall[2].payload.instructions.agent_name).toBe('Linda');
-      expect(createCall[2].payload.instructions.notes[0]).toBe(
+      expect(createCall[2].payload.instructions['Linda']).toBe(
         'Coordinate the team to implement the Scope of Work described in this card.'
       );
 
@@ -1224,7 +1208,6 @@ ${makePlanningV1Response({
                 body: ['Create the POST /login endpoint.'],
                 depends_on: [],
                 acceptance: ['POST /login returns 200.'],
-                instructions: { agent_name: null, notes: [] },
                 risk: [],
               },
             ],
@@ -1260,7 +1243,9 @@ ${makePlanningV1Response({
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       const createCall = mockCreateCard.mock.calls[0];
-      expect(createCall[2].payload.instructions.agent_name).toBe('Sola');
+      expect(createCall[2].payload.instructions['Sola']).toBe(
+        'Coordinate the team to implement the Scope of Work described in this card.'
+      );
     });
 
     it('preserves existing LLM-assigned agent_name and does not overwrite', async () => {
@@ -1323,8 +1308,7 @@ ${makePlanningV1Response({
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       const createCall = mockCreateCard.mock.calls[0];
-      expect(createCall[2].payload.instructions.agent_name).toBe('Sola');
-      expect(createCall[2].payload.instructions.notes).toEqual(['Use JWT']);
+      expect(createCall[2].payload.instructions['Sola']).toBe('Use JWT');
     });
 
     it('gracefully continues when tailor_shop is missing', async () => {
@@ -1346,7 +1330,6 @@ ${makePlanningV1Response({
                 body: ['Create the POST /login endpoint.'],
                 depends_on: [],
                 acceptance: ['POST /login returns 200.'],
-                instructions: { agent_name: null, notes: [] },
                 risk: [],
               },
             ],
@@ -1378,7 +1361,7 @@ ${makePlanningV1Response({
 
       expect(mockParseProtocol).not.toHaveBeenCalled();
       const createCall = mockCreateCard.mock.calls[0];
-      expect(createCall[2].payload.instructions.agent_name).toBeNull();
+      expect(createCall[2].payload.instructions).toBeUndefined();
     });
 
     it('stores contact_agent_name in parent payload even for clarification-needed', async () => {

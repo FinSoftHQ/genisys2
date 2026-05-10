@@ -51,10 +51,6 @@ Markdown remains allowed for:
       "body": ["string"],
       "depends_on": ["T0"],
       "acceptance": ["string"],
-      "instructions": {
-        "agent_name": "none|string",
-        "notes": ["string"]
-      },
       "risk": ["string"]
     }
   ]
@@ -69,11 +65,12 @@ Markdown remains allowed for:
   - Each item must be pass/fail and testable.
 - `depends_on`: `string[]` of task IDs (`T1`, `T2`, ...)
   - Never depend on title text.
-- `instructions.agent_name`
-  - When the LLM leaves this as `null`, the planning processor attempts to resolve a team contact from the parent card's `tailor_shop` working protocol (`working_protocol.md`).
-  - The contact is derived as: `facilitator` if present, otherwise the first name in the `team:` roster.
-  - If resolved, `agent_name` is set to the contact and a coordination note is prepended to `instructions.notes`.
-  - If the LLM already assigned a specific agent, that value is preserved.
+- `instructions` (processor-constructed, not emitted by LLM)
+  - After parsing, the processor creates an `instructions` object for every task.
+  - `agent_name` is set to `contact_agent_name` derived from the parent card's `tailor_shop` working protocol (`working_protocol.md`).
+  - Derivation: `facilitator` if present, otherwise the first name in the `team:` roster.
+  - A coordination note is prepended to `instructions.notes`.
+  - If the LLM did emit `instructions` (backward compatibility), the processor uses the LLM's `agent_name` when it is non-null instead of overriding it.
 - `clarification_needed.required = true`
   - `tasks` must be empty.
   - Processor should not create child cards.
@@ -88,7 +85,8 @@ Markdown remains allowed for:
    - dependency IDs exist
    - no self-dependency
    - no cycles
-5. Resolve team contact:
+5. Construct task instructions:
+   - Normalize each task: if `instructions` is missing, create `{ agent_name: null, notes: [] }`.
    - If the parent card has `tailor_shop` in its payload, read `${tailor_shop}/working_protocol.md`.
    - Derive `contact_agent_name` = `facilitator` || first name in `team:` roster.
    - For each task with `instructions.agent_name === null`, set it to `contact_agent_name` and prepend a coordination note to `instructions.notes`.

@@ -1100,7 +1100,7 @@ export const PlanningV1TaskSchema = z
       })
       // No .strict() — extra keys from the LLM are silently stripped; a warning
       // is emitted in the processor after parsing.
-      .default({ agent_name: null, notes: [] }),
+      .optional(),
     risk: z.array(z.string()).default([]),
   });
   // No .strict() on the task schema — unrecognized keys (e.g. "phase",
