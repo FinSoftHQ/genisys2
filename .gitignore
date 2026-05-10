@@ -435,6 +435,7 @@ src/apps/the-architect/src/mastra/public/
 
 # SQLite in-memory database spill files (WAL mode writes these to disk)
 file:mem_*
+.genisys-data/
 
 # SQLite E2E test database
 e2e/e2e-kanban.db
@@ -445,3 +446,4 @@ e2e/e2e-kanban.db-*
 .dossier/
 llm_context.md
 llm_target.md
+*.tsbuildinfo
