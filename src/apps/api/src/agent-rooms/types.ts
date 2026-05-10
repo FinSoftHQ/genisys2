@@ -1,5 +1,6 @@
 import type { FastifyReply } from "fastify";
 import type { RoomLogger } from "./internal/room-logger.js";
+import type { RingBuffer } from "./ring-buffer.js";
 
 export type RoomStatus =
 	| "initialized"
@@ -73,11 +74,12 @@ export interface Room {
 	failedReason?: string;
 	expireTimeout?: ReturnType<typeof setTimeout>;
 	facilitatorConsecutiveOrphanFailures?: number;
-	events: StoredEvent[];
+	events: RingBuffer<StoredEvent>;
 	eventSeq: number;
 	promptDir: string;
 	workingDir?: string;
 	idleCompletionTimeout?: ReturnType<typeof setTimeout>;
+	completedTtlTimer?: ReturnType<typeof setTimeout>;
 	callbackUrl?: string;
 	callbackSecret?: string;
 	tag?: string;

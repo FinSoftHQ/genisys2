@@ -8,6 +8,7 @@ import { RoomLogger } from "./internal/room-logger.js";
 import type { Room, AgentState, RoomCreateOptions, RoomCloseReason } from "./types.js";
 import { pushEvent } from "./event-store.js";
 import { shouldCheckCompletionAfterTaskMarker } from "./router.js";
+import { RingBuffer } from "./ring-buffer.js";
 import {
 	buildPiArgs,
 	spawnAgentProcess,
@@ -21,6 +22,8 @@ const idleCompletionGraceMsRaw = Number(process.env.AGENT_ROOM_IDLE_COMPLETION_M
 const IDLE_COMPLETION_GRACE_MS = Number.isFinite(idleCompletionGraceMsRaw)
 	? Math.max(1000, idleCompletionGraceMsRaw)
 	: 60_000;
+
+const COMPLETED_TTL_MS = Number(process.env.AGENT_ROOM_COMPLETED_TTL_MS ?? 300_000);
 
 export const rooms = new Map<string, Room>();
 const EXPIRY_MS = 1000 * 60 * 60 * 2; // 2 hours
@@ -164,7 +167,7 @@ export async function createRoom(
 		routes: protocol.routes,
 		facilitator: protocol.facilitator,
 		routingStrategy: protocol.routes ? "explicit" : "broadcast",
-		events: [],
+		events: new RingBuffer(2500),
 		eventSeq: 0,
 		promptDir,
 		workingDir,
@@ -311,7 +314,7 @@ export function getRoomStatus(room: Room): object {
 	for (const [name, agent] of room.agents) {
 		agentStatuses[name] = { status: agent.status };
 	}
-	const lastEvent = room.events.length > 0 ? room.events[room.events.length - 1] : undefined;
+	const lastEvent = room.events.newest;
 	return {
 		roomId: room.id,
 		status: room.status,
@@ -332,9 +335,28 @@ export function getRoomStatus(room: Room): object {
 
 export function addSseClient(room: Room, reply: FastifyReply): void {
 	room.sseClients.add(reply);
-	reply.raw.on("close", () => {
+
+	const heartbeatInterval = setInterval(() => {
+		try {
+			const ok = reply.raw.write(":heartbeat\n\n");
+			if (!ok) {
+				// backpressure — trigger cleanup on next tick via error path
+				throw new Error("SSE backpressure on heartbeat");
+			}
+		} catch {
+			clearInterval(heartbeatInterval);
+			room.sseClients.delete(reply);
+			try { reply.raw.end(); } catch {}
+		}
+	}, 15_000);
+
+	const onClose = () => {
+		clearInterval(heartbeatInterval);
 		room.sseClients.delete(reply);
-	});
+	};
+
+	reply.raw.on("close", onClose);
+	reply.raw.on("error", onClose);
 }
 
 export function removeSseClient(room: Room, reply: FastifyReply): void {
@@ -369,6 +391,17 @@ export async function sendInstructions(
 	return { queuedItems: followUp.length };
 }
 
+export function scheduleRoomEviction(room: Room): void {
+	if (room.completedTtlTimer) clearTimeout(room.completedTtlTimer);
+	room.completedTtlTimer = setTimeout(() => {
+		const current = rooms.get(room.id);
+		if (current && (current.status === "completed" || current.status === "error")) {
+			rooms.delete(room.id);
+			console.info(`[agent-rooms] room evicted from RAM after TTL: ${room.id}`);
+		}
+	}, COMPLETED_TTL_MS);
+}
+
 export function destroyRoom(
 	id: string,
 	reason: Exclude<RoomCloseReason, "completed"> = "manual",
@@ -378,12 +411,14 @@ export function destroyRoom(
 
 	// Already soft-closed — just hard-delete from the registry
 	if (room.status === "completed" || room.status === "error") {
+		if (room.completedTtlTimer) clearTimeout(room.completedTtlTimer);
 		rooms.delete(id);
 		return;
 	}
 
 	if (room.expireTimeout) clearTimeout(room.expireTimeout);
 	clearIdleCompletionTimeout(room);
+	if (room.completedTtlTimer) clearTimeout(room.completedTtlTimer);
 
 	const closedAt = new Date().toISOString();
 	void notifyRoomClosedCallback(room, reason, closedAt);
@@ -463,10 +498,48 @@ export function completeRoom(id: string): void {
 	room.sseClients.clear();
 	room.agents.clear();
 	room.status = "completed";
+	scheduleRoomEviction(room);
 
 	try {
 		rmSync(room.promptDir, { recursive: true, force: true });
 	} catch {
 		// ignore cleanup failure
 	}
+}
+
+export function shutdownAllRooms(): void {
+	for (const room of rooms.values()) {
+		if (room.expireTimeout) clearTimeout(room.expireTimeout);
+		clearIdleCompletionTimeout(room);
+		if (room.completedTtlTimer) clearTimeout(room.completedTtlTimer);
+
+		for (const agent of room.agents.values()) {
+			if (!agent.proc) continue;
+			try {
+				sendToAgent(agent, { type: "abort" });
+				agent.proc.stdin!.end();
+				killAgentProcess(agent.proc);
+			} catch {
+				// ignore
+			}
+		}
+
+		for (const client of room.sseClients) {
+			try {
+				client.raw.end();
+			} catch {
+				// ignore
+			}
+		}
+
+		room.sseClients.clear();
+		room.agents.clear();
+
+		try {
+			rmSync(room.promptDir, { recursive: true, force: true });
+		} catch {
+			// ignore cleanup failure
+		}
+	}
+	rooms.clear();
 }

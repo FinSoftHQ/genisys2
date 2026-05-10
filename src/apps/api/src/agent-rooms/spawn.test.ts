@@ -101,7 +101,7 @@ describe("spawn", () => {
 				expect.objectContaining({
 					cwd: "/tmp/work",
 					detached: true,
-					stdio: ["pipe", "pipe", "inherit"],
+					stdio: ["pipe", "pipe", "pipe"],
 				}),
 			);
 		});

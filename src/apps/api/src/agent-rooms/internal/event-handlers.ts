@@ -8,6 +8,7 @@ import {
 	TASK_COMPLETION_MARKER,
 	clearIdleCompletionTimeout,
 	scheduleIdleCompletionTimeout,
+	scheduleRoomEviction,
 	handleTaskCompletionMarker,
 	updateActivity,
 } from "../lifecycle.js";
@@ -44,6 +45,7 @@ export function attachAgentEventHandlers(
 			const reason = room.failedReason;
 			pushEvent(room, { type: "room_error", from: name, at: new Date().toISOString(), reason });
 			broadcast(room, { type: "room_error", from: name, reason });
+			scheduleRoomEviction(room);
 		}
 	});
 
@@ -58,6 +60,7 @@ export function attachAgentEventHandlers(
 		room.failedReason = err.message;
 		pushEvent(room, { type: "room_error", from: name, at: new Date().toISOString(), reason: err.message });
 		broadcast(room, { type: "room_error", from: name, reason: err.message });
+		scheduleRoomEviction(room);
 	});
 
 	attachJsonlReader(proc.stdout!, (line) => {

@@ -11,7 +11,9 @@ export function resolveDb(instance: unknown): DbInstance {
     return instance;
   }
   if (!defaultDb) {
-    defaultDb = createClient(process.env.KANBAN_DB_PATH ?? ':memory:');
+    throw new Error(
+      'Database not initialized. Call openDb(path) before starting the server.'
+    );
   }
   return defaultDb;
 }
@@ -21,7 +23,7 @@ export function openDb(path: string): DbInstance {
   return defaultDb;
 }
 
-export function closeDb(instance: unknown): void {
+export function closeDb(instance?: unknown): void {
   const db = resolveDb(instance);
   if (db === defaultDb) {
     defaultDb = null;

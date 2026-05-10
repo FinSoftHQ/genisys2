@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   SqlitePragmasSchema,
   BoardEntitySchema,
@@ -97,12 +100,20 @@ vi.mock('./event-log.js', () => ({
 describe('kanban repository', () => {
   let db: unknown;
 
+  let tmpDbPath: string;
+
   beforeAll(() => {
-    db = openDb(':memory:');
+    tmpDbPath = join(mkdtempSync(join(tmpdir(), 'kanban-test-')), 'test.db');
+    db = openDb(tmpDbPath);
   });
 
   afterAll(() => {
     closeDb(db);
+    try {
+      rmSync(tmpDbPath, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup failure
+    }
   });
 
   beforeEach(() => {

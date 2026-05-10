@@ -6,12 +6,14 @@ import { tmpdir } from 'os';
 
 class FakeProc extends EventEmitter {
 	stdout: Record<string, never>;
+	stderr: { on: () => void };
 	stdin: { write: (chunk: string) => void; end: () => void };
 	commands: string[];
 
 	constructor(private emitJson: (proc: FakeProc, event: Record<string, unknown>) => void) {
 		super();
 		this.stdout = {};
+		this.stderr = { on: () => {} };
 		this.commands = [];
 		this.stdin = {
 			write: (chunk: string) => {

@@ -6,7 +6,6 @@ import {
 	getRoom,
 	getRoomStatus,
 	addSseClient,
-	removeSseClient,
 	sendInstructions,
 	destroyRoom,
 } from "./lifecycle.js";
@@ -25,14 +24,6 @@ function normalizeHeader(value: string | string[] | undefined): string | undefin
 }
 
 export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> {
-	instance.addContentTypeParser(
-		"text/markdown",
-		{ parseAs: "string" },
-		(_request, body, done) => {
-			done(null, body);
-		},
-	);
-
 	instance.get("/", async (request, reply) => {
 		const { status, tag } = request.query as { status?: string; tag?: string };
 		const { limit: limitRaw, offset: offsetRaw } = request.query as {
@@ -43,11 +34,15 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		let offset = 0;
 		if (limitRaw !== undefined) {
 			const parsed = parseInt(limitRaw, 10);
-			if (!isNaN(parsed)) limit = parsed;
+			if (!isNaN(parsed) && isFinite(parsed) && parsed >= 1) {
+				limit = Math.min(parsed, 200);
+			}
 		}
 		if (offsetRaw !== undefined) {
 			const parsed = parseInt(offsetRaw, 10);
-			if (!isNaN(parsed)) offset = parsed;
+			if (!isNaN(parsed) && isFinite(parsed) && parsed >= 0) {
+				offset = parsed;
+			}
 		}
 		return reply.status(200).send(listRooms(status, limit, offset, tag));
 	});
@@ -133,10 +128,6 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		});
 
 		addSseClient(room, reply);
-
-		request.raw.on("close", () => {
-			removeSseClient(room, reply);
-		});
 	});
 
 	instance.post("/:roomId/instructions", async (request, reply) => {

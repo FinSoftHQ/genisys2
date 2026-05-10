@@ -1,25 +1,26 @@
 import type { Room, StoredEvent, StoredEventInput, ReturnedEvent } from "./types.js";
 
-const EVENT_BUFFER_CAP = 2500;
 const DEFAULT_EVENT_LIMIT = 100;
 const MAX_EVENT_FIELD_LENGTH = 4000;
+const SSE_HIGH_WATERMARK = Number(process.env.AGENT_ROOM_SSE_HIGH_WATERMARK ?? 1_048_576);
 
 export function pushEvent(room: Room, event: StoredEventInput): void {
 	room.eventSeq += 1;
 	const record = { id: room.eventSeq, ...event } as StoredEvent;
 	room.events.push(record);
-	if (room.events.length > EVENT_BUFFER_CAP) {
-		room.events.shift();
-	}
 }
 
 export function broadcast(room: Room, payload: object): void {
 	const data = `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
 	for (const client of room.sseClients) {
 		try {
+			if (client.raw.writableLength > SSE_HIGH_WATERMARK) {
+				throw new Error("SSE backpressure");
+			}
 			client.raw.write(data);
 		} catch {
-			// ignore
+			try { client.raw.end(); } catch {}
+			room.sseClients.delete(client);
 		}
 	}
 }
@@ -29,7 +30,7 @@ export function getRoomEvents(
 	since?: number,
 	limit?: number,
 ): { events: ReturnedEvent[]; hasMore: boolean } {
-	let events = room.events;
+	let events = room.events.toArray();
 	if (since !== undefined) {
 		events = events.filter((e) => e.id > since);
 	}

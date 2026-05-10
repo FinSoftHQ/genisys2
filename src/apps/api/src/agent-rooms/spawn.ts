@@ -20,6 +20,17 @@ export function killAgentProcess(proc: ChildProcess, signal: NodeJS.Signals = "S
 	}
 }
 
+export async function killAgentProcessWithEscalation(
+	proc: ChildProcess,
+	timeoutMs = 3000,
+): Promise<void> {
+	killAgentProcess(proc, "SIGTERM");
+	await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+	if (!proc.killed) {
+		killAgentProcess(proc, "SIGKILL");
+	}
+}
+
 export function sendToAgent(agent: AgentState, cmd: object): void {
 	if (!agent.proc) {
 		console.warn(
@@ -160,12 +171,23 @@ export function spawnAgentProcess(room: Room, agent: AgentState): ChildProcess {
 	}
 
 	const proc = spawn("pi", agent.piArgs, {
-		stdio: ["pipe", "pipe", "inherit"],
+		stdio: ["pipe", "pipe", "pipe"],
 		env,
 		detached: true,
 		cwd: spawnCwd,
 	});
 	agent.proc = proc;
+
+	proc.stderr!.on("data", (chunk: Buffer) => {
+		const lines = chunk
+			.toString("utf8")
+			.split("\n")
+			.filter((l) => l.trim());
+		for (const line of lines) {
+			console.warn(`[agent-rooms][stderr][${agent.name}] ${line}`);
+		}
+	});
+
 	return proc;
 }
 
