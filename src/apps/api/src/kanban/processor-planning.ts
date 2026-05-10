@@ -11,6 +11,7 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   HealthCheckResponseSchema,
   parseProtocolFromString,
+  parseProtocol,
   PlanningV1Schema,
 } from '@repo/shared';
 import type { PlanningV1 } from '@repo/shared';
@@ -89,6 +90,26 @@ function resolveWorkingDir(card: { payload: Record<string, unknown>; display_id?
     return fallback;
   }
   console.warn('[planning] card.payload.working_dir missing and no display_id — planning will have no file access');
+  return undefined;
+}
+
+function resolveContactAgentName(card: { payload: Record<string, unknown> }): string | undefined {
+  const tailorShop = typeof card.payload?.tailor_shop === 'string' ? card.payload.tailor_shop.trim() : undefined;
+  if (!tailorShop) {
+    return undefined;
+  }
+  const protocolPath = resolve(tailorShop, 'working_protocol.md');
+  try {
+    const protocol = parseProtocol(protocolPath, { requireTeam: true });
+    const contact = protocol.facilitator ?? Object.keys(protocol.team)[0];
+    if (contact) {
+      console.log(`[planning] Resolved team contact from ${protocolPath}: ${contact}`);
+      return contact;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[planning] Failed to parse team protocol at ${protocolPath}: ${message}`);
+  }
   return undefined;
 }
 
@@ -978,6 +999,8 @@ async function delegatePlanning(
       result = { success: false, errors: [`LLM error: ${message}`], raw: '' };
     }
 
+    const contactAgentName = resolveContactAgentName(card);
+
     if (result.success) {
       const data = result.data;
 
@@ -995,10 +1018,24 @@ async function delegatePlanning(
               planned_tasks: [],
               pre_flight: data.pre_flight,
               clarification_needed: data.clarification_needed,
+              ...(contactAgentName ? { contact_agent_name: contactAgentName } : {}),
             },
           },
         });
         return;
+      }
+
+      // Inject team contact into tasks where the LLM left agent_name as null
+      if (contactAgentName) {
+        for (const task of data.tasks) {
+          if (task.instructions.agent_name === null) {
+            task.instructions.agent_name = contactAgentName;
+            task.instructions.notes = [
+              'Coordinate the team to implement the Scope of Work described in this card.',
+              ...task.instructions.notes,
+            ];
+          }
+        }
       }
 
       if (data.tasks.length > 0) {
@@ -1082,6 +1119,7 @@ async function delegatePlanning(
               planned_tasks: data.tasks,
               pre_flight: data.pre_flight,
               clarification_needed: data.clarification_needed,
+              ...(contactAgentName ? { contact_agent_name: contactAgentName } : {}),
             },
           },
         });
@@ -1126,6 +1164,7 @@ async function delegatePlanning(
       task_card_uid: taskCard.uid,
       task_board_uid: taskBoard.uid,
       planned_tasks: [],
+      ...(contactAgentName ? { contact_agent_name: contactAgentName } : {}),
     };
 
     if (!result.success) {

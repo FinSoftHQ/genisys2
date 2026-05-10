@@ -69,6 +69,11 @@ Markdown remains allowed for:
   - Each item must be pass/fail and testable.
 - `depends_on`: `string[]` of task IDs (`T1`, `T2`, ...)
   - Never depend on title text.
+- `instructions.agent_name`
+  - When the LLM leaves this as `null`, the planning processor attempts to resolve a team contact from the parent card's `tailor_shop` working protocol (`working_protocol.md`).
+  - The contact is derived as: `facilitator` if present, otherwise the first name in the `team:` roster.
+  - If resolved, `agent_name` is set to the contact and a coordination note is prepended to `instructions.notes`.
+  - If the LLM already assigned a specific agent, that value is preserved.
 - `clarification_needed.required = true`
   - `tasks` must be empty.
   - Processor should not create child cards.
@@ -83,13 +88,19 @@ Markdown remains allowed for:
    - dependency IDs exist
    - no self-dependency
    - no cycles
-5. If invalid, perform one repair pass ("return valid planning.v1 JSON only").
-6. If still invalid:
+5. Resolve team contact:
+   - If the parent card has `tailor_shop` in its payload, read `${tailor_shop}/working_protocol.md`.
+   - Derive `contact_agent_name` = `facilitator` || first name in `team:` roster.
+   - For each task with `instructions.agent_name === null`, set it to `contact_agent_name` and prepend a coordination note to `instructions.notes`.
+   - Store `contact_agent_name` in the parent card payload for traceability.
+6. If invalid, perform one repair pass ("return valid planning.v1 JSON only").
+7. If still invalid:
    - keep fallback clone behavior
    - persist diagnostics in payload:
      - `planning_raw_output`
      - `planning_parse_errors`
      - `planning_validation_errors`
+   - still store `contact_agent_name` if it was resolved
 
 ## Human-readable summary (option c)
 

@@ -7,6 +7,7 @@ const {
   mockGetBoardById,
   mockListBoards,
   mockParseProtocolFromString,
+  mockParseProtocol,
   mockComplete,
   mockGetModel,
 } = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const {
   mockGetBoardById: vi.fn(),
   mockListBoards: vi.fn(),
   mockParseProtocolFromString: vi.fn(),
+  mockParseProtocol: vi.fn(),
   mockComplete: vi.fn(),
   mockGetModel: vi.fn(),
 }));
@@ -44,6 +46,7 @@ vi.mock('@repo/shared', async (importOriginal) => {
   return {
     ...actual,
     parseProtocolFromString: (...args: unknown[]) => mockParseProtocolFromString(...args),
+    parseProtocol: (...args: unknown[]) => mockParseProtocol(...args),
   };
 });
 
@@ -160,6 +163,7 @@ describe('planning processor routes', () => {
     mockGetBoardById.mockReset();
     mockListBoards.mockReset();
     mockParseProtocolFromString.mockReset();
+    mockParseProtocol.mockReset();
     mockComplete.mockReset();
     mockGetModel.mockReset();
   });
@@ -1118,6 +1122,316 @@ ${makePlanningV1Response({
       expect(payload.move_to_column).toBe('delegated');
       expect(payload.payload_updates.payload.task_card_uid).toBe('550e8400-e29b-41d4-a716-446655440020');
       expect(payload.payload_updates.payload.planned_tasks).toEqual([]);
+    });
+
+    it('injects contact_agent_name from facilitator when tailor_shop is present', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockParseProtocol.mockReturnValue({
+        team: { Linda: 'fs-team-lead', Sola: 'architect' },
+        facilitator: 'Linda',
+        body: '',
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                instructions: { agent_name: null, notes: [] },
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const cardWithTailorShop = {
+        ...mockParentCard,
+        payload: { ...mockParentCard.payload, tailor_shop: '/workspace/teams/dev' },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440060';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: cardWithTailorShop,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440060',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockParseProtocol).toHaveBeenCalledWith('/workspace/teams/dev/working_protocol.md', { requireTeam: true });
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].payload.instructions.agent_name).toBe('Linda');
+      expect(createCall[2].payload.instructions.notes[0]).toBe(
+        'Coordinate the team to implement the Scope of Work described in this card.'
+      );
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.payload_updates.payload.contact_agent_name).toBe('Linda');
+    });
+
+    it('falls back to first team member when no facilitator is set', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockParseProtocol.mockReturnValue({
+        team: { Sola: 'architect', Paul: 'planner' },
+        body: '',
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                instructions: { agent_name: null, notes: [] },
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const cardWithTailorShop = {
+        ...mockParentCard,
+        payload: { ...mockParentCard.payload, tailor_shop: '/workspace/teams/dev' },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440061';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: cardWithTailorShop,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440061',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].payload.instructions.agent_name).toBe('Sola');
+    });
+
+    it('preserves existing LLM-assigned agent_name and does not overwrite', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockParseProtocol.mockReturnValue({
+        team: { Linda: 'fs-team-lead' },
+        facilitator: 'Linda',
+        body: '',
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                instructions: { agent_name: 'Sola', notes: ['Use JWT'] },
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const cardWithTailorShop = {
+        ...mockParentCard,
+        payload: { ...mockParentCard.payload, tailor_shop: '/workspace/teams/dev' },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440062';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: cardWithTailorShop,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440062',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].payload.instructions.agent_name).toBe('Sola');
+      expect(createCall[2].payload.instructions.notes).toEqual(['Use JWT']);
+    });
+
+    it('gracefully continues when tailor_shop is missing', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                instructions: { agent_name: null, notes: [] },
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440063';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440063',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockParseProtocol).not.toHaveBeenCalled();
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].payload.instructions.agent_name).toBeNull();
+    });
+
+    it('stores contact_agent_name in parent payload even for clarification-needed', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockParseProtocol.mockReturnValue({
+        team: { Linda: 'fs-team-lead' },
+        facilitator: 'Linda',
+        body: '',
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            clarification_needed: { required: true, questions: ['What provider?'] },
+            tasks: [],
+          })
+        )
+      );
+
+      const cardWithTailorShop = {
+        ...mockParentCard,
+        payload: { ...mockParentCard.payload, tailor_shop: '/workspace/teams/dev' },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440064';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: cardWithTailorShop,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440064',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockCreateCard).not.toHaveBeenCalled();
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.payload_updates.payload.contact_agent_name).toBe('Linda');
     });
 
     it('returns 400 for invalid body', async () => {
