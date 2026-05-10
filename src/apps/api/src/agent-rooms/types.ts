@@ -33,6 +33,7 @@ export type StoredEventInput = DistributiveOmit<StoredEvent, "id">;
 export interface RoomCreateOptions {
 	callbackUrl?: string;
 	callbackSecret?: string;
+	tag?: string;
 }
 
 export interface AgentState {
@@ -78,6 +79,7 @@ export interface Room {
 	idleCompletionTimeout?: ReturnType<typeof setTimeout>;
 	callbackUrl?: string;
 	callbackSecret?: string;
+	tag?: string;
 }
 
 export type ReturnedEvent = StoredEvent & { _fieldTruncated?: boolean };

@@ -235,6 +235,7 @@ Endpoints (starter guide)
     Content-Type: text/markdown
     x-room-callback-url: https://caller.example.com/hooks/agent-room (optional)
     x-room-callback-secret: your-shared-secret (optional, used to sign x-signature)
+    x-room-tag: my-namespace (optional, scopes room to a tag for filtering)
   Body: (raw protocol Markdown. Front matter may omit `team:` if defaults are provided by `tailor_shop/working_protocol.md`.)
 
 - Success: 201 Created
@@ -479,12 +480,15 @@ This allows you to keep shared configuration (team roster, routing rules, etc.) 
 - Request (HTTP):
   GET /api/v1/agent-rooms
   GET /api/v1/agent-rooms?status=<status>
+  GET /api/v1/agent-rooms?tag=<tag>
   GET /api/v1/agent-rooms?limit=<number>&offset=<number>
+  GET /api/v1/agent-rooms?status=<status>&tag=<tag>&limit=<number>&offset=<number>
   Headers: (none required)
   Body: none
 
 - Query params:
   status (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
+  tag (optional): filter to rooms created with the matching `x-room-tag` header.
   limit (optional): maximum number of rooms to return. Default: `50`. Max: `200`.
   offset (optional): number of rooms to skip. Default: `0`.
 
@@ -517,18 +521,6 @@ Key behavioral difference from squads
 - When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
 - **Broadcast Mode** (no `routes:` block): messages are broadcast to all other agents.
 - **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists.
-
----
-
-# API: /api/v1/proxy-room
-
-`/api/v1/proxy-room` is a decorator/proxy for `/api/v1/agent-rooms`.
-
-- It exposes the same public route contract and payload shapes as `agent-rooms`.
-- In most clients, you can switch from `.../agent-rooms` to `.../proxy-room` without changing request/response handling.
-- It performs additional proxy-level logging on create/close and supports callback + status reconciliation behavior.
-- It includes an internal callback endpoint used by the proxy implementation; this endpoint is intentionally undocumented for public clients.
-
 
 ---
 

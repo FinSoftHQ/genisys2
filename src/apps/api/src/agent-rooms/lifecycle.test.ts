@@ -187,5 +187,19 @@ describe('agent-rooms lifecycle', () => {
 			const rooms = listRooms('nonexistent');
 			expect(rooms).toEqual([]);
 		});
+
+		it('filters by tag', async () => {
+			const taggedResult = await createRoomFromMarkdown(`---\nteam:\n  gamma: Lead\n---\n\nTest.\n`, { tag: 'test-tag' });
+			try {
+				const tagged = listRooms(undefined, 50, 0, 'test-tag');
+				expect(tagged.some((r: any) => r.roomId === taggedResult.roomId)).toBe(true);
+				expect(tagged.some((r: any) => r.roomId === roomId)).toBe(false);
+
+				const untagged = listRooms(undefined, 50, 0, 'other-tag');
+				expect(untagged.some((r: any) => r.roomId === taggedResult.roomId)).toBe(false);
+			} finally {
+				destroyRoom(taggedResult.roomId);
+			}
+		});
 	});
 });

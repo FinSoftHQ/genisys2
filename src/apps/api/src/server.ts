@@ -11,7 +11,6 @@ import {
 } from 'fastify-type-provider-zod';
 import { createLogger } from '@repo/logger';
 import { agentRoomRoutes } from './agent-rooms/index.js';
-import { proxyRoomRoutes } from './proxy-room/index.js';
 import { kanbanRoutes, suiteRoutes, callbackRoutes } from './kanban/routes.js';
 import { processorRoutes } from './kanban/processors/context-routes.js';
 import { prepProcessorRoutes } from './kanban/processor-prep.js';
@@ -79,7 +78,6 @@ await app.register(
 );
 
 await app.register(agentRoomRoutes, { prefix: '/api/v1/agent-rooms' });
-await app.register(proxyRoomRoutes, { prefix: '/api/v1/proxy-room' });
 await app.register(kanbanRoutes, { prefix: '/api/boards' });
 await app.register(suiteRoutes, { prefix: '/api/board-suites' });
 await app.register(processorRoutes, { prefix: '/api/kanban-processor/default' });

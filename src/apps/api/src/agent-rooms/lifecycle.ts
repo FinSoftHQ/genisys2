@@ -171,6 +171,7 @@ export async function createRoom(
 		idleCompletionTimeout: undefined,
 		callbackUrl: options?.callbackUrl,
 		callbackSecret: options?.callbackSecret,
+		tag: options?.tag,
 	};
 
 	for (const [name, role] of Object.entries(protocol.team)) {
@@ -286,10 +287,14 @@ export function listRooms(
 	status?: string,
 	limit = 50,
 	offset = 0,
+	tag?: string,
 ): object[] {
 	let values = Array.from(rooms.values());
 	if (status !== undefined) {
 		values = values.filter((room) => room.status === status);
+	}
+	if (tag !== undefined) {
+		values = values.filter((room) => room.tag === tag);
 	}
 	const clampedLimit = Math.max(1, Math.min(200, limit));
 	const clampedOffset = Math.max(0, offset);
