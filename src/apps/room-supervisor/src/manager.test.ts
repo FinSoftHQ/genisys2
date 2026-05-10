@@ -3,8 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createRoomFromMarkdown } from './manager.js';
-import { getRoom, destroyRoom } from './lifecycle.js';
-import type { Room } from '@repo/agent-rooms-core';
+import { rooms, destroyRoom } from './lifecycle.js';
 import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '@repo/agent-rooms-core';
 
 describe('agent-rooms manager', () => {
@@ -32,24 +31,24 @@ Say hello briefly.
 		roomId = result.roomId;
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		try {
-			destroyRoom(roomId);
+			await destroyRoom(roomId);
 		} catch {
 			// ignore cleanup failures
 		}
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		try {
-			destroyRoom(roomId);
+			await destroyRoom(roomId);
 		} catch {
 			// ignore cleanup failures
 		}
 	});
 
 	it('creates a room from markdown protocol with correct agents', () => {
-		const room = getRoom(roomId);
+		const room = rooms.get(roomId);
 		expect(room).toBeDefined();
 		expect(room!.agents.size).toBe(2);
 		expect(room!.agents.has('alpha')).toBe(true);
@@ -73,7 +72,7 @@ Say hello briefly.
 
 		const markdown = `---\nteam:\n  alpha: Lead\n  beta: Reviewer\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
 		const result = await createRoomFromMarkdown(markdown);
-		const room = getRoom(result.roomId)!;
+		const room = rooms.get(result.roomId)!;
 
 		const alpha = room.agents.get('alpha')!;
 		const beta = room.agents.get('beta')!;
@@ -84,7 +83,7 @@ Say hello briefly.
 		expect(beta.executionMode).toBe('single-shot');
 		expect(beta.proc).toBeNull();
 
-		destroyRoom(result.roomId);
+		await destroyRoom(result.roomId);
 		rmSync(tailorDir, { recursive: true, force: true });
 	});
 
@@ -92,24 +91,24 @@ Say hello briefly.
 		it('sends instructions to matching agents and leaves others idle', async () => {
 			const markdown = `---\nteam:\n  alpha: Lead\n  beta: Dev\ninstructions:\n  alpha: Please start\n---\n\nProtocol body.\n`;
 			const result = await createRoomFromMarkdown(markdown);
-			const room = getRoom(result.roomId)!;
+			const room = rooms.get(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(room.agents.size).toBe(2);
-			destroyRoom(result.roomId);
+			await destroyRoom(result.roomId);
 		});
 
 		it('warns when instruction target is unknown', async () => {
 			const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 			const markdown = `---\nteam:\n  alpha: Lead\ninstructions:\n  gamma: Hello\n---\n\nProtocol body.\n`;
 			const result = await createRoomFromMarkdown(markdown);
-			const room = getRoom(result.roomId)!;
+			const room = rooms.get(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(warnSpy).toHaveBeenCalledWith(
 				'[agent-rooms] instruction target not found:',
 				'gamma',
 			);
 			warnSpy.mockRestore();
-			destroyRoom(result.roomId);
+			await destroyRoom(result.roomId);
 		});
 	});
 
@@ -118,10 +117,10 @@ Say hello briefly.
 			const baseDir = mkdtempSync(join(tmpdir(), 'workdir-test-'));
 			const markdown = `---\nteam:\n  alpha: Lead\nworking_dir: ${baseDir}\n---\n\nProtocol body.\n`;
 			const result = await createRoomFromMarkdown(markdown);
-			const room = getRoom(result.roomId)!;
+			const room = rooms.get(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(room.workingDir).toBe(baseDir);
-			destroyRoom(result.roomId);
+			await destroyRoom(result.roomId);
 		});
 	});
 
@@ -135,12 +134,12 @@ Say hello briefly.
 			);
 			const markdown = `---\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
 			const result = await createRoomFromMarkdown(markdown);
-			const room = getRoom(result.roomId)!;
+			const room = rooms.get(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(room.agents.size).toBe(2);
 			expect(room.agents.has('gamma')).toBe(true);
 			expect(room.agents.has('delta')).toBe(true);
-			destroyRoom(result.roomId);
+			await destroyRoom(result.roomId);
 		});
 
 		it('merges routes and facilitator from working_protocol.md defaults', async () => {
@@ -152,11 +151,11 @@ Say hello briefly.
 			);
 			const markdown = `---\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
 			const result = await createRoomFromMarkdown(markdown);
-			const room = getRoom(result.roomId)!;
+			const room = rooms.get(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(room.routes).toEqual({ gamma: ['delta'] });
 			expect(room.facilitator).toBe('gamma');
-			destroyRoom(result.roomId);
+			await destroyRoom(result.roomId);
 		});
 
 		it('main protocol overrides working_protocol.md defaults', async () => {
@@ -168,13 +167,13 @@ Say hello briefly.
 			);
 			const markdown = `---\nteam:\n  epsilon: Architect\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
 			const result = await createRoomFromMarkdown(markdown);
-			const room = getRoom(result.roomId)!;
+			const room = rooms.get(result.roomId)!;
 			expect(room).toBeDefined();
 			expect(room.agents.size).toBe(1);
 			expect(room.agents.has('epsilon')).toBe(true);
 			// routes still merge because main protocol does not define routes
 			expect(room.routes).toEqual({ gamma: ['delta'] });
-			destroyRoom(result.roomId);
+			await destroyRoom(result.roomId);
 		});
 
 		it('merges instructions agent-by-agent with main taking precedence', async () => {
@@ -186,9 +185,9 @@ Say hello briefly.
 			);
 			const markdown = `---\nteam:\n  gamma: Lead\n  delta: Dev\ntailor_shop: ${tailorDir}\ninstructions:\n  gamma: Override start\n---\n\nProtocol body.\n`;
 			const result = await createRoomFromMarkdown(markdown);
-			const room = getRoom(result.roomId)!;
+			const room = rooms.get(result.roomId)!;
 			expect(room).toBeDefined();
-			destroyRoom(result.roomId);
+			await destroyRoom(result.roomId);
 		});
 
 		it('throws when no team in main or working_protocol.md', async () => {

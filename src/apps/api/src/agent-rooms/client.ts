@@ -1,21 +1,42 @@
 import { createConnection, type Socket } from "net";
 import {
-	SUPERVISOR_SOCKET_PATH,
 	writeMessage,
 	createMessageReader,
 	type IpcRequest,
 	type IpcResponse,
 } from "@repo/agent-rooms-core";
 
+const CONNECT_TIMEOUT_MS = 2000;
+const RESPONSE_TIMEOUT_MS = 10000;
+
+export type StreamChannel = "raw" | "storedevent";
+export interface StreamEnvelope {
+	channel: StreamChannel;
+	event: Record<string, unknown>;
+}
+
+function getSupervisorSocketPath(): string {
+	return `${process.env.GENISYS_DATA_DIR ?? ".genisys-data"}/supervisor.sock`;
+}
+
 function generateId(): string {
 	return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function connect(): Promise<Socket> {
+function connect(timeoutMs = CONNECT_TIMEOUT_MS): Promise<Socket> {
 	return new Promise((resolve, reject) => {
-		const socket = createConnection(SUPERVISOR_SOCKET_PATH);
-		socket.once("connect", () => resolve(socket));
-		socket.once("error", reject);
+		const socket = createConnection(getSupervisorSocketPath());
+		const timer = setTimeout(() => {
+			socket.destroy(new Error(`IPC connect timeout after ${String(timeoutMs)}ms`));
+		}, timeoutMs);
+		socket.once("connect", () => {
+			clearTimeout(timer);
+			resolve(socket);
+		});
+		socket.once("error", (err) => {
+			clearTimeout(timer);
+			reject(err);
+		});
 	});
 }
 
@@ -26,14 +47,21 @@ async function request<T = Record<string, unknown>>(
 	try {
 		const id = generateId();
 		const response = await new Promise<IpcResponse>((resolve, reject) => {
+			const timeout = setTimeout(() => {
+				reject(new Error(`IPC response timeout after ${String(RESPONSE_TIMEOUT_MS)}ms`));
+			}, RESPONSE_TIMEOUT_MS);
 			createMessageReader(
 				socket,
 				(msg) => {
 					if (msg.id === id) {
+						clearTimeout(timeout);
 						resolve(msg as IpcResponse);
 					}
 				},
-				(reject),
+				(err) => {
+					clearTimeout(timeout);
+					reject(err);
+				},
 			);
 			writeMessage(socket, { ...req, id });
 		});
@@ -86,12 +114,17 @@ export async function destroyRoom(roomId: string, reason = "manual"): Promise<vo
 
 export function subscribeToRoom(
 	roomId: string,
-	onEvent: (event: Record<string, unknown>) => void,
+	onEvent: (event: StreamEnvelope) => void,
 	onError?: (err: Error) => void,
+	channels: StreamChannel[] = ["raw", "storedevent"],
 ): Promise<Socket> {
 	return new Promise((resolve, reject) => {
-		const socket = createConnection(SUPERVISOR_SOCKET_PATH);
+		const socket = createConnection(getSupervisorSocketPath());
+		const connectTimeout = setTimeout(() => {
+			socket.destroy(new Error(`IPC connect timeout after ${String(CONNECT_TIMEOUT_MS)}ms`));
+		}, CONNECT_TIMEOUT_MS);
 		socket.once("connect", () => {
+			clearTimeout(connectTimeout);
 			const id = generateId();
 			createMessageReader(
 				socket,
@@ -108,7 +141,16 @@ export function subscribeToRoom(
 						return;
 					}
 					if (msg.type === "event") {
-						onEvent((msg as IpcResponse).payload ?? {});
+						const payload = (msg as IpcResponse).payload ?? {};
+						const channel = payload.channel;
+						const event = payload.event;
+						if (
+							(channel === "raw" || channel === "storedevent") &&
+							event &&
+							typeof event === "object"
+						) {
+							onEvent({ channel, event: event as Record<string, unknown> });
+						}
 					}
 				},
 				(err) => {
@@ -116,17 +158,11 @@ export function subscribeToRoom(
 					socket.end();
 				},
 			);
-			writeMessage(socket, { type: "room.subscribe", payload: { roomId }, id });
+			writeMessage(socket, { type: "room.subscribe", payload: { roomId, channels }, id });
 		});
-		socket.once("error", reject);
+		socket.once("error", (err) => {
+			clearTimeout(connectTimeout);
+			reject(err);
+		});
 	});
-}
-
-export async function getSupervisorStatus(): Promise<{ rooms: number; agents: number }> {
-	const result = await request<{ rooms: number; agents: number }>({
-		type: "supervisor.status",
-		payload: {},
-	});
-	if (!result.ok) throw new Error(result.error);
-	return result.payload;
 }

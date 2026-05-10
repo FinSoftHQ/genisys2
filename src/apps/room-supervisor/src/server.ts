@@ -1,7 +1,6 @@
 import { createServer, type Server, type Socket } from "net";
 import { unlinkSync, existsSync } from "fs";
 import {
-	SUPERVISOR_SOCKET_PATH,
 	writeMessage,
 	createMessageReader,
 	openIndexDb,
@@ -23,6 +22,10 @@ import { performCrashRecovery } from "./crash-recovery.js";
 
 let server: Server | undefined;
 let shuttingDown = false;
+
+function getSupervisorSocketPath(): string {
+	return `${process.env.GENISYS_DATA_DIR ?? ".genisys-data"}/supervisor.sock`;
+}
 
 async function handleRequest(req: IpcRequest, socket: Socket): Promise<IpcResponse> {
 	switch (req.type) {
@@ -60,22 +63,35 @@ async function handleRequest(req: IpcRequest, socket: Socket): Promise<IpcRespon
 		case "room.destroy": {
 			const roomId = String(req.payload.roomId ?? "");
 			const reason = String(req.payload.reason ?? "manual") as "manual" | "expired";
-			destroyRoom(roomId, reason);
+			await destroyRoom(roomId, reason);
 			return { id: req.id, type: "ok", payload: { roomId, status: "deleted" } };
 		}
 
 		case "room.subscribe": {
 			const roomId = String(req.payload.roomId ?? "");
+			const channels = Array.isArray(req.payload.channels)
+				? req.payload.channels.map(String).filter((value) => value === "raw" || value === "storedevent")
+				: ["raw", "storedevent"];
 			const room = rooms.get(roomId);
 			if (!room) {
 				return { id: req.id, type: "error", error: "Room not found" };
 			}
-			room.sseClients.add(socket);
+			room.sseClients.add({ socket, channels: channels.length > 0 ? channels : ["raw", "storedevent"] });
 			socket.on("close", () => {
-				room.sseClients.delete(socket);
+				for (const client of room.sseClients) {
+					if ((client as { socket?: Socket }).socket === socket) {
+						room.sseClients.delete(client);
+						break;
+					}
+				}
 			});
 			socket.on("error", () => {
-				room.sseClients.delete(socket);
+				for (const client of room.sseClients) {
+					if ((client as { socket?: Socket }).socket === socket) {
+						room.sseClients.delete(client);
+						break;
+					}
+				}
 			});
 			// Acknowledge subscription so client knows it's active
 			return { id: req.id, type: "ok", payload: { subscribed: true, roomId } };
@@ -90,20 +106,16 @@ async function handleRequest(req: IpcRequest, socket: Socket): Promise<IpcRespon
 			return { id: req.id, type: "ok", payload: { rooms: roomCount, agents: agentCount } };
 		}
 
-		case "supervisor.shutdown": {
-			void gracefulShutdown();
-			return { id: req.id, type: "ok", payload: { shuttingDown: true } };
-		}
-
 		default:
 			return { id: req.id, type: "error", error: `Unknown request type: ${String(req.type)}` };
 	}
 }
 
 export async function startSupervisorServer(): Promise<Server> {
+	const socketPath = getSupervisorSocketPath();
 	// Remove stale socket file
-	if (existsSync(SUPERVISOR_SOCKET_PATH)) {
-		try { unlinkSync(SUPERVISOR_SOCKET_PATH); } catch {}
+	if (existsSync(socketPath)) {
+		try { unlinkSync(socketPath); } catch {}
 	}
 
 	openIndexDb();
@@ -123,8 +135,8 @@ export async function startSupervisorServer(): Promise<Server> {
 		);
 	});
 
-	srv.listen(SUPERVISOR_SOCKET_PATH, () => {
-		console.info(`[supervisor] listening on ${SUPERVISOR_SOCKET_PATH}`);
+	srv.listen(socketPath, () => {
+		console.info(`[supervisor] listening on ${socketPath}`);
 	});
 
 	server = srv;
@@ -142,7 +154,7 @@ export async function gracefulShutdown(): Promise<void> {
 
 	// Close all rooms (kill agents, flush logs)
 	const { shutdownAllRooms } = await import("./lifecycle.js");
-	shutdownAllRooms();
+	await shutdownAllRooms();
 
 	stopRetentionGc();
 	closeIndexDb();

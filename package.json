@@ -23,7 +23,8 @@
     "lint": "eslint .",
     "typecheck": "pnpm --filter @repo/shared typecheck && pnpm --filter @repo/logger typecheck && pnpm --filter @repo/web typecheck",
     "typecheck:api": "pnpm --filter @repo/api typecheck",
-    "start": "node src/apps/api/dist/index.js"
+    "start": "node src/apps/api/dist/index.js",
+    "clean": "node -e \"const fs=require('fs');const paths=['src/apps/api/dist','src/apps/room-supervisor/dist','src/apps/web/.output','src/libs/agent-rooms-core/dist','src/libs/shared/dist','src/libs/logger/dist','.turbo','node_modules/.cache'];for(const p of paths){try{fs.rmSync(p,{recursive:true,force:true});}catch{}}\""
   },
   "pnpm": {
     "onlyBuiltDependencies": [

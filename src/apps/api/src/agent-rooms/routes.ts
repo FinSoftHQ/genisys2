@@ -10,9 +10,41 @@ import {
 	sendInstructions as sendInstructionsIpc,
 	destroyRoom as destroyRoomIpc,
 	subscribeToRoom,
+	type StreamChannel,
 } from "./client.js";
 import { listRooms, getRoom, getRoomStatus, getRoomEvents } from "./lifecycle-api.js";
 import { sendError, ErrorCodes } from "./errors.js";
+import { agentRoomsIpcErrorsTotal, agentRoomsRequestsTotal, setAgentRoomsSseSubscribers } from "../metrics.js";
+
+const SSE_HEARTBEAT_MS = 15000;
+const SSE_HIGH_WATERMARK = Math.max(1024, Number(process.env.AGENT_ROOM_SSE_HIGH_WATERMARK ?? 1024 * 1024));
+const ALLOWED_STREAM_CHANNELS = new Set<StreamChannel>(["raw", "storedevent"]);
+
+function parseStreamChannels(value: unknown): StreamChannel[] {
+	if (typeof value !== "string" || value.trim().length === 0) {
+		return ["raw", "storedevent"];
+	}
+	const channels = value
+		.split(",")
+		.map((part) => part.trim())
+		.filter((part): part is StreamChannel => ALLOWED_STREAM_CHANNELS.has(part as StreamChannel));
+	return channels.length > 0 ? channels : ["raw", "storedevent"];
+}
+
+function writeSseEvent(reply: import("fastify").FastifyReply, eventName: string, data: unknown, id?: number): boolean {
+	if (reply.raw.destroyed || reply.raw.writableEnded) return false;
+	if (reply.raw.writableLength > SSE_HIGH_WATERMARK) return false;
+	try {
+		if (typeof id === "number") {
+			reply.raw.write(`id: ${String(id)}\n`);
+		}
+		reply.raw.write(`event: ${eventName}\n`);
+		reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function normalizeHeader(value: string | string[] | undefined): string | undefined {
 	if (Array.isArray(value)) {
@@ -31,8 +63,10 @@ function parseLastEventId(value: string | string[] | undefined): number | undefi
 
 export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> {
 	instance.get("/", async (request, reply) => {
+		agentRoomsRequestsTotal.inc({ method: "GET", route: "list", status: "started" });
 		const query = ListRoomsQuerySchema.safeParse(request.query);
 		if (!query.success) {
+			agentRoomsRequestsTotal.inc({ method: "GET", route: "list", status: "error" });
 			return sendError(reply, 400, {
 				code: ErrorCodes.INVALID_QUERY,
 				message: "Invalid query parameters",
@@ -40,12 +74,15 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			});
 		}
 		const { status, tag, limit, cursor } = query.data;
+		agentRoomsRequestsTotal.inc({ method: "GET", route: "list", status: "ok" });
 		return reply.status(200).send(listRooms(status, limit, cursor, tag));
 	});
 
 	instance.post("/", async (request, reply) => {
+		agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "started" });
 		const contentType = request.headers["content-type"] ?? "";
 		if (!contentType.includes("text/markdown")) {
+			agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "error" });
 			return sendError(reply, 415, {
 				code: ErrorCodes.INVALID_CONTENT_TYPE,
 				message: "Expected Content-Type: text/markdown",
@@ -58,6 +95,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		const tag = normalizeHeader(request.headers["x-room-tag"]);
 
 		if (callbackSecret && !callbackUrl) {
+			agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "error" });
 			return sendError(reply, 400, {
 				code: ErrorCodes.INVALID_HEADER,
 				message: "x-room-callback-secret requires x-room-callback-url",
@@ -67,12 +105,14 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			try {
 				const parsed = new URL(callbackUrl);
 				if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+					agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "error" });
 					return sendError(reply, 400, {
 						code: ErrorCodes.INVALID_HEADER,
 						message: "x-room-callback-url must be http or https",
 					});
 				}
 			} catch {
+				agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "error" });
 				return sendError(reply, 400, {
 					code: ErrorCodes.INVALID_HEADER,
 					message: "Invalid x-room-callback-url",
@@ -82,9 +122,12 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 
 		try {
 			const result = await createRoom(markdown, { callbackUrl, callbackSecret, tag });
+			agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "ok" });
 			return reply.status(201).send({ roomId: result.roomId, status: result.status });
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
+			agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "error" });
+			agentRoomsIpcErrorsTotal.inc({ operation: "room.create" });
 			return sendError(reply, 502, {
 				code: ErrorCodes.SUPERVISOR_ERROR,
 				message,
@@ -93,21 +136,26 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 	});
 
 	instance.get("/:roomId/status", async (request, reply) => {
+		agentRoomsRequestsTotal.inc({ method: "GET", route: "status", status: "started" });
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
+			agentRoomsRequestsTotal.inc({ method: "GET", route: "status", status: "error" });
 			return sendError(reply, 404, {
 				code: ErrorCodes.ROOM_NOT_FOUND,
 				message: "Room not found",
 			});
 		}
+		agentRoomsRequestsTotal.inc({ method: "GET", route: "status", status: "ok" });
 		return reply.status(200).send(getRoomStatus(room));
 	});
 
 	instance.get("/:roomId/events", async (request, reply) => {
+		agentRoomsRequestsTotal.inc({ method: "GET", route: "events", status: "started" });
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
+			agentRoomsRequestsTotal.inc({ method: "GET", route: "events", status: "error" });
 			return sendError(reply, 404, {
 				code: ErrorCodes.ROOM_NOT_FOUND,
 				message: "Room not found",
@@ -116,6 +164,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 
 		const query = GetEventsQuerySchema.safeParse(request.query);
 		if (!query.success) {
+			agentRoomsRequestsTotal.inc({ method: "GET", route: "events", status: "error" });
 			return sendError(reply, 400, {
 				code: ErrorCodes.INVALID_QUERY,
 				message: "Invalid query parameters",
@@ -126,13 +175,16 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 
 		const { events, hasMore } = await getRoomEvents(room, since, limit);
 		const total = await RoomLog.countEvents(roomId);
+		agentRoomsRequestsTotal.inc({ method: "GET", route: "events", status: "ok" });
 		return reply.status(200).send({ roomId, total, returned: events.length, hasMore, events });
 	});
 
 	instance.get("/:roomId/stream", async (request, reply) => {
+		agentRoomsRequestsTotal.inc({ method: "GET", route: "stream", status: "started" });
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
+			agentRoomsRequestsTotal.inc({ method: "GET", route: "stream", status: "error" });
 			return sendError(reply, 404, {
 				code: ErrorCodes.ROOM_NOT_FOUND,
 				message: "Room not found",
@@ -140,6 +192,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		}
 
 		const lastEventId = parseLastEventId(request.headers["last-event-id"]);
+		const channels = parseStreamChannels((request.query as { channels?: string }).channels);
 
 		reply.raw.writeHead(200, {
 			"Content-Type": "text/event-stream",
@@ -147,14 +200,37 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			Connection: "keep-alive",
 		});
 
-		// Replay missed events if Last-Event-Id provided
-		if (lastEventId !== undefined) {
+		const heartbeat = setInterval(() => {
+			if (reply.raw.destroyed || reply.raw.writableEnded) return;
+			if (reply.raw.writableLength > SSE_HIGH_WATERMARK) {
+				try { reply.raw.end(); } catch {}
+				return;
+			}
+			try {
+				reply.raw.write(`: heartbeat ${new Date().toISOString()}\n\n`);
+			} catch {
+				try { reply.raw.end(); } catch {}
+			}
+		}, SSE_HEARTBEAT_MS);
+
+		setAgentRoomsSseSubscribers(1);
+
+		let cleanedUp = false;
+		const cleanup = () => {
+			if (cleanedUp) return;
+			cleanedUp = true;
+			clearInterval(heartbeat);
+			setAgentRoomsSseSubscribers(-1);
+		};
+
+		reply.raw.once("close", cleanup);
+		reply.raw.once("error", cleanup);
+
+		if (lastEventId !== undefined && channels.includes("storedevent")) {
 			try {
 				const { events } = await getRoomEvents(room, lastEventId, 1000);
 				for (const event of events) {
-					try {
-						reply.raw.write(`id: ${event.id}\nevent: message\ndata: ${JSON.stringify(event)}\n\n`);
-					} catch {
+					if (!writeSseEvent(reply, "storedevent", event, event.id)) {
 						// Client disconnected during replay
 						try { reply.raw.end(); } catch {}
 						return;
@@ -168,18 +244,24 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		try {
 			const socket = await subscribeToRoom(
 				roomId,
-				(event) => {
-					try {
-						const id = typeof event.id === "number" ? event.id : "";
-						reply.raw.write(`id: ${id}\nevent: message\ndata: ${JSON.stringify(event)}\n\n`);
-					} catch {
+				(envelope) => {
+					if (envelope.channel === "raw") {
+						if (!writeSseEvent(reply, "raw", envelope.event)) {
+							socket.end();
+						}
+						return;
+					}
+					const id = typeof envelope.event.id === "number" ? envelope.event.id : undefined;
+					if (!writeSseEvent(reply, "storedevent", envelope.event, id)) {
 						socket.end();
 					}
 				},
 				(err) => {
+					agentRoomsIpcErrorsTotal.inc({ operation: "room.subscribe" });
 					console.warn(`[agent-rooms] SSE subscription error for ${roomId}:`, err.message);
 					try { reply.raw.end(); } catch {}
 				},
+				channels,
 			);
 
 			reply.raw.on("close", () => {
@@ -188,17 +270,22 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			reply.raw.on("error", () => {
 				socket.end();
 			});
+			agentRoomsRequestsTotal.inc({ method: "GET", route: "stream", status: "ok" });
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
+			agentRoomsRequestsTotal.inc({ method: "GET", route: "stream", status: "error" });
+			agentRoomsIpcErrorsTotal.inc({ operation: "room.subscribe" });
 			console.warn(`[agent-rooms] SSE subscription failed for ${roomId}:`, message);
 			try { reply.raw.end(); } catch {}
 		}
 	});
 
 	instance.post("/:roomId/instructions", async (request, reply) => {
+		agentRoomsRequestsTotal.inc({ method: "POST", route: "instructions", status: "started" });
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
+			agentRoomsRequestsTotal.inc({ method: "POST", route: "instructions", status: "error" });
 			return sendError(reply, 404, {
 				code: ErrorCodes.ROOM_NOT_FOUND,
 				message: "Room not found",
@@ -206,6 +293,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		}
 
 		if (room.status === "completed") {
+			agentRoomsRequestsTotal.inc({ method: "POST", route: "instructions", status: "error" });
 			return sendError(reply, 409, {
 				code: ErrorCodes.ROOM_COMPLETED,
 				message: "Room is completed",
@@ -214,6 +302,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 
 		const body = InstructionsBodySchema.safeParse(request.body);
 		if (!body.success) {
+			agentRoomsRequestsTotal.inc({ method: "POST", route: "instructions", status: "error" });
 			return sendError(reply, 400, {
 				code: ErrorCodes.INVALID_BODY,
 				message: "Invalid body",
@@ -228,6 +317,8 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 				totalQueued += result.queuedItems;
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
+				agentRoomsRequestsTotal.inc({ method: "POST", route: "instructions", status: "error" });
+				agentRoomsIpcErrorsTotal.inc({ operation: "room.instruct" });
 				return sendError(reply, 400, {
 					code: ErrorCodes.AGENT_NOT_FOUND,
 					message,
@@ -235,13 +326,16 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 				});
 			}
 		}
+		agentRoomsRequestsTotal.inc({ method: "POST", route: "instructions", status: "ok" });
 		return reply.status(200).send({ roomId, queuedItems: totalQueued });
 	});
 
 	instance.delete("/:roomId", async (request, reply) => {
+		agentRoomsRequestsTotal.inc({ method: "DELETE", route: "destroy", status: "started" });
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
+			agentRoomsRequestsTotal.inc({ method: "DELETE", route: "destroy", status: "error" });
 			return sendError(reply, 404, {
 				code: ErrorCodes.ROOM_NOT_FOUND,
 				message: "Room not found",
@@ -249,9 +343,12 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		}
 		try {
 			await destroyRoomIpc(roomId);
+			agentRoomsRequestsTotal.inc({ method: "DELETE", route: "destroy", status: "ok" });
 			return reply.status(200).send({ roomId, status: "deleted" });
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
+			agentRoomsRequestsTotal.inc({ method: "DELETE", route: "destroy", status: "error" });
+			agentRoomsIpcErrorsTotal.inc({ operation: "room.destroy" });
 			return sendError(reply, 502, {
 				code: ErrorCodes.SUPERVISOR_ERROR,
 				message,

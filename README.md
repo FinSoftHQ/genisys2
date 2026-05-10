@@ -28,9 +28,11 @@ Enterprise-grade `pnpm` monorepo optimized for **Azure App Service Linux Code De
 src/
 ├── libs/
 │   ├── shared/          # Zod schemas, tsup-built, dual ESM/CJS
-│   └── logger/          # Pino with Azure JSON formatting
+│   ├── logger/          # Pino with Azure JSON formatting
+│   └── agent-rooms-core/# Shared room types, storage, IPC protocol
 ├── apps/
 │   ├── api/             # Fastify 5.x (Azure Linux App Service)
+│   ├── room-supervisor/ # Agent-room process runtime (IPC + pi process manager)
 │   └── web/             # Nuxt 4 (Nitro preset: node-server)
 ├── e2e/                 # Playwright tests
 └── tooling/             # Shared ESLint 9 + TypeScript configs
@@ -68,7 +70,7 @@ Topological build order is enforced by `just build`:
 ```bash
 just build
 ```
-Order: `shared` → `logger` → `api` → `web`
+Order: `shared` → `logger` → `agent-rooms-core` → `room-supervisor` → `api` → `web`
 
 Outputs:
 - API: `src/apps/api/dist/index.js` (ESM, Node 22 target)
@@ -139,6 +141,27 @@ API_SECRET=change-me-in-production
 
 ## API Details (`src/apps/api/`)
 
+## Agent-Rooms Ops
+
+- API routes: `/api/v1/agent-rooms/**`
+- Process model: API and room-supervisor run as separate Node processes over Unix socket IPC
+- IPC socket path: `${GENISYS_DATA_DIR}/supervisor.sock` (defaults to `.genisys-data/supervisor.sock`)
+- Room data dir: `${GENISYS_DATA_DIR}/rooms/<roomId>/` (`events.jsonl`, prompts, protocol)
+- Metrics endpoint: `GET /metrics` (Prometheus text format)
+- SSE stream: `GET /api/v1/agent-rooms/:roomId/stream`
+  - Event channels: `event: raw` and `event: storedevent`
+  - Channel filter: `?channels=raw,storedevent` (default is both)
+  - Replay (`Last-Event-Id`) applies only to `storedevent`
+
+### Agent-Rooms Environment Variables
+
+- `GENISYS_DATA_DIR`: base storage dir for socket + room artifacts
+- `AGENT_ROOM_COMPLETED_TTL_MS`: in-memory TTL before completed/error room eviction (default `300000`)
+- `AGENT_ROOM_RETENTION_MS`: disk retention for terminal rooms (default `86400000`)
+- `AGENT_ROOM_IDLE_EXPIRY_MS`: room inactivity timeout for auto-expiry
+- `AGENT_ROOM_SSE_HIGH_WATERMARK`: SSE backpressure cutoff bytes (default `1048576`)
+
+
 ### Health Checks
 - `GET /health` → `{ status: "ok", timestamp: ISO8601 }`
 - `GET /health/ready` → extended stub (DB/cache placeholder)
@@ -160,7 +183,7 @@ process.on('SIGTERM', async () => {
 ### Security
 - `@fastify/helmet` defaults
 - `@fastify/cors` with `CORS_ORIGIN` whitelist
-- `@fastify/rate-limit` (100 req/min)
+- `@fastify/rate-limit` (600 req/min)
 
 ---
 

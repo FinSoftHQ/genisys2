@@ -30,7 +30,7 @@ stage:
 
 dev:
     @echo "Starting API (Bun hot reload) and Web (Nuxt dev)..."
-    pnpm --filter api dev & pnpm --filter web dev & wait
+    pnpm --filter @repo/agent-rooms-core build & pnpm --filter @repo/room-supervisor dev & pnpm --filter api dev & pnpm --filter web dev & wait
 
 dev-ai:
     @echo "Starting API, Web, and AI Workflow..."
@@ -40,9 +40,14 @@ build:
     pnpm install --frozen-lockfile
     pnpm --filter @repo/shared build
     pnpm --filter @repo/logger build
+    pnpm --filter @repo/agent-rooms-core build
+    pnpm --filter @repo/room-supervisor build
     pnpm --filter api build
     pnpm --filter web build
     #pnpm --filter ai-workflow build
+
+clean:
+    pnpm clean
 
 test:
     pnpm vitest run

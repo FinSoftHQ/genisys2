@@ -3,7 +3,6 @@ import { z } from "zod";
 export const RoomStatusSchema = z.enum([
 	"initialized",
 	"running",
-	"suspended",
 	"error",
 	"completed",
 ]);
@@ -22,7 +21,7 @@ export const StoredEventSchema = z.discriminatedUnion("type", [
 	z.object({ id: z.number().int().nonnegative(), from: z.string(), at: z.string(), type: z.literal("agent_start") }),
 	z.object({ id: z.number().int().nonnegative(), from: z.string(), at: z.string(), type: z.literal("agent_end") }),
 	z.object({ id: z.number().int().nonnegative(), from: z.string(), at: z.string(), type: z.literal("room_error"), reason: z.string() }),
-	z.object({ id: z.number().int().nonnegative(), from: z.string(), at: z.string(), type: z.literal("room_closed"), reason: z.literal("completed") }),
+	z.object({ id: z.number().int().nonnegative(), from: z.string(), at: z.string(), type: z.literal("room_closed"), reason: RoomCloseReasonSchema }),
 ]);
 
 export const InstructionsBodySchema = z.object({

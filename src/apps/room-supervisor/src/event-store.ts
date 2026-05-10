@@ -1,29 +1,71 @@
 import type { Room, StoredEvent, StoredEventInput, ReturnedEvent } from "@repo/agent-rooms-core";
-import { RoomLog, writeMessage } from "@repo/agent-rooms-core";
+import { RoomLog, writeMessage, upsertRoom } from "@repo/agent-rooms-core";
 import { Socket } from "net";
 
 const DEFAULT_EVENT_LIMIT = 100;
 const MAX_EVENT_FIELD_LENGTH = 4000;
+const ROOM_LIVE_SYNC_DEBOUNCE_MS = 250;
+const roomSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function generateMsgId(): string {
 	return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`;
 }
 
-export function pushEvent(room: Room, event: StoredEventInput): void {
+interface IpcSubscriber {
+	socket: Socket;
+	channels: string[];
+}
+
+export function pushEvent(room: Room, event: StoredEventInput): StoredEvent {
 	room.eventSeq += 1;
 	const record = { id: room.eventSeq, ...event } as StoredEvent;
 	room.events.push(record);
 	room.roomLog.append(record);
+	const now = Date.now();
+	if (room.lastActivityAt < now) {
+		room.lastActivityAt = now;
+	}
+	const prevTimer = roomSyncTimers.get(room.id);
+	if (prevTimer) clearTimeout(prevTimer);
+	roomSyncTimers.set(
+		room.id,
+		setTimeout(() => {
+			roomSyncTimers.delete(room.id);
+			try {
+				upsertRoom({
+					id: room.id,
+					status: room.status,
+					tag: room.tag ?? null,
+					created_at: room.createdAt,
+					updated_at: Date.now(),
+					last_activity_at: room.lastActivityAt,
+					protocol_body: room.protocolBody,
+					facilitator: room.facilitator ?? null,
+					routing_strategy: room.routingStrategy,
+					failed_agent: room.failedAgent ?? null,
+					failed_reason: room.failedReason ?? null,
+					callback_url: room.callbackUrl ?? null,
+					callback_secret: room.callbackSecret ?? null,
+					completed_at: room.status === "completed" ? Date.now() : null,
+				});
+			} catch {
+				// ignore transient db lifecycle races during shutdown/tests
+			}
+		}, ROOM_LIVE_SYNC_DEBOUNCE_MS),
+	);
+	return record;
 }
 
-export function broadcast(room: Room, payload: Record<string, unknown>): void {
+export function broadcast(room: Room, channel: "raw" | "storedevent", payload: Record<string, unknown>): void {
 	for (const client of room.sseClients) {
-		const socket = client as Socket;
+		const subscriber = client as IpcSubscriber;
+		const socket = subscriber.socket;
+		if (!subscriber.channels.includes(channel)) continue;
 		try {
 			writeMessage(socket, {
 				id: generateMsgId(),
 				type: "event",
-				payload,
+				payload: { channel, event: payload },
 			});
 		} catch {
 			try { socket.end(); } catch {}

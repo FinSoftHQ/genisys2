@@ -5,7 +5,6 @@ import type { RoomLog } from "./storage/room-log.js";
 export type RoomStatus =
 	| "initialized"
 	| "running"
-	| "suspended"
 	| "error"
 	| "completed";
 
@@ -25,7 +24,7 @@ export type StoredEvent =
 	| (StoredEventBase & { type: "agent_start" })
 	| (StoredEventBase & { type: "agent_end" })
 	| (StoredEventBase & { type: "room_error"; reason: string })
-	| (StoredEventBase & { type: "room_closed"; reason: "completed" });
+	| (StoredEventBase & { type: "room_closed"; reason: RoomCloseReason });
 
 // Distributive Omit so pushEvent accepts each union member without the id field.
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;

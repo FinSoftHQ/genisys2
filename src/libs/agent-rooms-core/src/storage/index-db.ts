@@ -95,6 +95,22 @@ export interface AgentIndexRow {
 	has_participated: number;
 }
 
+export interface RoomLiveStatePatch {
+	status?: string;
+	updated_at?: number;
+	last_activity_at?: number;
+	failed_agent?: string | null;
+	failed_reason?: string | null;
+	completed_at?: number | null;
+}
+
+export interface AgentLiveStatePatch {
+	status?: string;
+	ready?: number;
+	task_completed?: number;
+	has_participated?: number;
+}
+
 export function upsertRoom(row: RoomIndexRow): void {
 	const d = getIndexDb();
 	const stmt = d.prepare(`
@@ -131,6 +147,68 @@ export function upsertAgent(row: AgentIndexRow): void {
 			has_participated = excluded.has_participated
 	`);
 	stmt.run(row);
+}
+
+export function updateRoomLiveState(id: string, patch: RoomLiveStatePatch): void {
+	const d = getIndexDb();
+	const clauses: string[] = [];
+	const values: Array<string | number | null> = [];
+
+	if (patch.status !== undefined) {
+		clauses.push("status = ?");
+		values.push(patch.status);
+	}
+	if (patch.updated_at !== undefined) {
+		clauses.push("updated_at = ?");
+		values.push(patch.updated_at);
+	}
+	if (patch.last_activity_at !== undefined) {
+		clauses.push("last_activity_at = ?");
+		values.push(patch.last_activity_at);
+	}
+	if (patch.failed_agent !== undefined) {
+		clauses.push("failed_agent = ?");
+		values.push(patch.failed_agent);
+	}
+	if (patch.failed_reason !== undefined) {
+		clauses.push("failed_reason = ?");
+		values.push(patch.failed_reason);
+	}
+	if (patch.completed_at !== undefined) {
+		clauses.push("completed_at = ?");
+		values.push(patch.completed_at);
+	}
+
+	if (clauses.length === 0) return;
+	values.push(id);
+	d.prepare(`UPDATE rooms SET ${clauses.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function updateAgentLiveState(roomId: string, name: string, patch: AgentLiveStatePatch): void {
+	const d = getIndexDb();
+	const clauses: string[] = [];
+	const values: Array<string | number> = [];
+
+	if (patch.status !== undefined) {
+		clauses.push("status = ?");
+		values.push(patch.status);
+	}
+	if (patch.ready !== undefined) {
+		clauses.push("ready = ?");
+		values.push(patch.ready);
+	}
+	if (patch.task_completed !== undefined) {
+		clauses.push("task_completed = ?");
+		values.push(patch.task_completed);
+	}
+	if (patch.has_participated !== undefined) {
+		clauses.push("has_participated = ?");
+		values.push(patch.has_participated);
+	}
+
+	if (clauses.length === 0) return;
+	values.push(roomId, name);
+	d.prepare(`UPDATE agents SET ${clauses.join(", ")} WHERE room_id = ? AND name = ?`).run(...values);
 }
 
 export function getRoomIndex(id: string): RoomIndexRow | undefined {

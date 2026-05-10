@@ -105,7 +105,7 @@ describe('single-shot lifecycle', () => {
 	});
 	it('re-spawns single-shot agent after completion marker termination', async () => {
 		const { createRoomFromMarkdown, spawnAndSendToSingleShot } = await import('./manager.js');
-		const { getRoom, destroyRoom, clearIdleCompletionTimeout } = await import('./lifecycle.js');
+		const { rooms, destroyRoom, clearIdleCompletionTimeout } = await import('./lifecycle.js');
 		const { routeMessageToAgents } = await import('./router.js');
 		const { sendToAgent } = await import('./spawn.js');
 
@@ -123,7 +123,7 @@ describe('single-shot lifecycle', () => {
 
 		const markdown = `---\nteam:\n  alpha: Lead\n  beta: Reviewer\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
 		const result = await createRoomFromMarkdown(markdown);
-		const room = getRoom(result.roomId)!;
+		const room = rooms.get(result.roomId)!;
 
 		const beta = room.agents.get('beta')!;
 		expect(beta.proc).toBeNull();
@@ -160,7 +160,7 @@ describe('single-shot lifecycle', () => {
 		const secondProc = room.agents.get('beta')!.proc as unknown as FakeProc;
 		expect(secondProc).not.toBe(firstProc);
 
-		destroyRoom(result.roomId);
+		await destroyRoom(result.roomId);
 		rmSync(tailorDir, { recursive: true, force: true });
 	});
 });

@@ -22,6 +22,7 @@ import { delegatedProcessorRoutes } from './kanban/processor-delegated.js';
 import { agenticTeamProcessorRoutes } from './kanban/processor-agentic-team.js';
 import { exploreProcessorRoutes } from './kanban/processor-explore.js';
 import { devWrapupRoutes } from './dev-wrapup/routes.js';
+import { registerMetricsRoute } from './metrics.js';
 
 if (process.versions.bun && process.env.NODE_ENV === 'production') {
   throw new Error('Production requires Node.js 22. Bun runtime is not supported in Azure Oryx.');
@@ -54,6 +55,7 @@ export async function buildServer() {
     allowList: ['127.0.0.1', '::1', 'localhost'],
   });
   await app.register(websocket);
+  await registerMetricsRoute(app);
 
   await app.register(
     async (instance) => {

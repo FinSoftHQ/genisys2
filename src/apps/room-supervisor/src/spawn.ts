@@ -4,6 +4,8 @@ import { join, resolve, isAbsolute } from "path";
 import { parseAgentPromptFile } from "@repo/shared";
 import type { Room, AgentState, ExecutionMode } from "@repo/agent-rooms-core";
 
+let pathDeprecationWarned = false;
+
 export function killAgentProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
 	try {
 		if (proc.pid !== undefined && process.platform !== "win32") {
@@ -150,19 +152,14 @@ export function buildPiArgs(
 }
 
 export function spawnAgentProcess(room: Room, agent: AgentState): ChildProcess {
-	// When the API runs under pnpm / tsx, local node_modules/.bin is
-	// prepended to PATH. This shadows the global `pi` binary with a local
-	// wrapper that points to an older version of pi-coding-agent (e.g. 0.60.0),
-	// which lacks newer models. Remove local node_modules/.bin entries so
-	// the globally-installed `pi` (with the user's current models/settings)
-	// is resolved instead.
-	const originalPath = process.env.PATH ?? "";
-	const filteredPath = originalPath
-		.split(":")
-		.filter((segment) => !segment.endsWith("node_modules/.bin"))
-		.join(":");
-
-	const env = { ...process.env, PATH: filteredPath };
+	const env = { ...process.env };
+	if (
+		!pathDeprecationWarned &&
+		(process.env.PATH ?? "").split(":").some((segment) => segment.endsWith("node_modules/.bin"))
+	) {
+		pathDeprecationWarned = true;
+		console.warn("[agent-rooms] Deprecated PATH setup detected (node_modules/.bin). The supervisor no longer rewrites PATH.");
+	}
 
 	const spawnCwd = room.workingDir ?? process.cwd();
 	console.log(`[agent-rooms] Spawning agent "${agent.name}" in room ${room.id} with cwd: ${spawnCwd}`);

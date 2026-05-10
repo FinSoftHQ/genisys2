@@ -2,20 +2,16 @@ import { createHmac } from "crypto";
 import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve, isAbsolute } from "path";
-import { Socket } from "net";
 import { parseProtocol, type Protocol } from "@repo/shared";
-import type { Room, AgentState, RoomCreateOptions, RoomCloseReason, ExecutionMode, RoomStatus, RoutingStrategy } from "@repo/agent-rooms-core";
+import type { Room, AgentState, RoomCreateOptions, RoomCloseReason } from "@repo/agent-rooms-core";
 import {
 	RoomLogger,
 	RingBuffer,
 	RoomLog,
 	upsertRoom,
-	getRoomIndex,
-	getRoomAgentsIndex,
-	listRoomsIndex,
+	upsertAgent,
 	getRoomPromptsDir,
 	getRoomProtocolPath,
-	type RoomIndexRow,
 } from "@repo/agent-rooms-core";
 import {
 	buildPiArgs,
@@ -24,9 +20,8 @@ import {
 	waitForAllAgentsReady,
 	killAgentProcess,
 } from "./spawn.js";
-import { pushEvent } from "./event-store.js";
+import { pushEvent, broadcast } from "./event-store.js";
 import { shouldCheckCompletionAfterTaskMarker } from "./router.js";
-import { writeMessage } from "@repo/agent-rooms-core";
 
 export const TASK_COMPLETION_MARKER = "[@TASK: VIPER-RTB]";
 const idleCompletionGraceMsRaw = Number(process.env.AGENT_ROOM_IDLE_COMPLETION_MS ?? 60_000);
@@ -43,20 +38,47 @@ function generateId(): string {
 	return `rm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function generateMsgId(): string {
-	return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`;
-}
-
 export function resetExpiry(room: Room): void {
 	if (room.expireTimeout) clearTimeout(room.expireTimeout);
 	room.expireTimeout = setTimeout(() => {
-		destroyRoom(room.id, "expired");
+		void destroyRoom(room.id, "expired");
 	}, EXPIRY_MS);
 }
 
 export function updateActivity(room: Room): void {
 	room.lastActivityAt = Date.now();
 	resetExpiry(room);
+	persistRoomIndex(room, {
+		updated_at: Date.now(),
+		last_activity_at: room.lastActivityAt,
+	});
+}
+
+function persistRoomIndex(
+	room: Room,
+	overrides?: Partial<import("@repo/agent-rooms-core").RoomIndexRow>,
+): void {
+	try {
+		upsertRoom({
+			id: room.id,
+			status: room.status,
+			tag: room.tag ?? null,
+			created_at: room.createdAt,
+			updated_at: Date.now(),
+			last_activity_at: room.lastActivityAt,
+			protocol_body: room.protocolBody,
+			facilitator: room.facilitator ?? null,
+			routing_strategy: room.routingStrategy,
+			failed_agent: room.failedAgent ?? null,
+			failed_reason: room.failedReason ?? null,
+			callback_url: room.callbackUrl ?? null,
+			callback_secret: room.callbackSecret ?? null,
+			completed_at: room.status === "completed" ? Date.now() : null,
+			...overrides,
+		});
+	} catch {
+		// ignore transient db lifecycle races during shutdown/tests
+	}
 }
 
 function computeCallbackSignature(payload: string, secret: string): string {
@@ -148,7 +170,7 @@ export function scheduleIdleCompletionTimeout(room: Room): void {
 		if (!current) return;
 		if (current.status !== "running") return;
 		if (!areAllAgentsIdle(current)) return;
-		completeRoom(current.id);
+		void completeRoom(current.id);
 	}, IDLE_COMPLETION_GRACE_MS);
 }
 
@@ -158,13 +180,27 @@ export function handleTaskCompletionMarker(room: Room, fromAgent: string, text: 
 
 	agent.taskCompleted = true;
 	agent.hasParticipated = true;
+	try {
+		upsertAgent({
+			room_id: room.id,
+			name: fromAgent,
+			role: agent.role,
+			execution_mode: agent.executionMode,
+			status: agent.status,
+			ready: agent.ready ? 1 : 0,
+			task_completed: 1,
+			has_participated: 1,
+		});
+	} catch {
+		// ignore transient db lifecycle races during shutdown/tests
+	}
 
 	if (!shouldCheckCompletionAfterTaskMarker(room, fromAgent, text)) {
 		return;
 	}
 
 	if (allActiveAgentsCompleted(room)) {
-		completeRoom(room.id);
+		void completeRoom(room.id);
 	}
 }
 
@@ -261,6 +297,16 @@ export async function createRoom(
 		};
 
 		room.agents.set(name, agent);
+		upsertAgent({
+			room_id: id,
+			name,
+			role,
+			execution_mode: executionMode,
+			status: "idle",
+			ready: executionMode === "single-shot" ? 1 : 0,
+			task_completed: 0,
+			has_participated: 0,
+		});
 
 		if (executionMode === "session") {
 			spawnAgentProcess(room, agent);
@@ -341,114 +387,6 @@ export async function createRoomFromMarkdown(
 	}
 }
 
-export function listRooms(
-	status?: string,
-	limit = 50,
-	offset = 0,
-	tag?: string,
-): object[] {
-	const clampedLimit = Math.max(1, Math.min(200, limit));
-	const clampedOffset = Math.max(0, offset);
-
-	// Read from persistent index DB; overlay hot in-memory rooms for live data
-	const rows = listRoomsIndex(status, tag, clampedLimit, clampedOffset);
-	return rows.map((row) => {
-		const live = rooms.get(row.id);
-		if (live) return getRoomStatus(live);
-		return getRoomStatusFromIndex(row);
-	});
-}
-
-function getRoomStatusFromIndex(row: RoomIndexRow): object {
-	return {
-		roomId: row.id,
-		status: row.status,
-		...(row.failed_agent ? { failedAgent: row.failed_agent, reason: row.failed_reason } : {}),
-		agents: {}, // agents not loaded for cold rooms
-		lastEventId: undefined,
-		lastEventAt: undefined,
-		lastEventType: undefined,
-		lastEventFrom: undefined,
-	};
-}
-
-export function getRoom(id: string): Room | undefined {
-	const live = rooms.get(id);
-	if (live) return live;
-
-	// Fall back to index for completed/error rooms (reconstruct minimal Room)
-	const row = getRoomIndex(id);
-	if (!row || (row.status !== "completed" && row.status !== "error")) return undefined;
-
-	const agentRows = getRoomAgentsIndex(id);
-	const agents = new Map<string, AgentState>();
-	for (const ar of agentRows) {
-		agents.set(ar.name, {
-			proc: null,
-			executionMode: ar.execution_mode as ExecutionMode,
-			piArgs: [],
-			name: ar.name,
-			role: ar.role,
-			isStreaming: false,
-			pendingUiRequest: false,
-			status: ar.status as AgentState["status"],
-			logger: new RoomLogger(ar.name),
-			_textBuf: "",
-			_thinkingBuf: "",
-			_msgTs: 0,
-			ready: Boolean(ar.ready),
-			taskCompleted: Boolean(ar.task_completed),
-			hasParticipated: Boolean(ar.has_participated),
-		});
-	}
-
-	const room: Room = {
-		id,
-		status: row.status as RoomStatus,
-		agents,
-		sseClients: new Set(),
-		createdAt: row.created_at,
-		lastActivityAt: row.last_activity_at,
-		protocolBody: row.protocol_body ?? "",
-		facilitator: row.facilitator ?? undefined,
-		routingStrategy: (row.routing_strategy as RoutingStrategy) ?? "broadcast",
-		failedAgent: row.failed_agent ?? undefined,
-		failedReason: row.failed_reason ?? undefined,
-		events: new RingBuffer(200),
-		eventSeq: 0,
-		promptDir: getRoomPromptsDir(id),
-		callbackUrl: row.callback_url ?? undefined,
-		callbackSecret: row.callback_secret ?? undefined,
-		tag: row.tag ?? undefined,
-		roomLog: new RoomLog(id),
-	};
-	return room;
-}
-
-export function getRoomStatus(room: Room): object {
-	const agentStatuses: Record<string, { status: string }> = {};
-	for (const [name, agent] of room.agents) {
-		agentStatuses[name] = { status: agent.status };
-	}
-	const lastEvent = room.events.newest;
-	return {
-		roomId: room.id,
-		status: room.status,
-		...(room.failedAgent
-			? { failedAgent: room.failedAgent, reason: room.failedReason }
-			: {}),
-		agents: agentStatuses,
-		...(lastEvent
-			? {
-					lastEventId: lastEvent.id,
-					lastEventAt: lastEvent.at,
-					lastEventType: lastEvent.type,
-					lastEventFrom: lastEvent.from,
-				}
-			: {}),
-	};
-}
-
 export async function sendInstructions(
 	room: Room,
 	targetAgent: string,
@@ -488,10 +426,10 @@ export function scheduleRoomEviction(room: Room): void {
 	}, COMPLETED_TTL_MS);
 }
 
-export function destroyRoom(
+export async function destroyRoom(
 	id: string,
 	reason: Exclude<RoomCloseReason, "completed"> = "manual",
-): void {
+): Promise<void> {
 	const room = rooms.get(id);
 	if (!room) return;
 
@@ -520,14 +458,17 @@ export function destroyRoom(
 		}
 	}
 
-	// Broadcast room_closed to IPC subscribers
+	const stored = pushEvent(room, {
+		type: "room_closed",
+		from: "system",
+		at: closedAt,
+		reason,
+	} as unknown as import("@repo/agent-rooms-core").StoredEventInput);
+	broadcast(room, "storedevent", stored);
+	broadcast(room, "raw", { type: "room_closed", reason });
 	for (const client of room.sseClients) {
 		try {
-			writeMessage(client as Socket, {
-				id: generateMsgId(),
-				type: "event",
-				payload: { type: "room_closed", reason },
-			});
+			(client as { socket: import("net").Socket }).socket.end();
 		} catch {
 			// ignore
 		}
@@ -540,7 +481,7 @@ export function destroyRoom(
 	room.failedReason = reason;
 
 	// Persist final state
-	room.roomLog.flush();
+	await room.roomLog.close();
 	upsertRoom({
 		id: room.id,
 		status: "error",
@@ -557,23 +498,23 @@ export function destroyRoom(
 		callback_secret: room.callbackSecret ?? null,
 		completed_at: null,
 	});
-
 	rooms.delete(id);
 }
 
-export function completeRoom(id: string): void {
+export async function completeRoom(id: string): Promise<void> {
 	const room = rooms.get(id);
 	if (!room) return;
 	if (room.status === "completed" || room.status === "error") return;
 	clearIdleCompletionTimeout(room);
 
 	const closedAt = new Date().toISOString();
-	pushEvent(room, {
+	const stored = pushEvent(room, {
 		type: "room_closed",
 		from: "system",
 		at: closedAt,
 		reason: "completed",
 	});
+	broadcast(room, "storedevent", stored);
 	void notifyRoomClosedCallback(room, "completed", closedAt);
 
 	for (const agent of room.agents.values()) {
@@ -587,14 +528,10 @@ export function completeRoom(id: string): void {
 		}
 	}
 
-	// Broadcast room_closed to IPC subscribers
+	broadcast(room, "raw", { type: "room_closed", reason: "completed" });
 	for (const client of room.sseClients) {
 		try {
-			writeMessage(client as Socket, {
-				id: generateMsgId(),
-				type: "event",
-				payload: { type: "room_closed", reason: "completed" },
-			});
+			(client as { socket: import("net").Socket }).socket.end();
 		} catch {
 			// ignore
 		}
@@ -607,7 +544,7 @@ export function completeRoom(id: string): void {
 	scheduleRoomEviction(room);
 
 	// Persist final state
-	room.roomLog.flush();
+	await room.roomLog.close();
 	upsertRoom({
 		id: room.id,
 		status: "completed",
@@ -626,7 +563,7 @@ export function completeRoom(id: string): void {
 	});
 }
 
-export function shutdownAllRooms(): void {
+export async function shutdownAllRooms(): Promise<void> {
 	for (const room of rooms.values()) {
 		if (room.expireTimeout) clearTimeout(room.expireTimeout);
 		clearIdleCompletionTimeout(room);
@@ -645,7 +582,7 @@ export function shutdownAllRooms(): void {
 
 		for (const client of room.sseClients) {
 			try {
-				(client as Socket).end();
+				(client as { socket: import("net").Socket }).socket.end();
 			} catch {
 				// ignore
 			}
@@ -653,7 +590,7 @@ export function shutdownAllRooms(): void {
 
 		room.sseClients.clear();
 		room.agents.clear();
-		room.roomLog.flush();
+		await room.roomLog.close();
 	}
 	rooms.clear();
 }

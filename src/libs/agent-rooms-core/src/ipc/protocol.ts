@@ -1,14 +1,15 @@
 import { Socket } from "net";
 
-export const SUPERVISOR_SOCKET_PATH = `${process.env.GENISYS_DATA_DIR ?? ".genisys-data"}/supervisor.sock`;
+export function getSupervisorSocketPath(): string {
+	return `${process.env.GENISYS_DATA_DIR ?? ".genisys-data"}/supervisor.sock`;
+}
 
 export type IpcRequestType =
 	| "room.create"
 	| "room.instruct"
 	| "room.destroy"
 	| "room.subscribe"
-	| "supervisor.status"
-	| "supervisor.shutdown";
+	| "supervisor.status";
 
 export interface IpcRequest {
 	id: string;

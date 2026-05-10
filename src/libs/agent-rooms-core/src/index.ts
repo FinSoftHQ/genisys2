@@ -40,13 +40,15 @@ export {
 	getRoomPromptsDir,
 } from "./storage/paths.js";
 
-export type { RoomIndexRow, AgentIndexRow, ListCursor } from "./storage/index-db.js";
+export type { RoomIndexRow, AgentIndexRow, ListCursor, RoomLiveStatePatch, AgentLiveStatePatch } from "./storage/index-db.js";
 export {
 	openIndexDb,
 	closeIndexDb,
 	getIndexDb,
 	upsertRoom,
 	upsertAgent,
+	updateRoomLiveState,
+	updateAgentLiveState,
 	listRoomsIndex,
 	listRoomsIndexCursor,
 	getRoomIndex,
@@ -68,7 +70,7 @@ export {
 } from "./test-helpers.js";
 
 export {
-	SUPERVISOR_SOCKET_PATH,
+	getSupervisorSocketPath,
 	writeMessage,
 	createMessageReader,
 	type IpcRequest,
