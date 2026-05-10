@@ -1,18 +1,43 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createRoomFromMarkdown } from './manager.js';
 import { getRoom, destroyRoom } from './lifecycle.js';
 import type { Room } from './types.js';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from './test-helpers.js';
 
 describe('agent-rooms manager', () => {
 	let roomId: string;
 
+	beforeAll(() => {
+		setupTestDataDir();
+	});
+
+	afterAll(() => {
+		teardownTestDataDir();
+	});
+
 	beforeEach(async () => {
-		const markdown = `---\nteam:\n  alpha: Lead\n  beta: Dev\n---\n\nSay hello briefly.\n`;
+		clearIndexDb();
+		const markdown = `---
+team:
+  alpha: Lead
+  beta: Dev
+---
+
+Say hello briefly.
+`;
 		const result = await createRoomFromMarkdown(markdown);
 		roomId = result.roomId;
+	});
+
+	afterEach(() => {
+		try {
+			destroyRoom(roomId);
+		} catch {
+			// ignore cleanup failures
+		}
 	});
 
 	afterEach(() => {

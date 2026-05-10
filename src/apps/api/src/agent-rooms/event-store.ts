@@ -1,4 +1,5 @@
 import type { Room, StoredEvent, StoredEventInput, ReturnedEvent } from "./types.js";
+import { RoomLog } from "./storage/room-log.js";
 
 const DEFAULT_EVENT_LIMIT = 100;
 const MAX_EVENT_FIELD_LENGTH = 4000;
@@ -8,6 +9,7 @@ export function pushEvent(room: Room, event: StoredEventInput): void {
 	room.eventSeq += 1;
 	const record = { id: room.eventSeq, ...event } as StoredEvent;
 	room.events.push(record);
+	room.roomLog.append(record);
 }
 
 export function broadcast(room: Room, payload: object): void {
@@ -25,19 +27,28 @@ export function broadcast(room: Room, payload: object): void {
 	}
 }
 
-export function getRoomEvents(
+export async function getRoomEvents(
 	room: Room,
 	since?: number,
 	limit?: number,
-): { events: ReturnedEvent[]; hasMore: boolean } {
-	let events = room.events.toArray();
-	if (since !== undefined) {
-		events = events.filter((e) => e.id > since);
-	}
+): Promise<{ events: ReturnedEvent[]; hasMore: boolean }> {
+	// Read from persistent log first
+	const disk = await RoomLog.readEvents(room.id, since, limit ? limit + 1 : undefined);
+
+	// Merge with any in-memory ring buffer events that may not be flushed yet
+	const memoryEvents = room.events.toArray().filter((e) => {
+		if (since !== undefined && e.id <= since) return false;
+		// avoid duplicates
+		return !disk.events.some((d) => d.id === e.id);
+	});
+
+	const merged = [...disk.events, ...memoryEvents];
+	merged.sort((a, b) => a.id - b.id);
+
 	const effectiveLimit = limit ?? DEFAULT_EVENT_LIMIT;
 	const clampedLimit = Math.max(1, effectiveLimit);
-	const hasMore = events.length > clampedLimit;
-	const limitedEvents = events.slice(0, clampedLimit);
+	const hasMore = merged.length > clampedLimit;
+	const limitedEvents = merged.slice(0, clampedLimit);
 	return { events: truncateEvents(limitedEvents), hasMore };
 }
 

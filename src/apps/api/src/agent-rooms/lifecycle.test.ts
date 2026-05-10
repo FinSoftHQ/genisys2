@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -13,14 +13,39 @@ import {
 } from './lifecycle.js';
 import { getRoomEvents } from './event-store.js';
 import type { Room } from './types.js';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from './test-helpers.js';
 
 describe('agent-rooms lifecycle', () => {
 	let roomId: string;
 
+	beforeAll(() => {
+		setupTestDataDir();
+	});
+
+	afterAll(() => {
+		teardownTestDataDir();
+	});
+
 	beforeEach(async () => {
-		const markdown = `---\nteam:\n  alpha: Lead\n  beta: Dev\n---\n\nSay hello briefly.\n`;
+		clearIndexDb();
+		const markdown = `---
+team:
+  alpha: Lead
+  beta: Dev
+---
+
+Say hello briefly.
+`;
 		const result = await createRoomFromMarkdown(markdown);
 		roomId = result.roomId;
+	});
+
+	afterEach(() => {
+		try {
+			destroyRoom(roomId);
+		} catch {
+			// ignore cleanup failures
+		}
 	});
 
 	afterEach(() => {
@@ -42,12 +67,12 @@ describe('agent-rooms lifecycle', () => {
 		expect(agents.beta).toBeDefined();
 	});
 
-	it('returns events and supports since cursor', () => {
+	it('returns events and supports since cursor', async () => {
 		const room = getRoom(roomId)!;
-		const result = getRoomEvents(room);
+		const result = await getRoomEvents(room);
 		expect(Array.isArray(result.events)).toBe(true);
 		expect(result.hasMore).toBe(false);
-		const sinceResult = getRoomEvents(room, 999_999);
+		const sinceResult = await getRoomEvents(room, 999_999);
 		expect(sinceResult.events).toEqual([]);
 		expect(sinceResult.hasMore).toBe(false);
 	});
@@ -74,12 +99,12 @@ describe('agent-rooms lifecycle', () => {
 		destroyRoom(roomId);
 	});
 
-	it('completes and preserves room until hard-deleted', () => {
+	it('completes and persists room to index DB', async () => {
 		completeRoom(roomId);
 		const room = getRoom(roomId);
 		expect(room).toBeDefined();
 		expect(room!.status).toBe('completed');
-		const events = getRoomEvents(room!).events;
+		const events = (await getRoomEvents(room!)).events;
 		expect(events.length).toBeGreaterThanOrEqual(1);
 		expect(events[events.length - 1]).toMatchObject({
 			type: 'room_closed',
@@ -87,15 +112,19 @@ describe('agent-rooms lifecycle', () => {
 			reason: 'completed',
 		});
 		destroyRoom(roomId);
-		expect(getRoom(roomId)).toBeUndefined();
+		// Phase B: room survives destroy in index DB until retention GC
+		const afterDestroy = getRoom(roomId);
+		expect(afterDestroy).toBeDefined();
+		expect(afterDestroy!.status).toBe('completed');
 	});
 
-	it('cleans up prompt temp directory on completion', () => {
+	it('preserves prompt directory on completion for retention GC', () => {
 		const room = getRoom(roomId)!;
 		const promptDir = room.promptDir;
 		expect(existsSync(promptDir)).toBe(true);
 		completeRoom(roomId);
-		expect(existsSync(promptDir)).toBe(false);
+		// Phase B: promptDir is now persistent; retention GC deletes it later
+		expect(existsSync(promptDir)).toBe(true);
 		expect(getRoom(roomId)).toBeDefined();
 		destroyRoom(roomId);
 	});

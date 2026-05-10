@@ -110,7 +110,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			}
 		}
 
-		const { events, hasMore } = getRoomEvents(room, sinceId, limit);
+		const { events, hasMore } = await getRoomEvents(room, sinceId, limit);
 		return reply.status(200).send({ roomId, total: room.events.length, returned: events.length, hasMore, events });
 	});
 

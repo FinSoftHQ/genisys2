@@ -1,6 +1,7 @@
 import type { FastifyReply } from "fastify";
 import type { RoomLogger } from "./internal/room-logger.js";
 import type { RingBuffer } from "./ring-buffer.js";
+import type { RoomLog } from "./storage/room-log.js";
 
 export type RoomStatus =
 	| "initialized"
@@ -83,6 +84,7 @@ export interface Room {
 	callbackUrl?: string;
 	callbackSecret?: string;
 	tag?: string;
+	roomLog: RoomLog;
 }
 
 export type ReturnedEvent = StoredEvent & { _fieldTruncated?: boolean };

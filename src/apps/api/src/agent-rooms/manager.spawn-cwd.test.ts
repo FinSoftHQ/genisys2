@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { EventEmitter } from 'events';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ChildProcess } from 'child_process';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from './test-helpers.js';
 
 vi.mock('child_process', async () => {
 	const actual = await vi.importActual<typeof import('child_process')>('child_process');
@@ -20,10 +21,11 @@ import { getRoom, destroyRoom } from './lifecycle.js';
 function createMockProc(): ChildProcess & { _stdout: EventEmitter; _stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> } } {
 	const stdout = new EventEmitter();
 	const stdin = { write: vi.fn(), end: vi.fn() };
+	const stderr = { on: vi.fn() };
 	const proc = {
 		stdin,
 		stdout,
-		stderr: new EventEmitter(),
+		stderr,
 		on: vi.fn(),
 		kill: vi.fn(),
 		pid: 12345,
@@ -51,8 +53,17 @@ function createMockProc(): ChildProcess & { _stdout: EventEmitter; _stdin: { wri
 }
 
 describe('agent-rooms spawn cwd', () => {
+	beforeAll(() => {
+		setupTestDataDir();
+	});
+
+	afterAll(() => {
+		teardownTestDataDir();
+	});
+
 	afterEach(() => {
 		vi.mocked(mockSpawn).mockClear();
+		clearIndexDb();
 	});
 
 	it('spawns pi with cwd set to room.workingDir when provided', async () => {

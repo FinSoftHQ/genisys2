@@ -1,5 +1,5 @@
 import { createHmac } from "crypto";
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve, isAbsolute } from "path";
 import type { FastifyReply } from "fastify";
@@ -16,6 +16,15 @@ import {
 	waitForAllAgentsReady,
 	killAgentProcess,
 } from "./spawn.js";
+import {
+	upsertRoom,
+	getRoomIndex,
+	getRoomAgentsIndex,
+	listRoomsIndex,
+} from "./storage/index-db.js";
+import { getRoomPromptsDir, getRoomProtocolPath } from "./storage/paths.js";
+import { RoomLog } from "./storage/room-log.js";
+import type { RoomIndexRow } from "./storage/index-db.js";
 
 export const TASK_COMPLETION_MARKER = "[@TASK: VIPER-RTB]";
 const idleCompletionGraceMsRaw = Number(process.env.AGENT_ROOM_IDLE_COMPLETION_MS ?? 60_000);
@@ -147,27 +156,32 @@ export async function createRoom(
 	options?: RoomCreateOptions,
 ): Promise<{ roomId: string }> {
 	const id = generateId();
-	const promptDir = mkdtempSync(join(tmpdir(), `piroom-${id}-`));
+	const promptDir = getRoomPromptsDir(id);
+	mkdirSync(promptDir, { recursive: true });
 	const bodyPromptPath = join(promptDir, "body.prompt");
 	writeFileSync(bodyPromptPath, protocol.body, "utf-8");
+	writeFileSync(getRoomProtocolPath(id), protocol.body, "utf-8");
 
 	// Resolve working_dir relative to server CWD if not absolute
 	const workingDir = protocol.workingDir
 		? (isAbsolute(protocol.workingDir) ? protocol.workingDir : resolve(process.cwd(), protocol.workingDir))
 		: undefined;
 
+	const now = Date.now();
+	const roomLog = new RoomLog(id);
+
 	const room: Room = {
 		id,
 		status: "initialized",
 		agents: new Map(),
 		sseClients: new Set(),
-		createdAt: Date.now(),
-		lastActivityAt: Date.now(),
+		createdAt: now,
+		lastActivityAt: now,
 		protocolBody: protocol.body,
 		routes: protocol.routes,
 		facilitator: protocol.facilitator,
 		routingStrategy: protocol.routes ? "explicit" : "broadcast",
-		events: new RingBuffer(2500),
+		events: new RingBuffer(200),
 		eventSeq: 0,
 		promptDir,
 		workingDir,
@@ -176,7 +190,25 @@ export async function createRoom(
 		callbackUrl: options?.callbackUrl,
 		callbackSecret: options?.callbackSecret,
 		tag: options?.tag,
+		roomLog,
 	};
+
+	upsertRoom({
+		id,
+		status: "initialized",
+		tag: options?.tag ?? null,
+		created_at: now,
+		updated_at: now,
+		last_activity_at: now,
+		protocol_body: protocol.body,
+		facilitator: protocol.facilitator ?? null,
+		routing_strategy: protocol.routes ? "explicit" : "broadcast",
+		failed_agent: null,
+		failed_reason: null,
+		callback_url: options?.callbackUrl ?? null,
+		callback_secret: options?.callbackSecret ?? null,
+		completed_at: null,
+	});
 
 	for (const [name, role] of Object.entries(protocol.team)) {
 		const { args, executionMode } = buildPiArgs(
@@ -293,20 +325,82 @@ export function listRooms(
 	offset = 0,
 	tag?: string,
 ): object[] {
-	let values = Array.from(rooms.values());
-	if (status !== undefined) {
-		values = values.filter((room) => room.status === status);
-	}
-	if (tag !== undefined) {
-		values = values.filter((room) => room.tag === tag);
-	}
 	const clampedLimit = Math.max(1, Math.min(200, limit));
 	const clampedOffset = Math.max(0, offset);
-	return values.slice(clampedOffset, clampedOffset + clampedLimit).map(getRoomStatus);
+
+	// Read from persistent index DB; overlay hot in-memory rooms for live data
+	const rows = listRoomsIndex(status, tag, clampedLimit, clampedOffset);
+	return rows.map((row) => {
+		const live = rooms.get(row.id);
+		if (live) return getRoomStatus(live);
+		return getRoomStatusFromIndex(row);
+	});
+}
+
+function getRoomStatusFromIndex(row: RoomIndexRow): object {
+	return {
+		roomId: row.id,
+		status: row.status,
+		...(row.failed_agent ? { failedAgent: row.failed_agent, reason: row.failed_reason } : {}),
+		agents: {}, // agents not loaded for cold rooms
+		lastEventId: undefined,
+		lastEventAt: undefined,
+		lastEventType: undefined,
+		lastEventFrom: undefined,
+	};
 }
 
 export function getRoom(id: string): Room | undefined {
-	return rooms.get(id);
+	const live = rooms.get(id);
+	if (live) return live;
+
+	// Fall back to index for completed/error rooms (reconstruct minimal Room)
+	const row = getRoomIndex(id);
+	if (!row || (row.status !== "completed" && row.status !== "error")) return undefined;
+
+	const agentRows = getRoomAgentsIndex(id);
+	const agents = new Map<string, AgentState>();
+	for (const ar of agentRows) {
+		agents.set(ar.name, {
+			proc: null,
+			executionMode: ar.execution_mode as import("./types.js").ExecutionMode,
+			piArgs: [],
+			name: ar.name,
+			role: ar.role,
+			isStreaming: false,
+			pendingUiRequest: false,
+			status: ar.status as AgentState["status"],
+			logger: new RoomLogger(ar.name),
+			_textBuf: "",
+			_thinkingBuf: "",
+			_msgTs: 0,
+			ready: Boolean(ar.ready),
+			taskCompleted: Boolean(ar.task_completed),
+			hasParticipated: Boolean(ar.has_participated),
+		});
+	}
+
+	const room: Room = {
+		id,
+		status: row.status as import("./types.js").RoomStatus,
+		agents,
+		sseClients: new Set(),
+		createdAt: row.created_at,
+		lastActivityAt: row.last_activity_at,
+		protocolBody: row.protocol_body ?? "",
+		facilitator: row.facilitator ?? undefined,
+		routingStrategy: (row.routing_strategy as import("./types.js").RoutingStrategy) ?? "broadcast",
+		failedAgent: row.failed_agent ?? undefined,
+		failedReason: row.failed_reason ?? undefined,
+		events: new RingBuffer(200),
+		eventSeq: 0,
+		promptDir: getRoomPromptsDir(id),
+		callbackUrl: row.callback_url ?? undefined,
+		callbackSecret: row.callback_secret ?? undefined,
+		tag: row.tag ?? undefined,
+		roomLog: new RoomLog(id),
+	};
+	return room;
 }
 
 export function getRoomStatus(room: Room): object {
@@ -448,13 +542,29 @@ export function destroyRoom(
 	console.info(`[agent-rooms] room closed: ${room.id} (${reason})`);
 	room.sseClients.clear();
 	room.agents.clear();
-	rooms.delete(id);
+	room.status = "error";
+	room.failedReason = reason;
 
-	try {
-		rmSync(room.promptDir, { recursive: true, force: true });
-	} catch {
-		// ignore cleanup failure
-	}
+	// Persist final state
+	room.roomLog.flush();
+	upsertRoom({
+		id: room.id,
+		status: "error",
+		tag: room.tag ?? null,
+		created_at: room.createdAt,
+		updated_at: Date.now(),
+		last_activity_at: room.lastActivityAt,
+		protocol_body: room.protocolBody,
+		facilitator: room.facilitator ?? null,
+		routing_strategy: room.routingStrategy,
+		failed_agent: null,
+		failed_reason: reason,
+		callback_url: room.callbackUrl ?? null,
+		callback_secret: room.callbackSecret ?? null,
+		completed_at: null,
+	});
+
+	rooms.delete(id);
 }
 
 export function completeRoom(id: string): void {
@@ -500,11 +610,24 @@ export function completeRoom(id: string): void {
 	room.status = "completed";
 	scheduleRoomEviction(room);
 
-	try {
-		rmSync(room.promptDir, { recursive: true, force: true });
-	} catch {
-		// ignore cleanup failure
-	}
+	// Persist final state
+	room.roomLog.flush();
+	upsertRoom({
+		id: room.id,
+		status: "completed",
+		tag: room.tag ?? null,
+		created_at: room.createdAt,
+		updated_at: Date.now(),
+		last_activity_at: room.lastActivityAt,
+		protocol_body: room.protocolBody,
+		facilitator: room.facilitator ?? null,
+		routing_strategy: room.routingStrategy,
+		failed_agent: null,
+		failed_reason: null,
+		callback_url: room.callbackUrl ?? null,
+		callback_secret: room.callbackSecret ?? null,
+		completed_at: Date.now(),
+	});
 }
 
 export function shutdownAllRooms(): void {
@@ -534,12 +657,7 @@ export function shutdownAllRooms(): void {
 
 		room.sseClients.clear();
 		room.agents.clear();
-
-		try {
-			rmSync(room.promptDir, { recursive: true, force: true });
-		} catch {
-			// ignore cleanup failure
-		}
+		room.roomLog.flush();
 	}
 	rooms.clear();
 }

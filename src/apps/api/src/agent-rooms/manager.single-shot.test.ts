@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { EventEmitter } from 'events';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from './test-helpers.js';
 
 class FakeProc extends EventEmitter {
 	stdout: Record<string, never>;
@@ -91,6 +92,17 @@ afterEach(() => {
 });
 
 describe('single-shot lifecycle', () => {
+	beforeAll(() => {
+		setupTestDataDir();
+	});
+
+	afterAll(() => {
+		teardownTestDataDir();
+	});
+
+	beforeEach(() => {
+		clearIndexDb();
+	});
 	it('re-spawns single-shot agent after completion marker termination', async () => {
 		const { createRoomFromMarkdown, spawnAndSendToSingleShot } = await import('./manager.js');
 		const { getRoom, destroyRoom, clearIdleCompletionTimeout } = await import('./lifecycle.js');

@@ -2,6 +2,8 @@ import { buildServer } from './server.js';
 import { openDb, closeDb } from './kanban/db-context.js';
 import { shutdownAllRooms, rooms } from './agent-rooms/lifecycle.js';
 import { killAgentProcess } from './agent-rooms/spawn.js';
+import { openIndexDb, closeIndexDb } from './agent-rooms/storage/index-db.js';
+import { startRetentionGc, stopRetentionGc } from './agent-rooms/storage/retention-gc.js';
 
 const port = Number(process.env.PORT) || 8080;
 const host = '0.0.0.0';
@@ -44,6 +46,8 @@ async function performShutdown(signal: string): Promise<void> {
     }
 
     await app.close();
+    stopRetentionGc();
+    closeIndexDb();
     closeDb();
     process.exit(0);
   } catch (err) {
@@ -67,6 +71,8 @@ process.on('unhandledRejection', (reason) => {
 try {
   const dbPath = process.env.KANBAN_DB_PATH ?? ':memory:';
   openDb(dbPath);
+  openIndexDb();
+  startRetentionGc();
   app = await buildServer();
   await app.listen({ port, host });
   app.log.info(`API listening on http://${host}:${String(port)}`);
