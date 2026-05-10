@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -86,6 +86,13 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1500): Promise<void
 
 afterEach(() => {
 	spawned.length = 0;
+});
+
+describe('manager.single-shot import contract', () => {
+	it('imports runtime functions from ./manager.js', () => {
+		const source = readFileSync(new URL(import.meta.url).pathname, 'utf-8');
+		expect(source).toContain("from './manager.js'");
+	});
 });
 
 describe('single-shot lifecycle', () => {

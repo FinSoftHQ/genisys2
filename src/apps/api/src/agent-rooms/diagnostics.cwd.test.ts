@@ -13,3 +13,10 @@ describe('agent-rooms diagnostics cwd', () => {
 		expect(detectedRepoRoot).toBeDefined();
 	});
 });
+
+describe('types.ts importability', () => {
+	it('types.ts module can be imported without throwing', async () => {
+		const mod = await import('./types.js');
+		expect(mod).toBeDefined();
+	});
+});

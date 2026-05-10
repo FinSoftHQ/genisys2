@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, existsSync
 import { tmpdir } from "os";
 import { join } from "path";
 import type { ChildProcess } from "child_process";
+
 import {
 	buildPiArgs,
 	sendToAgent,
@@ -25,6 +26,13 @@ vi.mock("child_process", () => ({
 }));
 
 import { spawn as mockSpawn } from "child_process";
+
+describe("spawn import contract", () => {
+	it("imports AgentState and Room from ./types.js", () => {
+		const source = readFileSync(new URL(import.meta.url).pathname, "utf-8");
+		expect(source).toContain("from './types.js'");
+	});
+});
 
 describe("spawn", () => {
 	describe("sendToAgent", () => {

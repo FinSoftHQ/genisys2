@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -13,6 +14,13 @@ import {
 } from './lifecycle.js';
 import { getRoomEvents } from './event-store.js';
 import type { Room } from './types.js';
+
+describe('lifecycle import contract', () => {
+	it('imports Room type from ./types.js', () => {
+		const source = readFileSync(new URL(import.meta.url).pathname, 'utf-8');
+		expect(source).toContain("from './types.js'");
+	});
+});
 
 describe('agent-rooms lifecycle', () => {
 	let roomId: string;

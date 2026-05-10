@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ChildProcess } from 'child_process';
@@ -49,6 +49,13 @@ function createMockProc(): ChildProcess & { _stdout: EventEmitter; _stdin: { wri
 
 	return proc;
 }
+
+describe('manager.spawn-cwd import contract', () => {
+	it('imports createRoomFromMarkdown from ./manager.js', () => {
+		const source = readFileSync(new URL(import.meta.url).pathname, 'utf-8');
+		expect(source).toContain("from './manager.js'");
+	});
+});
 
 describe('agent-rooms spawn cwd', () => {
 	afterEach(() => {

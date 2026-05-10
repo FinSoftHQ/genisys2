@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "fs";
 import {
 	determineRecipients,
 	resolveMessageTargets,
@@ -6,6 +7,13 @@ import {
 	routeMessageToAgents,
 } from "./router.js";
 import type { Room, AgentState } from "./types.js";
+
+describe("router import contract", () => {
+	it("imports Room and AgentState from ./types.js", () => {
+		const source = readFileSync(new URL(import.meta.url).pathname, "utf-8");
+		expect(source).toContain("from './types.js'");
+	});
+});
 
 describe("router", () => {
 	describe("determineRecipients", () => {

@@ -1,10 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createRoomFromMarkdown } from './manager.js';
 import { getRoom, destroyRoom } from './lifecycle.js';
 import type { Room } from './types.js';
+
+describe('agent-rooms manager import contract', () => {
+	it('imports Room type from ./types.js', () => {
+		const source = readFileSync(new URL(import.meta.url).pathname, 'utf-8');
+		expect(source).toContain("from './types.js'");
+	});
+
+	it('imports createRoomFromMarkdown from ./manager.js', () => {
+		const source = readFileSync(new URL(import.meta.url).pathname, 'utf-8');
+		expect(source).toContain("from './manager.js'");
+	});
+});
 
 describe('agent-rooms manager', () => {
 	let roomId: string;
