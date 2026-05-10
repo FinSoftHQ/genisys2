@@ -504,8 +504,8 @@ async function generateExtractorTargets(workingDir: string): Promise<void> {
     userMessage: buildExtractTargetPrompt(workingDir, sowContent),
     workingDir,
     tools: [readFileTool],
-    maxRounds: 3,
-    maxFilesPerRound: 7,
+    maxRounds: 9,
+    maxFilesPerRound: 12,
     maxTokens: preferredModel.maxTokens,
   });
 
