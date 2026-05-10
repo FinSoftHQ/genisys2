@@ -299,11 +299,13 @@ describe('planning processor routes', () => {
       const firstCreateCall = mockCreateCard.mock.calls[0];
       expect(firstCreateCall[2].title).toBe('Implement login endpoint');
       expect(firstCreateCall[2].description).toContain('Create the POST /login endpoint');
+      expect(firstCreateCall[2].description.startsWith('## Scope of Work')).toBe(true);
       expect(firstCreateCall[2].current_status).toBe('todo');
 
       const secondCreateCall = mockCreateCard.mock.calls[1];
       expect(secondCreateCall[2].title).toBe('Implement signup endpoint');
       expect(secondCreateCall[2].description).toContain('Create the POST /signup endpoint');
+      expect(secondCreateCall[2].description.startsWith('## Scope of Work')).toBe(true);
 
       expect(mockCreateCardRelationship).toHaveBeenNthCalledWith(
         1,

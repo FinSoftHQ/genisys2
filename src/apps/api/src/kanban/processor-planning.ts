@@ -895,6 +895,22 @@ function generatePlanningSummary(data: PlanningV1): string {
 /*  Description append helper                                          */
 /* ------------------------------------------------------------------ */
 
+function buildPlannedTaskCardDescription(task: PlanningV1['tasks'][number]): string {
+  const scopeOfWork = `## Scope of Work\n\n${task.body.join('\n\n')}`;
+  const extraParts: string[] = [];
+
+  if (task.acceptance.length > 0) {
+    extraParts.push(`**Acceptance:**\n${task.acceptance.map((a) => `- ${a}`).join('\n')}`);
+  }
+  if (task.risk.length > 0) {
+    extraParts.push(`**Risk:**\n${task.risk.map((r) => `- ${r}`).join('\n')}`);
+  }
+
+  return extraParts.length > 0
+    ? `${scopeOfWork}\n\n---\n\n${extraParts.join('\n\n')}`
+    : scopeOfWork;
+}
+
 function appendSummaryToDescription(original: string | null, summary: string): string {
   const base = original ?? '';
   // If there's a protocol front-matter block, append after it
@@ -1001,15 +1017,7 @@ async function delegatePlanning(
             risk: task.risk,
           };
 
-          const descriptionParts = task.body.join('\n\n');
-          const extraParts: string[] = [];
-          if (task.acceptance.length > 0) {
-            extraParts.push(`**Acceptance:**\n${task.acceptance.map((a) => `- ${a}`).join('\n')}`);
-          }
-          if (task.risk.length > 0) {
-            extraParts.push(`**Risk:**\n${task.risk.map((r) => `- ${r}`).join('\n')}`);
-          }
-          const description = extraParts.length > 0 ? `${descriptionParts}\n\n---\n\n${extraParts.join('\n\n')}` : descriptionParts;
+          const description = buildPlannedTaskCardDescription(task);
 
           const taskCard = createCard(
             {},
