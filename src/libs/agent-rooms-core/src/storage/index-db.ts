@@ -160,9 +160,67 @@ export function listRoomsIndex(
 		sql += " AND tag = ?";
 		params.push(tag);
 	}
-	sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+	sql += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?";
 	params.push(limit, offset);
 	return d.prepare(sql).all(...params) as RoomIndexRow[];
+}
+
+export interface ListCursor {
+	created_at: number;
+	room_id: string;
+}
+
+function encodeCursor(cursor: ListCursor): string {
+	return Buffer.from(`${cursor.created_at}:${cursor.room_id}`).toString("base64url");
+}
+
+function decodeCursor(cursor: string): ListCursor | undefined {
+	try {
+		const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+		const [created_at, room_id] = decoded.split(":");
+		const ts = parseInt(created_at, 10);
+		if (isNaN(ts) || !room_id) return undefined;
+		return { created_at: ts, room_id };
+	} catch {
+		return undefined;
+	}
+}
+
+export function listRoomsIndexCursor(
+	status?: string,
+	tag?: string,
+	limit = 50,
+	cursor?: string,
+): { rows: RoomIndexRow[]; nextCursor: string | null } {
+	const d = getIndexDb();
+	const decoded = cursor ? decodeCursor(cursor) : undefined;
+
+	let sql = "SELECT * FROM rooms WHERE 1=1";
+	const params: (string | number)[] = [];
+	if (status !== undefined) {
+		sql += " AND status = ?";
+		params.push(status);
+	}
+	if (tag !== undefined) {
+		sql += " AND tag = ?";
+		params.push(tag);
+	}
+	if (decoded) {
+		sql += " AND (created_at < ? OR (created_at = ? AND id < ?))";
+		params.push(decoded.created_at, decoded.created_at, decoded.room_id);
+	}
+	sql += " ORDER BY created_at DESC, id DESC LIMIT ?";
+	params.push(limit + 1);
+
+	const rows = d.prepare(sql).all(...params) as RoomIndexRow[];
+	const hasMore = rows.length > limit;
+	if (hasMore) {
+		rows.pop();
+	}
+	const nextCursor = hasMore && rows.length > 0
+		? encodeCursor({ created_at: rows[rows.length - 1].created_at, room_id: rows[rows.length - 1].id })
+		: null;
+	return { rows, nextCursor };
 }
 
 export function deleteRoomIndex(id: string): void {

@@ -324,6 +324,9 @@ importers:
       better-sqlite3:
         specifier: 'catalog:'
         version: 12.9.0
+      zod:
+        specifier: 'catalog:'
+        version: 4.3.6
     devDependencies:
       '@types/better-sqlite3':
         specifier: 'catalog:'

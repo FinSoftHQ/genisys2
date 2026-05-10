@@ -100,4 +100,15 @@ export class RoomLog {
 		}
 		return { events, hasMore };
 	}
+
+	static async countEvents(roomId: string): Promise<number> {
+		const path = getRoomEventsPath(roomId);
+		if (!existsSync(path)) return 0;
+		let count = 0;
+		const rl = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
+		for await (const line of rl) {
+			if (line.trim()) count++;
+		}
+		return count;
+	}
 }

@@ -1,10 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '../test-helpers.js';
-import { openIndexDb, closeIndexDb, getRoomIndex, listRoomsIndex, upsertRoom, getTerminalRoomsOlderThan, deleteRoomIndex } from './index-db.js';
+import { openIndexDb, closeIndexDb, getRoomIndex, listRoomsIndex, upsertRoom, getTerminalRoomsOlderThan } from './index-db.js';
 import { RoomLog } from './room-log.js';
-import { getRoomEventsPath, getRoomDir, getRoomProtocolPath } from './paths.js';
-import { performGc } from './retention-gc.js';
 
 describe('agent-rooms storage', () => {
 	beforeAll(() => {

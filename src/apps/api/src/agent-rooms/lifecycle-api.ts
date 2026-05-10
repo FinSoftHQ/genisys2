@@ -1,7 +1,7 @@
 import {
 	getRoomIndex,
 	getRoomAgentsIndex,
-	listRoomsIndex,
+	listRoomsIndexCursor,
 	getRoomPromptsDir,
 	RoomLog,
 	RingBuffer,
@@ -14,14 +14,12 @@ import {
 export function listRooms(
 	status?: string,
 	limit = 50,
-	offset = 0,
+	cursor?: string,
 	tag?: string,
-): object[] {
+): { rooms: object[]; nextCursor: string | null } {
 	const clampedLimit = Math.max(1, Math.min(200, limit));
-	const clampedOffset = Math.max(0, offset);
-
-	const rows = listRoomsIndex(status, tag, clampedLimit, clampedOffset);
-	return rows.map((row) => getRoomStatusFromIndex(row));
+	const { rows, nextCursor } = listRoomsIndexCursor(status, tag, clampedLimit, cursor);
+	return { rooms: rows.map((row) => getRoomStatusFromIndex(row)), nextCursor };
 }
 
 function getRoomStatusFromIndex(row: RoomIndexRow): object {

@@ -11,6 +11,24 @@ export type {
 	ReturnedEvent,
 } from "./types.js";
 
+export {
+	RoomStatusSchema,
+	ExecutionModeSchema,
+	RoomCloseReasonSchema,
+	RoutingStrategySchema,
+	StoredEventSchema,
+	InstructionsBodySchema,
+	ListRoomsQuerySchema,
+	GetEventsQuerySchema,
+	ApiErrorSchema,
+	CreateRoomResponseSchema,
+	ListRoomsResponseSchema,
+	RoomStatusResponseSchema,
+	EventsResponseSchema,
+	InstructionsResponseSchema,
+	DestroyRoomResponseSchema,
+} from "./schemas.js";
+
 export { RingBuffer } from "./ring-buffer.js";
 
 export {
@@ -22,7 +40,7 @@ export {
 	getRoomPromptsDir,
 } from "./storage/paths.js";
 
-export type { RoomIndexRow, AgentIndexRow } from "./storage/index-db.js";
+export type { RoomIndexRow, AgentIndexRow, ListCursor } from "./storage/index-db.js";
 export {
 	openIndexDb,
 	closeIndexDb,
@@ -30,6 +48,7 @@ export {
 	upsertRoom,
 	upsertAgent,
 	listRoomsIndex,
+	listRoomsIndexCursor,
 	getRoomIndex,
 	getRoomAgentsIndex,
 	getTerminalRoomsOlderThan,

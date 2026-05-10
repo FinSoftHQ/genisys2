@@ -2,7 +2,7 @@
 
 Purpose
 
-This API manages "agent rooms" — chat rooms for AI agents where messages from one agent are automatically routed to other agents. Like squads, a room is created from a protocol Markdown document (YAML front matter with a `team:` block plus a body). The server spawns one `pi` process per team member, passes the protocol body as `--append-system-prompt`, and optionally sends per-agent instructions via JSONL RPC.
+This API manages "agent rooms" — chat rooms for AI agents where messages from one agent are automatically routed to other agents. A room is created from a protocol Markdown document (YAML front matter with a `team:` block plus a body). The server spawns one `pi` process per team member, passes the protocol body as `--append-system-prompt`, and optionally sends per-agent instructions via JSONL RPC.
 
 The key behavioral difference from squads is **inter-agent message routing**: when an agent produces an assistant message, that message is forwarded to the other agents in the room so they can react and continue the conversation.
 
@@ -24,11 +24,39 @@ Notes
 - You can optionally declare a `working_dir:` block in the front matter to set the working directory for all spawned `pi` processes. Relative paths are resolved against the API server's CWD; absolute paths are used as-is. When omitted, `pi` inherits the API server's CWD.
 - You can optionally declare an `instructions:` block in the front matter to send per-agent prompt messages immediately after the room is created. When omitted, no initial prompt is sent — callers must use `POST /api/v1/agent-rooms/:roomId/instructions` to trigger agents.
 
-Endpoints (starter guide)
+## Error responses
 
-1) Create room
+All error responses use a standardized shape:
+
+```json
+{
+  "error": {
+    "code": "ROOM_NOT_FOUND",
+    "message": "Room not found",
+    "details": {} // optional, structured extra context
+  }
+}
+```
+
+Common error codes:
+- `INVALID_CONTENT_TYPE` — 415, request Content-Type is not supported
+- `INVALID_HEADER` — 400, a required header is missing or malformed
+- `INVALID_BODY` — 400, request body failed schema validation
+- `INVALID_QUERY` — 400, query parameters failed schema validation
+- `ROOM_NOT_FOUND` — 404, room does not exist
+- `ROOM_COMPLETED` — 409, room is already completed
+- `AGENT_NOT_FOUND` — 400, target agent does not exist in the room
+- `SUPERVISOR_ERROR` — 502, the room supervisor process returned an error
+- `SSE_SUBSCRIPTION_FAILED` — 502, could not establish SSE subscription
+
+---
+
+## Endpoints
+
+### 1) Create room
 - Purpose: Create a new agent room from a protocol Markdown document and start agent processes.
 - Request (HTTP):
+  ```
   POST /api/v1/agent-rooms/
   Headers:
     Content-Type: text/markdown
@@ -36,12 +64,17 @@ Endpoints (starter guide)
     x-room-callback-secret: your-shared-secret (optional, used to sign x-signature)
     x-room-tag: my-namespace (optional, scopes room to a tag for filtering)
   Body: (raw protocol Markdown. Front matter may omit `team:` if defaults are provided by `tailor_shop/working_protocol.md`.)
+  ```
 
 - Success: 201 Created
-  Body: { roomId: string, status: "initialized" }
-- Common errors: 415 if Content-Type does not include text/markdown; 400 for invalid callback headers; 500 if no team is found in either the protocol or `working_protocol.md` defaults.
+  ```json
+  { "roomId": "string", "status": "initialized" }
+  ```
+- Common errors: 415 `INVALID_CONTENT_TYPE`; 400 `INVALID_HEADER` for invalid callback headers; 502 `SUPERVISOR_ERROR` if no team is found in either the protocol or `working_protocol.md` defaults.
 - Callback behavior (optional): when `x-room-callback-url` is set, the API sends HTTP POST callbacks on room close (`completed`, `manual`, `expired`) with body:
-  `{ "type": "room_closed", "roomId": "...", "reason": "completed|manual|expired", "at": "<ISO timestamp>" }`
+  ```json
+  { "type": "room_closed", "roomId": "...", "reason": "completed|manual|expired", "at": "<ISO timestamp>" }
+  ```
   and `x-signature` header (HMAC-SHA256 hex of raw JSON body) when `x-room-callback-secret` is set.
 
 - Callback verification sample (Node/Express):
@@ -173,150 +206,200 @@ When the protocol front matter includes a `tailor_shop:` path, the server also r
 
 This allows you to keep shared configuration (team roster, routing rules, etc.) in a central `working_protocol.md` and create lightweight per-task protocols that only specify `tailor_shop:` and task-specific overrides such as `instructions:`. The main protocol always takes precedence.
 
-2) Get room status
+---
+
+### 2) Get room status
 - Purpose: Get a compact status snapshot for a room and per-agent status, plus a pointer to the most recent stored event.
 - Request (HTTP):
+  ```
   GET /api/v1/agent-rooms/:roomId/status
   Headers: (none required)
   Body: none
+  ```
 
 - Success: 200 OK
-  Body: {
-    roomId: string,
-    status: "initialized" | "running" | "suspended" | "error" | "completed",
-    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
-    // present once at least one event has been stored:
-    lastEventId?: number,
-    lastEventAt?: string,
-    lastEventType?: string,
-    lastEventFrom?: string,
-    // optional if failure:
-    failedAgent?: string,
-    reason?: string
+  ```json
+  {
+    "roomId": "string",
+    "status": "initialized | running | suspended | error | completed",
+    "agents": { "<agentName>": { "status": "idle | streaming | error" }, ... },
+    "lastEventId?": 42,
+    "lastEventAt?": "<ISO timestamp>",
+    "lastEventType?": "message",
+    "lastEventFrom?": "smith",
+    "failedAgent?": "john",
+    "reason?": "spawn_failure"
   }
-- Common error: 404 if room not found
+  ```
+- Common error: 404 `ROOM_NOT_FOUND`
 
-3) Get stored events
+---
+
+### 3) Get stored events
 - Purpose: Retrieve coalesced events buffered for a room. Events are paginated and large text fields are automatically truncated.
 - Request (HTTP):
+  ```
   GET /api/v1/agent-rooms/:roomId/events
   GET /api/v1/agent-rooms/:roomId/events?since=<eventId>
   GET /api/v1/agent-rooms/:roomId/events?since=<eventId>&limit=<number>
-  Headers: (none required)
-  Body: none
+  ```
 
 - Query params:
-  since (optional): integer event id — return only events with id > since.
-  limit (optional): maximum number of events to return. Default: 100. Must be a positive integer.
+  - `since` (optional): integer event id — return only events with `id > since`.
+  - `limit` (optional): maximum number of events to return. Default: `100`. Max: `200`. Must be a positive integer.
 
 - Success: 200 OK
-  Body: {
-    roomId: string,
-    total: number,        // total events currently in buffer (before since filter)
-    returned: number,     // number of events in this response
-    hasMore: boolean,     // true if more events are available beyond this page
-    events: Array<{
-      id: number,
-      from: string,
-      at: string,
-      type: "thinking" | "message" | "tool_start" | "tool_end"
-           | "retry_start" | "retry_end" | "agent_start" | "agent_end" | "room_error" | "room_closed",
-      // type-specific fields are identical to squads, plus:
-      // room_closed: reason: "completed"
-      // present if any field in this event was truncated:
-      _fieldTruncated?: boolean,
-    }>
+  ```json
+  {
+    "roomId": "string",
+    "total": 150,
+    "returned": 100,
+    "hasMore": true,
+    "events": [
+      {
+        "id": 1,
+        "from": "smith",
+        "at": "<ISO timestamp>",
+        "type": "thinking | message | tool_start | tool_end | retry_start | retry_end | agent_start | agent_end | room_error | room_closed",
+        "_fieldTruncated?": true
+      }
+    ]
   }
-- Common errors: 400 for invalid since or limit, 404 if room not found
+  ```
+- Common errors: 400 `INVALID_QUERY` for invalid `since` or `limit`; 404 `ROOM_NOT_FOUND`
 
 - Notes:
-  - If limit is omitted, the server defaults to 100 events.
-  - Individual string fields (message text, thinking blocks, tool results) are truncated at 4000 characters. A _fieldTruncated flag is added to affected events.
-  - Use hasMore + since cursors to paginate through large buffers.
+  - If `limit` is omitted, the server defaults to 100 events.
+  - Individual string fields (message text, thinking blocks, tool results) are truncated at 4000 characters. A `_fieldTruncated` flag is added to affected events.
+  - Use `hasMore` + `since` cursors to paginate through large buffers.
 
-4) Subscribe to SSE stream
+---
+
+### 4) Subscribe to SSE stream
 - Purpose: Receive real-time agent events and room lifecycle events via Server-Sent Events.
 - Request (HTTP):
+  ```
   GET /api/v1/agent-rooms/:roomId/stream
-  Headers: none (client should handle SSE)
+  Headers:
+    Last-Event-Id: 42   (optional — replay events after this id on reconnect)
   Body: none
+  ```
 
 - Success: 200 OK with headers:
-    Content-Type: text/event-stream
-    Cache-Control: no-cache
-    Connection: keep-alive
-- Common error: 404 if room not found
+  ```
+  Content-Type: text/event-stream
+  Cache-Control: no-cache
+  Connection: keep-alive
+  ```
+- Common error: 404 `ROOM_NOT_FOUND`
 
-5) Send instructions / follow-ups to agent(s)
+- Reconnect behavior:
+  - Clients should set the `Last-Event-Id` header to the last `id:` field received before disconnect.
+  - The server replays all events with `id > Last-Event-Id` before resuming the live stream.
+  - Each SSE event includes an `id:` field derived from the event's numeric `id`:
+    ```
+    id: 42
+    event: message
+    data: {"id":42,"from":"smith","type":"message","text":"hello"}
+    ```
+
+---
+
+### 5) Send instructions / follow-ups to agent(s)
 - Purpose: Queue follow-up messages to one or more agents in a room. Messages are sent as `prompt` (if agent idle) or `follow_up` (if streaming).
 - Request (HTTP):
+  ```
   POST /api/v1/agent-rooms/:roomId/instructions
   Headers:
     Content-Type: application/json
   Body (JSON):
-    {
-      "targetAgents": ["agentName1", "agentName2"],
-      "followUp": ["Please focus on performance.", "Add error handling."]
-    }
+  {
+    "targetAgents": ["agentName1", "agentName2"],
+    "followUp": ["Please focus on performance.", "Add error handling."]
+  }
+  ```
 
 - Success: 200 OK
-  Body: { roomId: string, queuedItems: number }
-- Common errors: 400 for invalid body or unknown agent, 404 if room not found
+  ```json
+  { "roomId": "string", "queuedItems": 2 }
+  ```
+- Common errors: 400 `INVALID_BODY` or `AGENT_NOT_FOUND`; 404 `ROOM_NOT_FOUND`; 409 `ROOM_COMPLETED`
 
-6) Complete (destroy) room
+---
+
+### 6) Complete (destroy) room
 - Purpose: Mark a room completed and clean up processes and SSE clients.
 - Request (HTTP):
+  ```
   DELETE /api/v1/agent-rooms/:roomId
   Headers: none
   Body: none
+  ```
 
 - Success: 200 OK
-  Body: { roomId: string, status: "completed" }
-- Common error: 404 if room not found
+  ```json
+  { "roomId": "string", "status": "deleted" }
+  ```
+- Common error: 404 `ROOM_NOT_FOUND`
 
-7) List agent rooms
-- Purpose: Retrieve a lightweight list of all active agent room sessions with optional filtering and pagination.
+---
+
+### 7) List agent rooms
+- Purpose: Retrieve a lightweight list of agent room sessions with optional filtering and **cursor-based pagination**.
 - Request (HTTP):
+  ```
   GET /api/v1/agent-rooms
   GET /api/v1/agent-rooms?status=<status>
   GET /api/v1/agent-rooms?tag=<tag>
-  GET /api/v1/agent-rooms?limit=<number>&offset=<number>
-  GET /api/v1/agent-rooms?status=<status>&tag=<tag>&limit=<number>&offset=<number>
-  Headers: (none required)
-  Body: none
+  GET /api/v1/agent-rooms?limit=<number>
+  GET /api/v1/agent-rooms?cursor=<cursor>
+  GET /api/v1/agent-rooms?status=<status>&tag=<tag>&limit=<number>&cursor=<cursor>
+  ```
 
 - Query params:
-  status (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
-  tag (optional): filter to rooms created with the matching `x-room-tag` header.
-  limit (optional): maximum number of rooms to return. Default: `50`. Max: `200`.
-  offset (optional): number of rooms to skip. Default: `0`.
+  - `status` (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
+  - `tag` (optional): filter to rooms created with the matching `x-room-tag` header.
+  - `limit` (optional): maximum number of rooms to return. Default: `50`. Max: `200`.
+  - `cursor` (optional): opaque cursor string from the previous page's `nextCursor`. Omit for the first page.
 
 - Success: 200 OK
-  Body: Array<{
-    roomId: string,
-    status: "initialized" | "running" | "suspended" | "error" | "completed",
-    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
-    // present once at least one event has been stored:
-    lastEventId?: number,
-    lastEventAt?: string,
-    lastEventType?: string,
-    lastEventFrom?: string,
-    // optional if failure:
-    failedAgent?: string,
-    reason?: string
-  }>
+  ```json
+  {
+    "rooms": [
+      {
+        "roomId": "string",
+        "status": "initialized | running | suspended | error | completed",
+        "agents": { "<agentName>": { "status": "idle | streaming | error" }, ... },
+        "lastEventId?": 42,
+        "lastEventAt?": "<ISO timestamp>",
+        "lastEventType?": "message",
+        "lastEventFrom?": "smith",
+        "failedAgent?": "john",
+        "reason?": "spawn_failure"
+      }
+    ],
+    "nextCursor": "eyJjcmVhdGVkX2F0IjoxNzE1NDMyMTAwMDAwLCJyb29tX2lkIjoicm0teHl6In0" // null when no more pages
+  }
+  ```
 
-Event types (overview)
+- Pagination notes:
+  - Results are ordered by `created_at DESC, roomId DESC`.
+  - Pass `nextCursor` from the response into the next request's `cursor` query param.
+  - When `nextCursor` is `null`, there are no more pages.
+
+---
+
+## Event types (overview)
 - Events are emitted by agent processes and forwarded through SSE. Typical `type` values include:
-  - agent_start, agent_end
-  - message_start, message_update, message_end
-  - tool_execution_start, tool_execution_end
-  - auto_retry_start, auto_retry_end
-  - response
-  - room_error (from manager)
-  - room_closed (from manager when room destroyed; reason: "expired"|"completed"|"manual")
+  - `agent_start`, `agent_end`
+  - `message_start`, `message_update`, `message_end`
+  - `tool_execution_start`, `tool_execution_end`
+  - `auto_retry_start`, `auto_retry_end`
+  - `response`
+  - `room_error` (from manager)
+  - `room_closed` (from manager when room destroyed; reason: `expired|completed|manual`)
 
-Key behavioral difference from squads
+## Key behavioral difference from squads
 - When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
 - **Broadcast Mode** (no `routes:` block): messages are broadcast to all other agents.
 - **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists. If the sender *is* the facilitator, one self-retry is allowed before the message is dropped with a critical error; the retry counter resets when the facilitator successfully routes a message.
@@ -373,4 +456,3 @@ Endpoints
   - 422 `NOT_A_GIT_REPO` — `workspace_path` is not a git repository
   - 502 `GENERATION_FAILED` — LLM generation failed or produced invalid/unsatisfiable output
   - 504 `GENERATION_TIMEOUT` — LLM generation timed out after 60 seconds
-

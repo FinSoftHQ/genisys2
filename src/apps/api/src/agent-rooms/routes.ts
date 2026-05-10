@@ -1,5 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
+import {
+	InstructionsBodySchema,
+	ListRoomsQuerySchema,
+	GetEventsQuerySchema,
+	RoomLog,
+} from "@repo/agent-rooms-core";
 import {
 	createRoom,
 	sendInstructions as sendInstructionsIpc,
@@ -7,11 +12,7 @@ import {
 	subscribeToRoom,
 } from "./client.js";
 import { listRooms, getRoom, getRoomStatus, getRoomEvents } from "./lifecycle-api.js";
-
-const InstructionsBodySchema = z.object({
-	targetAgents: z.array(z.string().min(1)).min(1),
-	followUp: z.array(z.string().min(1)).min(1),
-});
+import { sendError, ErrorCodes } from "./errors.js";
 
 function normalizeHeader(value: string | string[] | undefined): string | undefined {
 	if (Array.isArray(value)) {
@@ -20,34 +21,35 @@ function normalizeHeader(value: string | string[] | undefined): string | undefin
 	return value?.trim() || undefined;
 }
 
+function parseLastEventId(value: string | string[] | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	const raw = Array.isArray(value) ? value[0] : value;
+	const parsed = parseInt(raw, 10);
+	if (isNaN(parsed) || parsed < 0) return undefined;
+	return parsed;
+}
+
 export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> {
 	instance.get("/", async (request, reply) => {
-		const { status, tag } = request.query as { status?: string; tag?: string };
-		const { limit: limitRaw, offset: offsetRaw } = request.query as {
-			limit?: string;
-			offset?: string;
-		};
-		let limit = 50;
-		let offset = 0;
-		if (limitRaw !== undefined) {
-			const parsed = parseInt(limitRaw, 10);
-			if (!isNaN(parsed) && isFinite(parsed) && parsed >= 1) {
-				limit = Math.min(parsed, 200);
-			}
+		const query = ListRoomsQuerySchema.safeParse(request.query);
+		if (!query.success) {
+			return sendError(reply, 400, {
+				code: ErrorCodes.INVALID_QUERY,
+				message: "Invalid query parameters",
+				details: query.error.issues,
+			});
 		}
-		if (offsetRaw !== undefined) {
-			const parsed = parseInt(offsetRaw, 10);
-			if (!isNaN(parsed) && isFinite(parsed) && parsed >= 0) {
-				offset = parsed;
-			}
-		}
-		return reply.status(200).send(listRooms(status, limit, offset, tag));
+		const { status, tag, limit, cursor } = query.data;
+		return reply.status(200).send(listRooms(status, limit, cursor, tag));
 	});
 
 	instance.post("/", async (request, reply) => {
 		const contentType = request.headers["content-type"] ?? "";
 		if (!contentType.includes("text/markdown")) {
-			return reply.status(415).send({ error: "Expected text/markdown" });
+			return sendError(reply, 415, {
+				code: ErrorCodes.INVALID_CONTENT_TYPE,
+				message: "Expected Content-Type: text/markdown",
+			});
 		}
 
 		const markdown = request.body as string;
@@ -56,16 +58,25 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		const tag = normalizeHeader(request.headers["x-room-tag"]);
 
 		if (callbackSecret && !callbackUrl) {
-			return reply.status(400).send({ error: "x-room-callback-secret requires x-room-callback-url" });
+			return sendError(reply, 400, {
+				code: ErrorCodes.INVALID_HEADER,
+				message: "x-room-callback-secret requires x-room-callback-url",
+			});
 		}
 		if (callbackUrl) {
 			try {
 				const parsed = new URL(callbackUrl);
 				if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-					return reply.status(400).send({ error: "x-room-callback-url must be http or https" });
+					return sendError(reply, 400, {
+						code: ErrorCodes.INVALID_HEADER,
+						message: "x-room-callback-url must be http or https",
+					});
 				}
 			} catch {
-				return reply.status(400).send({ error: "Invalid x-room-callback-url" });
+				return sendError(reply, 400, {
+					code: ErrorCodes.INVALID_HEADER,
+					message: "Invalid x-room-callback-url",
+				});
 			}
 		}
 
@@ -74,7 +85,10 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			return reply.status(201).send({ roomId: result.roomId, status: result.status });
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
-			return reply.status(502).send({ error: `Supervisor error: ${message}` });
+			return sendError(reply, 502, {
+				code: ErrorCodes.SUPERVISOR_ERROR,
+				message,
+			});
 		}
 	});
 
@@ -82,7 +96,10 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
-			return reply.status(404).send({ error: "Room not found" });
+			return sendError(reply, 404, {
+				code: ErrorCodes.ROOM_NOT_FOUND,
+				message: "Room not found",
+			});
 		}
 		return reply.status(200).send(getRoomStatus(room));
 	});
@@ -91,37 +108,38 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
-			return reply.status(404).send({ error: "Room not found" });
+			return sendError(reply, 404, {
+				code: ErrorCodes.ROOM_NOT_FOUND,
+				message: "Room not found",
+			});
 		}
 
-		const { since } = request.query as { since?: string };
-		let sinceId: number | undefined;
-		if (since !== undefined) {
-			sinceId = parseInt(since, 10);
-			if (isNaN(sinceId)) {
-				return reply.status(400).send({ error: "Invalid 'since' parameter, must be an integer event id" });
-			}
+		const query = GetEventsQuerySchema.safeParse(request.query);
+		if (!query.success) {
+			return sendError(reply, 400, {
+				code: ErrorCodes.INVALID_QUERY,
+				message: "Invalid query parameters",
+				details: query.error.issues,
+			});
 		}
+		const { since, limit } = query.data;
 
-		const { limit: limitRaw } = request.query as { limit?: string };
-		let limit: number | undefined;
-		if (limitRaw !== undefined) {
-			limit = parseInt(limitRaw, 10);
-			if (isNaN(limit) || limit < 1) {
-				return reply.status(400).send({ error: "Invalid 'limit' parameter, must be a positive integer" });
-			}
-		}
-
-		const { events, hasMore } = await getRoomEvents(room, sinceId, limit);
-		return reply.status(200).send({ roomId, total: room.events.length, returned: events.length, hasMore, events });
+		const { events, hasMore } = await getRoomEvents(room, since, limit);
+		const total = await RoomLog.countEvents(roomId);
+		return reply.status(200).send({ roomId, total, returned: events.length, hasMore, events });
 	});
 
 	instance.get("/:roomId/stream", async (request, reply) => {
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
-			return reply.status(404).send({ error: "Room not found" });
+			return sendError(reply, 404, {
+				code: ErrorCodes.ROOM_NOT_FOUND,
+				message: "Room not found",
+			});
 		}
+
+		const lastEventId = parseLastEventId(request.headers["last-event-id"]);
 
 		reply.raw.writeHead(200, {
 			"Content-Type": "text/event-stream",
@@ -129,12 +147,31 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			Connection: "keep-alive",
 		});
 
+		// Replay missed events if Last-Event-Id provided
+		if (lastEventId !== undefined) {
+			try {
+				const { events } = await getRoomEvents(room, lastEventId, 1000);
+				for (const event of events) {
+					try {
+						reply.raw.write(`id: ${event.id}\nevent: message\ndata: ${JSON.stringify(event)}\n\n`);
+					} catch {
+						// Client disconnected during replay
+						try { reply.raw.end(); } catch {}
+						return;
+					}
+				}
+			} catch (err: unknown) {
+				console.warn(`[agent-rooms] SSE replay failed for ${roomId}:`, err);
+			}
+		}
+
 		try {
 			const socket = await subscribeToRoom(
 				roomId,
 				(event) => {
 					try {
-						reply.raw.write(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
+						const id = typeof event.id === "number" ? event.id : "";
+						reply.raw.write(`id: ${id}\nevent: message\ndata: ${JSON.stringify(event)}\n\n`);
 					} catch {
 						socket.end();
 					}
@@ -162,16 +199,26 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
-			return reply.status(404).send({ error: "Room not found" });
+			return sendError(reply, 404, {
+				code: ErrorCodes.ROOM_NOT_FOUND,
+				message: "Room not found",
+			});
 		}
 
 		if (room.status === "completed") {
-			return reply.status(409).send({ error: "Room is completed" });
+			return sendError(reply, 409, {
+				code: ErrorCodes.ROOM_COMPLETED,
+				message: "Room is completed",
+			});
 		}
 
 		const body = InstructionsBodySchema.safeParse(request.body);
 		if (!body.success) {
-			return reply.status(400).send({ error: "Invalid body", issues: body.error.issues });
+			return sendError(reply, 400, {
+				code: ErrorCodes.INVALID_BODY,
+				message: "Invalid body",
+				details: body.error.issues,
+			});
 		}
 
 		let totalQueued = 0;
@@ -181,7 +228,11 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 				totalQueued += result.queuedItems;
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
-				return reply.status(400).send({ error: message, agent: agentName });
+				return sendError(reply, 400, {
+					code: ErrorCodes.AGENT_NOT_FOUND,
+					message,
+					details: { agent: agentName },
+				});
 			}
 		}
 		return reply.status(200).send({ roomId, queuedItems: totalQueued });
@@ -191,14 +242,20 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		const { roomId } = request.params as { roomId: string };
 		const room = getRoom(roomId);
 		if (!room) {
-			return reply.status(404).send({ error: "Room not found" });
+			return sendError(reply, 404, {
+				code: ErrorCodes.ROOM_NOT_FOUND,
+				message: "Room not found",
+			});
 		}
 		try {
 			await destroyRoomIpc(roomId);
 			return reply.status(200).send({ roomId, status: "deleted" });
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
-			return reply.status(502).send({ error: `Supervisor error: ${message}` });
+			return sendError(reply, 502, {
+				code: ErrorCodes.SUPERVISOR_ERROR,
+				message,
+			});
 		}
 	});
 }
