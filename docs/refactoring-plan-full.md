@@ -142,6 +142,49 @@ Phase 1.4's `definePiProcessor` becomes load-bearing here.
 
 **Exit criteria:** new processor = one new file under `kanban/processors/<name>.ts` exporting `definePiProcessor({...})`; `server.ts` untouched.
 
+## Phase 4 — DI / typed DB context (~2 PRs, 1 day)
+
+- [ ] **4.1** Define `kanban/context.ts`:
+  ```ts
+  export type KanbanContext = { db: DbInstance; clock: () => Date; ... }
+  ```
+- [ ] **4.2** Use Fastify's `decorate` to attach the context once during server bootstrap. Routes read `request.server.kanban`.
+- [ ] **4.3** Replace `resolveDb(instance)` with typed access in **new** files (deprecated barrel keeps the old shape).
+- [ ] **4.4** Tighten `appendEventLog` to take `DbInstance` directly.
+- [ ] **4.5** Remove the side-effect import `import '../db/seed.js'` from `repository.ts`. Bootstraps already happen in `db/client.ts:createClient`.
+
+**Exit criteria:** `rg "instance: unknown" src/apps/api/src/kanban` returns matches only in the deprecated barrel.
+
+## Phase 5 — Test infrastructure (~2 PRs, 1 day)
+
+- [ ] **5.1** Create `src/apps/api/src/test-helpers/`:
+  - `buildTestApp()` — registers all routes against an in-memory SQLite + memfs working dir.
+  - `mockProcessor(id, handlers)` — common mock for hook dispatcher tests.
+  - `seedBoardForTest(db, opts)` — replaces ad-hoc seed code in many tests.
+- [ ] **5.2** Convert `processor-done.test.ts` and `routes.test.ts` to the helpers as proof points.
+- [ ] **5.3** Add `src/libs/shared/src/test-fixtures.ts` exporting `makeBoard`, `makeCard`, `makeProcessor` factories typed against the Zod schemas.
+
+**Exit criteria:** new processor tests written against the helpers come in under ~80 LOC each.
+
+## Phase 6 — Web app polish (~2 PRs, 1 day)
+
+- [ ] **6.1** Extract logic from `pages/index.vue` into `composables/useHomePage.ts`. The existing `kanban-home.contract.ts` already documents the intended state shape.
+- [ ] **6.2** Extract `EditCardModal.vue` form/conflict logic into `composables/useCardEditor.ts`.
+- [ ] **6.3** **Migrate `useBoardStore` to Pinia.**
+  - Add `pinia` and `@pinia/nuxt` to the workspace catalog.
+  - Register `@pinia/nuxt` in `src/apps/web/nuxt.config.ts`.
+  - Convert `composables/useBoardStore.ts` → `stores/board.ts` using `defineStore`.
+  - Update consumers: `BoardView.vue`, `EditCardModal.vue`, `pages/boards/[boardId].vue`, `useBoardRealtime.ts`.
+  - Update `useBoardStore.test.ts` and `BoardView.test.ts` to mount with `createTestingPinia`.
+- [ ] **6.4** Co-locate non-Zod view-model types under `web/app/types/`.
+
+## Phase 7 — Tooling & build hygiene (~1 PR, 0.5 day)
+
+- [ ] **7.1** Create the `src/tooling/` workspace the README claims (TS + ESLint configs), or update the README to match reality.
+- [ ] **7.2** `docs/runtime.md` documenting Bun-vs-Node responsibilities (Bun: dev hot reload only; Node: build + prod).
+- [ ] **7.3** Add a `pnpm refresh-context` script that regenerates `llm_context.md` via `tools/context-generator/`.
+- [ ] **7.4** Introduce `tsconfig.base.json`; have each package extend it.
+
 ## Cross-cutting rules (apply during every phase)
 
 - [ ] **C.1** Each PR ≤ ~400 LOC of net diff (excluding pure moves).
@@ -163,3 +206,6 @@ Phase 1.4's `definePiProcessor` becomes load-bearing here.
 2. **Phase 2.1** (manager.ts split) next — biggest single navigability win.
 3. **Phase 2.2 + 2.3** — both touch repository/routes seams; do 2.2 first so 2.3 can lean on the typed repos.
 4. **Phase 3** — payoff is multiplicative once 2.1.4 and 1.4 are in.
+5. **Phase 4** can interleave with 2 if you want to type the new files from day one.
+6. **Phase 5** before **Phase 6** so the web work has clean test scaffolding.
+7. **Phase 7** any time.

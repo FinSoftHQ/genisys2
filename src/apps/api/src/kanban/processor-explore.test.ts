@@ -33,10 +33,14 @@ vi.mock('./exec-helpers.js', () => ({
   execFilePromise: (...args: unknown[]) => mockExecFilePromise(...args),
 }));
 
-vi.mock('@mariozechner/pi-ai', () => ({
-  complete: (...args: unknown[]) => mockComplete(...args),
-  getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: 'opencode-go', modelId: 'deepseek-v4-flash' },
-}));
+vi.mock('@mariozechner/pi-ai', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mariozechner/pi-ai')>();
+  return {
+    ...actual,
+    complete: (...args: unknown[]) => mockComplete(...args),
+    getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: 'opencode-go', modelId: 'deepseek-v4-flash' },
+  };
+});
 
 vi.mock('../lib/ai-auth.js', () => ({
   getApiKey: (...args: unknown[]) => mockGetApiKey(...args),
@@ -218,6 +222,15 @@ describe('explore processor routes', () => {
 
       expect(mockComplete).toHaveBeenCalledTimes(1);
       expect(mockGetModel).toHaveBeenCalledWith('opencode-go', 'deepseek-v4-flash');
+
+      const completeCall = mockComplete.mock.calls[0];
+      const completeContext = completeCall?.[1] as { systemPrompt?: string; messages: Array<{ role: string; content: string }> };
+      expect(completeContext.systemPrompt).toContain('# Repo Context');
+      expect(completeContext.messages).toHaveLength(1);
+      expect(completeContext.messages[0].role).toBe('user');
+      expect(completeContext.messages[0].content).toContain('# Mission');
+      expect(completeContext.messages[0].content).not.toContain('# Repo Context');
+      expect(completeContext.messages[0].content).toContain('Output only JSONL');
       expect(mockWriteFile).toHaveBeenCalledWith(
         '/tmp/workspaces/TST-1/.dossier/sow.md',
         expect.stringContaining('Initial task body'),

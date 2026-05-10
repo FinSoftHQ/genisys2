@@ -1,3 +1,12 @@
+// ============================================================================
+// ARCHIVED / STALE — DO NOT USE AS SOURCE OF TRUTH
+// ============================================================================
+// This file was relocated from docs/schema-patched.ts during Phase 1.2 of the
+// refactoring plan. It is out of sync with the canonical schema at
+// src/apps/api/src/db/schema.ts and is preserved here only for historical
+// reference.
+// ============================================================================
+
 import { sqliteTable, text, integer, index, primaryKey } from 'drizzle-orm/sqlite-core';
 import { relations } from "drizzle-orm";
 
@@ -78,7 +87,7 @@ export const eventLog = sqliteTable('event_log', {
 }));
 
 // --- Orchestrator State & Processors ---
-export const processorRegistry = sqliteTable('processor_registry', {
+export const processorRegistry = sqliteTable('processorRegistry', {
   processorId: text('processor_id').primaryKey(),
   name: text('name').notNull(),
   baseUrl: text('base_url').notNull(),

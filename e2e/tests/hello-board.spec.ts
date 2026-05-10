@@ -15,10 +15,7 @@ test.describe('Hello Board MVP', () => {
     await page.goto(`/boards/${boardId}`);
     await expect(page.getByRole('heading', { name: 'Backlog' })).toBeVisible();
 
-    const backlogColumn = page
-      .locator('div')
-      .filter({ has: page.getByRole('heading', { name: 'Backlog' }) })
-      .first();
+    const backlogColumn = page.getByTestId('column-backlog');
     await backlogColumn.getByRole('button').first().click();
 
     const modal = page.getByRole('dialog').filter({ hasText: 'Create Card' });
@@ -35,10 +32,7 @@ test.describe('Hello Board MVP', () => {
     await page.goto(`/boards/${boardId}`);
     await expect(page.getByRole('heading', { name: 'Backlog' })).toBeVisible();
 
-    const backlogColumn = page
-      .locator('div')
-      .filter({ has: page.getByRole('heading', { name: 'Backlog' }) })
-      .first();
+    const backlogColumn = page.getByTestId('column-backlog');
     await backlogColumn.getByRole('button').first().click();
 
     const modal = page.getByRole('dialog').filter({ hasText: 'Create Card' });
@@ -54,10 +48,7 @@ test.describe('Hello Board MVP', () => {
     await page.goto(`/boards/${boardId}`);
     await expect(page.getByRole('heading', { name: 'Backlog' })).toBeVisible();
 
-    const backlogColumn = page
-      .locator('div')
-      .filter({ has: page.getByRole('heading', { name: 'Backlog' }) })
-      .first();
+    const backlogColumn = page.getByTestId('column-backlog');
     await backlogColumn.getByRole('button').first().click();
 
     const createModal = page.getByRole('dialog').filter({ hasText: 'Create Card' });
@@ -89,10 +80,7 @@ test.describe('Hello Board MVP', () => {
     await page.goto(`/boards/${boardId}`);
     await expect(page.getByRole('heading', { name: 'Backlog' })).toBeVisible();
 
-    const backlogColumn = page
-      .locator('div')
-      .filter({ has: page.getByRole('heading', { name: 'Backlog' }) })
-      .first();
+    const backlogColumn = page.getByTestId('column-backlog');
     await backlogColumn.getByRole('button').first().click();
 
     const modal = page.getByRole('dialog').filter({ hasText: 'Create Card' });
@@ -105,10 +93,7 @@ test.describe('Hello Board MVP', () => {
       .filter({ has: page.getByRole('button') })
       .filter({ hasNot: page.getByRole('heading') })
       .first();
-    const inProgressColumn = page
-      .locator('div')
-      .filter({ has: page.getByRole('heading', { name: 'In Progress' }) })
-      .first();
+    const inProgressColumn = page.getByTestId('column-in-progress');
 
     await card.dragTo(inProgressColumn);
     await expect(inProgressColumn.filter({ hasText: 'Draggable Card' })).toBeVisible();
@@ -121,10 +106,7 @@ test.describe('Hello Board MVP', () => {
     await page.goto(`/boards/${boardId}`);
     await expect(page.getByRole('heading', { name: 'Backlog' })).toBeVisible();
 
-    const backlogColumn = page
-      .locator('div')
-      .filter({ has: page.getByRole('heading', { name: 'Backlog' }) })
-      .first();
+    const backlogColumn = page.getByTestId('column-backlog');
     await backlogColumn.getByRole('button').first().click();
 
     const modal = page.getByRole('dialog').filter({ hasText: 'Create Card' });

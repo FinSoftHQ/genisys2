@@ -674,7 +674,7 @@ components:
           description: Card title
         description:
           type: string
-          maxLength: 5000
+          maxLength: 20000
           nullable: true
           description: Optional card description
         version:
@@ -909,7 +909,7 @@ components:
           description: Card title
         description:
           type: string
-          maxLength: 5000
+          maxLength: 20000
           nullable: true
           description: Optional description
         current_status:
@@ -965,7 +965,7 @@ components:
           description: New card title
         description:
           type: string
-          maxLength: 5000
+          maxLength: 20000
           nullable: true
           description: New card description
 
@@ -1063,7 +1063,7 @@ components:
               maxLength: 200
             description:
               type: string
-              maxLength: 5000
+              maxLength: 20000
               nullable: true
             payload:
               type: object

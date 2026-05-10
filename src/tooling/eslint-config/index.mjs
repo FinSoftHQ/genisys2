@@ -16,6 +16,7 @@ export default [
       '**/.nuxt/**',
       '**/.git/**',
       '.agents/**',
+      '**/.workspaces/**',
       'tools/**',
       'docs/**',
       'llm_context.md',

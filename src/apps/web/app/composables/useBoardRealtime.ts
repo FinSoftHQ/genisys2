@@ -59,7 +59,6 @@ function parseSseMessages(chunk: string): { messages: SseMessage[]; leftover: st
 }
 
 export function useBoardRealtime(boardId: string, opts?: { onReload?: () => void }) {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
   const boardStore = useBoardStore();
 
   const status = ref<ConnectionStatus>('idle');
@@ -73,15 +72,12 @@ export function useBoardRealtime(boardId: string, opts?: { onReload?: () => void
   function applyEvent(event: BoardStreamSseEvent) {
     switch (event.event) {
       case 'CARD_CREATED':
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         boardStore.addCard(event.data.card);
         break;
       case 'CARD_UPDATED':
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         boardStore.updateCard(event.data.card);
         break;
       case 'CARD_MOVED':
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         boardStore.updateCard(event.data.card);
         break;
       case 'ROLLUP_CHANGED':
@@ -156,10 +152,8 @@ export function useBoardRealtime(boardId: string, opts?: { onReload?: () => void
         value?: Uint8Array;
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       while (true) {
         const result: StreamResult = await reader.read() as unknown as StreamResult;
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         if (result.done || !active) break;
         if (!result.value) continue;
 

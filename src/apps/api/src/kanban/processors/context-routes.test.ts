@@ -7,7 +7,7 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   ApiErrorSchema,
 } from '@repo/shared';
-import { processorRoutes } from './processor-routes.js';
+import { processorRoutes } from './context-routes.js';
 
 const mockBoard = {
   uid: '550e8400-e29b-41d4-a716-446655440000',

@@ -72,15 +72,6 @@ async function delegateTask(card: {
       return;
     }
 
-    // New multi-subtask path: do NOT auto-move children; let them stay in todo for review.
-    // The done processor will wake the parent when all children reach done.
-    const taskCardUids = card.payload.task_card_uids;
-    if (Array.isArray(taskCardUids) && taskCardUids.length > 0 && typeof taskCardUids[0] === 'string') {
-      fireAndForgetCallback(callbackUrl, { status: 'success' });
-      return;
-    }
-
-    // Legacy single-child path: kickstart the child into explore and advance parent to wrap
     const todoCard = findRelatedTodoCard(card, taskBoard.uid);
     if (!todoCard) {
       fireAndForgetCallback(callbackUrl, { status: 'success' });

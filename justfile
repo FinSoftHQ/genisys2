@@ -6,12 +6,23 @@ _default:
     just --list
 
 install:
-    pnpm install
+    @if [ -n "${CI:-}" ]; then \
+        echo "Installing dependencies (frozen lockfile)..."; \
+        pnpm install --frozen-lockfile; \
+    else \
+        pnpm install; \
+    fi
     @if [ ! -f .env ]; then \
         echo "Creating .env from .env.example..."; \
         cp .env.example .env; \
     fi
     @echo "Install complete!"
+
+lint:
+    pnpm lint
+
+typecheck:
+    pnpm typecheck
 
 stage:
     git add -A
@@ -68,8 +79,8 @@ build-tools:
 
 azure-deploy:
     @echo "=== Pre-deployment validation ==="
-    pnpm lint
-    pnpm typecheck
+    just lint
+    just typecheck
     just test
     just build
     @echo "=== Ready for Azure deployment ==="

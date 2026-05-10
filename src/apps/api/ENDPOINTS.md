@@ -218,7 +218,7 @@ Notes
   1. Scanning the message text for inline `@attn:<identifier>` tags (dynamic targeting). An identifier is resolved against **both agent names and roles** — if it matches a name, that agent is targeted; if it matches a role, all agents with that role are targeted.
   2. Looking up the sender's statically configured recipients in the `routes:` block.
   3. Merging both pools, deduplicating them, and excluding the sender.
-  4. If no valid recipients remain, the message is forwarded to the designated `facilitator:` agent (if configured) with a `[SYSTEM_ROUTING_FAILURE]` wrapper. If no facilitator is configured, the message is dropped with a system warning. If the sender *is* the facilitator, the message is dropped with a critical error to prevent infinite loops.
+  4. If no valid recipients remain, the message is forwarded to the designated `facilitator:` agent (if configured) with a `[SYSTEM_ROUTING_FAILURE]` wrapper. If no facilitator is configured, the message is dropped with a system warning. If the sender *is* the facilitator, the system grants **one retry**: the first consecutive orphan message is sent back to the facilitator wrapped in `[SYSTEM_ROUTING_FAILURE]` with a retry notice; a second consecutive orphan message is dropped with a critical error to prevent infinite loops. The retry counter resets to zero whenever the facilitator successfully routes a message to other agents.
 - You can optionally declare a `facilitator:` key in the front matter to designate a fallback agent for orphaned messages in Explicit Mode.
 - You can optionally declare a `routes:` block in the front matter to control which agents receive messages from which sender.
 - You can optionally declare a `tailor_shop:` block in the front matter to point to a directory containing agent-specific prompt files (`agents/<agent_name>.md`, falling back to `agents/<role>.md`) and an optional shared protocol (`working_protocol.md`). These files are passed as `--append-system-prompt` to each `pi` process. Agent files may include an optional YAML front matter with `model:` to override the model for that agent.
@@ -235,6 +235,7 @@ Endpoints (starter guide)
     Content-Type: text/markdown
     x-room-callback-url: https://caller.example.com/hooks/agent-room (optional)
     x-room-callback-secret: your-shared-secret (optional, used to sign x-signature)
+    x-room-tag: my-namespace (optional, scopes room to a tag for filtering)
   Body: (raw protocol Markdown. Front matter may omit `team:` if defaults are provided by `tailor_shop/working_protocol.md`.)
 
 - Success: 201 Created
@@ -479,12 +480,15 @@ This allows you to keep shared configuration (team roster, routing rules, etc.) 
 - Request (HTTP):
   GET /api/v1/agent-rooms
   GET /api/v1/agent-rooms?status=<status>
+  GET /api/v1/agent-rooms?tag=<tag>
   GET /api/v1/agent-rooms?limit=<number>&offset=<number>
+  GET /api/v1/agent-rooms?status=<status>&tag=<tag>&limit=<number>&offset=<number>
   Headers: (none required)
   Body: none
 
 - Query params:
   status (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
+  tag (optional): filter to rooms created with the matching `x-room-tag` header.
   limit (optional): maximum number of rooms to return. Default: `50`. Max: `200`.
   offset (optional): number of rooms to skip. Default: `0`.
 
@@ -516,19 +520,7 @@ Event types (overview)
 Key behavioral difference from squads
 - When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
 - **Broadcast Mode** (no `routes:` block): messages are broadcast to all other agents.
-- **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists.
-
----
-
-# API: /api/v1/proxy-room
-
-`/api/v1/proxy-room` is a decorator/proxy for `/api/v1/agent-rooms`.
-
-- It exposes the same public route contract and payload shapes as `agent-rooms`.
-- In most clients, you can switch from `.../agent-rooms` to `.../proxy-room` without changing request/response handling.
-- It performs additional proxy-level logging on create/close and supports callback + status reconciliation behavior.
-- It includes an internal callback endpoint used by the proxy implementation; this endpoint is intentionally undocumented for public clients.
-
+- **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists. If the sender *is* the facilitator, one self-retry is allowed before the message is dropped with a critical error; the retry counter resets when the facilitator successfully routes a message.
 
 ---
 

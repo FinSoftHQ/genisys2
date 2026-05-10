@@ -8,7 +8,7 @@ const mockListBoards = vi.fn();
 const mockMoveCard = vi.fn();
 const mockStartProcessing = vi.fn();
 
-vi.mock('./repository.js', () => ({
+vi.mock('../repository.js', () => ({
   getBoardById: (...args: unknown[]) => mockGetBoardById(...args),
   getCardById: (...args: unknown[]) => mockGetCardById(...args),
   getCardFamily: (...args: unknown[]) => mockGetCardFamily(...args),
@@ -16,7 +16,7 @@ vi.mock('./repository.js', () => ({
   moveCard: (...args: unknown[]) => mockMoveCard(...args),
 }));
 
-vi.mock('./processing-orchestrator.js', () => ({
+vi.mock('../processing-orchestrator.js', () => ({
   startProcessing: (...args: unknown[]) => mockStartProcessing(...args),
 }));
 
@@ -28,7 +28,7 @@ import {
   ApiErrorSchema,
 } from '@repo/shared';
 
-import { doneProcessorRoutes } from './processor-done.js';
+import { doneProcessorRoutes } from './done.js';
 
 const mockDevBoard = {
   uid: '550e8400-e29b-41d4-a716-446655440000',

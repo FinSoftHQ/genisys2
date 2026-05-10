@@ -33,6 +33,7 @@ function onDrop(event: DragEvent) {
 <template>
   <div
     class="flex flex-col gap-3 min-w-[280px] w-[280px] shrink-0"
+    :data-testid="`column-${column.uid}`"
     @dragover="onDragOver"
     @drop="onDrop"
   >

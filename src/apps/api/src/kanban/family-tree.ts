@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { BoardEntity, CardEntity, CardFamilyMetadata } from '@repo/shared';
-import { BoardEntitySchema, BoardStreamSseEventSchema, CardEntitySchema, CardFamilyMetadataSchema } from '@repo/shared';
+import { BoardEntitySchema, BoardStreamSseEventSchema, CardEntitySchema, CardFamilyMetadataSchema, EventIdSchema, CardIdSchema, BoardIdSchema } from '@repo/shared';
 import { resolveDb } from './db-context.js';
 import { appendEventLog } from './event-log.js';
 import { broadcastEvent } from './board-stream.js';
@@ -251,10 +251,10 @@ function broadcastRollup(instance: unknown, boardUid: string, parentCardUid: str
   const timestamp = new Date().toISOString();
 
   appendEventLog(instance, {
-    event_id: eventId,
+    event_id: EventIdSchema.parse(eventId),
     timestamp,
-    card_uid: parentCardUid,
-    board_uid: boardUid,
+    card_uid: CardIdSchema.parse(parentCardUid),
+    board_uid: BoardIdSchema.parse(boardUid),
     actor,
     action: 'ROLLUP_CHANGED',
     category: 'system',

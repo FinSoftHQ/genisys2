@@ -485,7 +485,7 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
     }
 
-    const rawQuery: Record<string, unknown> = { ...request.query };
+    const rawQuery: Record<string, unknown> = { ...(request.query as Record<string, unknown>) };
     if (typeof rawQuery.categories === 'string') {
       rawQuery.categories = [rawQuery.categories];
     }

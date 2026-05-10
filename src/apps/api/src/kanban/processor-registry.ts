@@ -1,3 +1,14 @@
+/**
+ * Processor registry + health polling.
+ *
+ * This module owns:
+ *   - DB-backed processor registry queries (re-exported from repository)
+ *   - Health-check execution and result persistence
+ *   - Background health polling lifecycle
+ *
+ * It is NOT an HTTP route module; route handling lives in kanban/routes/ or
+ * individual processor files under kanban/processors/.
+ */
 export { openDb, closeDb, upsertProcessorRegistry, getProcessorById, resolveDb } from './repository.js';
 import {
   ProcessorHealthPollConfigSchema,
@@ -71,7 +82,7 @@ function persistHealthResult(
       .get();
     if (existing) {
       db.update(processorRegistry)
-        .set({ status: result.status, last_health_check: result.checked_at })
+        .set({ status: result.status as 'healthy' | 'degraded' | 'unhealthy', last_health_check: result.checked_at })
         .where(eq(processorRegistry.processor_id, result.processor_id))
         .run();
     }

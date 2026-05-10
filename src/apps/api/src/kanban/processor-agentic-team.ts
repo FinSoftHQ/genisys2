@@ -166,6 +166,7 @@ async function runWipWorkflow(
     board_uid: string;
     display_id: string;
     title: string;
+    version: number;
     payload: Record<string, unknown>;
   },
   callbackUrl: string,
@@ -207,7 +208,7 @@ async function runWipWorkflow(
     {},
     card.board_uid,
     card.uid,
-    { payload: { ...card.payload, room_id: roomId } },
+    { version: card.version, payload: { ...card.payload, room_id: roomId } },
     'system:agentic-team',
   );
 }

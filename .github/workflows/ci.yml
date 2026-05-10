@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - "**"
+      - main
   pull_request:
 
 jobs:
@@ -14,6 +14,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup just
+        uses: extractions/setup-just@v2
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
@@ -23,14 +26,14 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Bootup
+        run: just bootup
 
       - name: Lint
-        run: pnpm lint
+        run: just lint
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: just typecheck
 
       - name: Test
-        run: pnpm test
+        run: just test

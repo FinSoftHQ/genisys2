@@ -352,7 +352,7 @@ Modal form for creating a new card within a specific column.
 
 ### Behavior
 - Uses `UModal` with title "Create Card".
-- Form fields: Title (required, 1–200 chars), Description (optional, max 5000 chars).
+- Form fields: Title (required, 1–200 chars), Description (optional, max 20000 chars).
 - Client-side validation via Zod schema (`z.string().min(1).max(200)` for title).
 - On submit, POSTs to `/api/boards/{boardUid}/cards` with `title`, `description`, and `current_status = columnUid`.
 - Resets form and closes modal on success; emits `created`.

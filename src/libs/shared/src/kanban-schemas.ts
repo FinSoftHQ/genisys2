@@ -279,7 +279,7 @@ export const CardEntitySchema = z
     board_uid: BoardIdSchema,
     display_id: DisplayIdSchema,
     title: z.string().min(1).max(200),
-    description: z.string().max(5000).nullable(),
+    description: z.string().max(20000).nullable(),
     version: CardVersionSchema,
     processing_state: CardProcessingStateSchema,
     is_editable: z.boolean(),
@@ -350,7 +350,7 @@ export const CardTitleSchema = z
 
 export const CardDescriptionSchema = z
   .string()
-  .max(5000, { message: 'description must be at most 5000 characters' })
+  .max(20000, { message: 'description must be at most 20000 characters' })
   .nullable();
 
 export const CardResponseDataSchema = z.object({ card: CardEntitySchema }).strict();
@@ -1073,6 +1073,95 @@ export const CreateBoardResponseSchema = z
   })
   .strict();
 
+/* ------------------------------------------------------------------ */
+/*  Planning Processor Output Contract (planning.v1)                   */
+/* ------------------------------------------------------------------ */
+
+export const PlanningV1TaskTypeSchema = z.enum([
+  'implementation',
+  'infrastructure',
+  'research',
+  'refactor',
+  'bugfix',
+]);
+
+export const PlanningV1TaskSchema = z
+  .object({
+    id: z.string().min(1).max(20),
+    title: z.string().min(1).max(200),
+    type: PlanningV1TaskTypeSchema,
+    body: z.array(z.string().min(1)).min(1),
+    depends_on: z.array(z.string().min(1)).default([]),
+    acceptance: z.array(z.string().min(1)).min(1),
+    instructions: z
+      .object({
+        agent_name: z.string().max(200).nullable().default(null),
+        notes: z.array(z.string()).default([]),
+      })
+      // No .strict() — extra keys from the LLM are silently stripped; a warning
+      // is emitted in the processor after parsing.
+      .optional(),
+    risk: z.array(z.string()).default([]),
+  });
+  // No .strict() on the task schema — unrecognized keys (e.g. "phase",
+  // "estimated_effort") are stripped instead of causing a hard failure.
+  // The processor logs a warning whenever keys are stripped.
+
+export const PlanningV1PreFlightValidationSchema = z
+  .object({
+    coverage_complete: z.boolean(),
+    fits_one_day: z.boolean(),
+    independently_testable: z.boolean(),
+    forward_dependencies_only: z.boolean(),
+    notes: z.array(z.string()).default([]),
+  })
+  .strict();
+
+export const PlanningV1PreFlightSchema = z
+  .object({
+    complexity_level: z.enum(['trivial', 'standard', 'complex', 'epic']),
+    justification: z.string().min(1),
+    primary_type: PlanningV1TaskTypeSchema,
+    ambiguity_status: z.enum(['none', 'needs_clarification']),
+    missing_info: z.array(z.string()).default([]),
+    validation: PlanningV1PreFlightValidationSchema,
+  })
+  .strict();
+
+export const PlanningV1ClarificationSchema = z
+  .object({
+    required: z.boolean(),
+    questions: z.array(z.string()).default([]),
+  })
+  .strict();
+
+export const PlanningV1Schema = z
+  .object({
+    version: z.literal('planning.v1'),
+    // pre_flight is optional: if the LLM omits it the plan can still succeed
+    // and create child cards. The processor will skip the summary section and
+    // log a warning. clarification_needed remains required — it is the gating
+    // boolean that controls whether task cards are created.
+    pre_flight: PlanningV1PreFlightSchema.optional(),
+    clarification_needed: PlanningV1ClarificationSchema,
+    tasks: z.array(PlanningV1TaskSchema),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.clarification_needed.required && value.tasks.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tasks'],
+        message: 'tasks must be empty when clarification_needed.required is true',
+      });
+    }
+  });
+
+export type PlanningV1Task = z.infer<typeof PlanningV1TaskSchema>;
+export type PlanningV1PreFlight = z.infer<typeof PlanningV1PreFlightSchema>;
+export type PlanningV1Clarification = z.infer<typeof PlanningV1ClarificationSchema>;
+export type PlanningV1 = z.infer<typeof PlanningV1Schema>;
+
 export type BoardPathParams = z.infer<typeof BoardPathParamsSchema>;
 export type CardPathParams = z.infer<typeof CardPathParamsSchema>;
 export type BoardEntity = z.infer<typeof BoardEntitySchema>;
@@ -1156,3 +1245,5 @@ export type HealthCheckResponse = z.infer<typeof HealthCheckResponseSchema>;
 export type TriggerActionRequest = z.infer<typeof TriggerActionRequestSchema>;
 export type TriggerActionResponse = z.infer<typeof TriggerActionResponseSchema>;
 export type ListBoardsResponse = z.infer<typeof ListBoardsResponseSchema>;
+export type PlanningV1TaskType = z.infer<typeof PlanningV1TaskTypeSchema>;
+export type PlanningV1PreFlightValidation = z.infer<typeof PlanningV1PreFlightValidationSchema>;

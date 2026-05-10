@@ -90,7 +90,16 @@ afterEach(() => {
 
 describe('single-shot lifecycle', () => {
 	it('re-spawns single-shot agent after completion marker termination', async () => {
-		const { createRoomFromMarkdown, getRoom, routeMessageToAgents, destroyRoom } = await import('./manager.js');
+		const { createRoomFromMarkdown, spawnAndSendToSingleShot } = await import('./manager.js');
+		const { getRoom, destroyRoom, clearIdleCompletionTimeout } = await import('./lifecycle.js');
+		const { routeMessageToAgents } = await import('./router.js');
+		const { sendToAgent } = await import('./spawn.js');
+
+		const routeDeps = {
+			sendToAgent,
+			clearIdleCompletionTimeout,
+			spawnAndSendToSingleShot,
+		};
 
 		const tailorDir = mkdtempSync(join(tmpdir(), 'tailor-single-shot-'));
 		const agentsDir = join(tailorDir, 'agents');
@@ -105,7 +114,7 @@ describe('single-shot lifecycle', () => {
 		const beta = room.agents.get('beta')!;
 		expect(beta.proc).toBeNull();
 
-		routeMessageToAgents(room, 'alpha', 'First review task');
+		routeMessageToAgents(room, 'alpha', 'First review task', routeDeps);
 		await waitFor(() => room.agents.get('beta')!.proc !== null);
 		const firstProc = room.agents.get('beta')!.proc as unknown as FakeProc;
 		await waitFor(() => firstProc.commands.includes('prompt'));
@@ -132,7 +141,7 @@ describe('single-shot lifecycle', () => {
 		expect(room.status).not.toBe('error');
 		expect(room.agents.get('beta')!.status).toBe('idle');
 
-		routeMessageToAgents(room, 'alpha', 'Second review task');
+		routeMessageToAgents(room, 'alpha', 'Second review task', routeDeps);
 		await waitFor(() => room.agents.get('beta')!.proc !== null);
 		const secondProc = room.agents.get('beta')!.proc as unknown as FakeProc;
 		expect(secondProc).not.toBe(firstProc);

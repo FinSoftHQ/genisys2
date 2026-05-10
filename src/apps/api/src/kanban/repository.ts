@@ -492,7 +492,7 @@ export function updateCard(
   return db.transaction(() => {
     const updateData: Partial<typeof cards.$inferInsert> = {
       updated_at: now,
-      version: sql`${cards.version} + 1`,
+      version: sql<number>`${cards.version} + 1` as unknown as number,
     };
 
     if (input.title !== undefined) {
@@ -678,7 +678,7 @@ export function createCallbackToken(
     token: input.token,
     card_uid: input.card_uid,
     processor_id: input.processor_id,
-    hook: input.hook,
+    hook: input.hook as 'on-enter' | 'on-action',
     idempotency_key: input.idempotency_key,
     context: input.context,
     expires_at: input.expires_at,
@@ -718,9 +718,9 @@ export function updateCardProcessingState(
   const now = new Date().toISOString();
 
   const updateData: Partial<typeof cards.$inferInsert> = {
-    processing_state: toState,
+    processing_state: toState as 'IDLE' | 'PROCESSING' | 'ERROR',
     is_editable: options.is_editable,
-    version: sql`${cards.version} + 1`,
+    version: sql<number>`${cards.version} + 1` as unknown as number,
     updated_at: now,
   };
 
@@ -737,7 +737,7 @@ export function updateCardProcessingState(
     .where(and(
       eq(cards.board_uid, boardUid),
       eq(cards.uid, cardUid),
-      eq(cards.processing_state, fromState),
+      eq(cards.processing_state, fromState as 'IDLE' | 'PROCESSING' | 'ERROR'),
     ))
     .returning()
     .get();
@@ -783,7 +783,7 @@ export function upsertProcessorRegistry(
     hooks: input.hooks,
     sla_seconds: input.sla_seconds,
     max_sla_seconds: input.max_sla_seconds,
-    auth_type: input.auth_type,
+    auth_type: input.auth_type as 'bearer' | 'oauth2' | 'none',
     auth_config: input.auth_config ?? null,
     hmac_secret: input.hmac_secret,
     status: 'unknown' as const,
@@ -803,7 +803,7 @@ export function upsertProcessorRegistry(
         hooks: input.hooks,
         sla_seconds: input.sla_seconds,
         max_sla_seconds: input.max_sla_seconds,
-        auth_type: input.auth_type,
+        auth_type: input.auth_type as 'bearer' | 'oauth2' | 'none',
         auth_config: input.auth_config ?? null,
         hmac_secret: input.hmac_secret,
         updated_at: now,

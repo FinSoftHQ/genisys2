@@ -7,6 +7,7 @@ const {
   mockGetBoardById,
   mockListBoards,
   mockParseProtocolFromString,
+  mockParseProtocol,
   mockComplete,
   mockGetModel,
 } = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const {
   mockGetBoardById: vi.fn(),
   mockListBoards: vi.fn(),
   mockParseProtocolFromString: vi.fn(),
+  mockParseProtocol: vi.fn(),
   mockComplete: vi.fn(),
   mockGetModel: vi.fn(),
 }));
@@ -26,10 +28,14 @@ vi.mock('./repository.js', () => ({
   listBoards: (...args: unknown[]) => mockListBoards(...args),
 }));
 
-vi.mock('@mariozechner/pi-ai', () => ({
-  complete: (...args: unknown[]) => mockComplete(...args),
-  getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: args[0], modelId: args[1] },
-}));
+vi.mock('@mariozechner/pi-ai', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mariozechner/pi-ai')>();
+  return {
+    ...actual,
+    complete: (...args: unknown[]) => mockComplete(...args),
+    getModel: (...args: unknown[]) => mockGetModel(...args) ?? { provider: args[0], modelId: args[1] },
+  };
+});
 
 vi.mock('../lib/ai-auth.js', () => ({
   getApiKey: vi.fn().mockResolvedValue('fake-api-key'),
@@ -40,6 +46,7 @@ vi.mock('@repo/shared', async (importOriginal) => {
   return {
     ...actual,
     parseProtocolFromString: (...args: unknown[]) => mockParseProtocolFromString(...args),
+    parseProtocol: (...args: unknown[]) => mockParseProtocol(...args),
   };
 });
 
@@ -105,6 +112,44 @@ const mockParentCard = {
   updated_at: '2026-04-26T08:30:00.000Z',
 };
 
+function makePlanningV1Response(overrides?: { tasks?: unknown[]; clarification_needed?: unknown }) {
+  const header = {
+    version: 'planning.v1',
+    pre_flight: {
+      complexity_level: 'standard',
+      justification: 'Well-defined scope.',
+      primary_type: 'implementation',
+      ambiguity_status: 'none',
+      missing_info: [],
+      validation: {
+        coverage_complete: true,
+        fits_one_day: true,
+        independently_testable: true,
+        forward_dependencies_only: true,
+        notes: [],
+      },
+    },
+    clarification_needed: {
+      required: false,
+      questions: [],
+    },
+  };
+  const tasks = overrides?.tasks ?? [];
+  const clarification = overrides?.clarification_needed;
+  const lines = [
+    JSON.stringify(clarification !== undefined ? { ...header, clarification_needed: clarification } : header),
+    ...(Array.isArray(tasks) ? tasks.map((t) => JSON.stringify(t)) : []),
+  ];
+  return lines.join('\n');
+}
+
+function makeLlmResponse(text: string) {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+  } as unknown as Awaited<ReturnType<typeof mockComplete>>;
+}
+
 describe('planning processor routes', () => {
   let app: FastifyInstance;
   let fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -118,6 +163,7 @@ describe('planning processor routes', () => {
     mockGetBoardById.mockReset();
     mockListBoards.mockReset();
     mockParseProtocolFromString.mockReset();
+    mockParseProtocol.mockReset();
     mockComplete.mockReset();
     mockGetModel.mockReset();
   });
@@ -180,7 +226,7 @@ describe('planning processor routes', () => {
   });
 
   describe('POST /api/kanban-processor/planning/on-enter', () => {
-    it('creates a single clone card and stores planned tasks', async () => {
+    it('creates multiple task cards and stores planned tasks from valid JSON', async () => {
       mockGetBoardById.mockReturnValue(mockDevBoard);
       mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
       mockParseProtocolFromString.mockReturnValue({
@@ -188,22 +234,46 @@ describe('planning processor routes', () => {
         instructions: { dev: 'Build login', tester: 'Write tests' },
       });
       mockGetModel.mockReturnValue(undefined);
-      mockComplete.mockResolvedValue({
-        role: 'assistant',
-        content: [
-          {
-            type: 'text',
-            text: '<<<PRE_FLIGHT>>>\nComplexity: Standard (2 subtasks). Building login and signup endpoints is a well-defined scope.\nPrimary Type: implementation\nAmbiguity Check: None. The task body is sufficiently detailed.\nDraft Plan & Validation:\n- [x] 100% coverage of the parent Task Body scope.\n- [x] No subtask exceeds one day of work.\n- [x] Every subtask is independently testable.\n- [x] Dependencies flow forward only.\n<<<TASK>>>\n<<<TITLE>>>\nImplement login endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /login endpoint with email/password validation and JWT generation.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- POST /login returns 200 with valid JWT for correct credentials.\n- POST /login returns 401 for incorrect credentials.\n<<<INSTRUCTIONS>>>\ndev: Implement the login endpoint\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<TASK>>>\n<<<TITLE>>>\nImplement signup endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /signup endpoint with password hashing and user creation.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- POST /signup creates a new user and returns 201.\n- Password is hashed before storage.\n<<<INSTRUCTIONS>>>\ndev: Implement the signup endpoint\ntester: Write signup tests\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<END>>>',
-          },
-        ],
-      } as unknown as Awaited<ReturnType<typeof mockComplete>>);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint with email/password validation and JWT generation.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200 with valid JWT for correct credentials.'],
+                risk: [],
+              },
+              {
+                id: 'T2',
+                title: 'Implement signup endpoint',
+                type: 'implementation',
+                body: ['Create the POST /signup endpoint with password hashing and user creation.'],
+                depends_on: [],
+                acceptance: ['POST /signup creates a new user and returns 201.'],
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
 
-      mockCreateCard.mockReturnValue({
-        uid: '550e8400-e29b-41d4-a716-446655440010',
-        board_uid: mockTaskBoard.uid,
-        display_id: 'TSK-10',
-        title: 'Implement auth system',
-      });
+      mockCreateCard
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440010',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-10',
+          title: 'Implement login endpoint',
+        })
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440011',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-11',
+          title: 'Implement signup endpoint',
+        });
 
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440020';
       const response = await app.inject({
@@ -225,13 +295,40 @@ describe('planning processor routes', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(mockCreateCard).toHaveBeenCalledTimes(1);
-      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(1);
+      expect(mockCreateCard).toHaveBeenCalledTimes(2);
+      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(2);
 
-      // Verify the clone uses parent's title and description
-      const createCall = mockCreateCard.mock.calls[0];
-      expect(createCall[2].title).toBe(mockParentCard.title);
-      expect(createCall[2].description).toBe(mockParentCard.description);
+      const firstCreateCall = mockCreateCard.mock.calls[0];
+      expect(firstCreateCall[2].title).toBe('Implement login endpoint');
+      expect(firstCreateCall[2].description).toContain('Create the POST /login endpoint');
+      expect(firstCreateCall[2].description.startsWith('## Scope of Work')).toBe(true);
+      expect(firstCreateCall[2].current_status).toBe('todo');
+
+      const secondCreateCall = mockCreateCard.mock.calls[1];
+      expect(secondCreateCall[2].title).toBe('Implement signup endpoint');
+      expect(secondCreateCall[2].description).toContain('Create the POST /signup endpoint');
+      expect(secondCreateCall[2].description.startsWith('## Scope of Work')).toBe(true);
+
+      expect(mockCreateCardRelationship).toHaveBeenNthCalledWith(
+        1,
+        {},
+        mockParentCard.board_uid,
+        mockParentCard.uid,
+        '550e8400-e29b-41d4-a716-446655440010',
+        'dependency',
+        mockParentCard.board_uid,
+        mockTaskBoard.uid,
+      );
+      expect(mockCreateCardRelationship).toHaveBeenNthCalledWith(
+        2,
+        {},
+        mockParentCard.board_uid,
+        mockParentCard.uid,
+        '550e8400-e29b-41d4-a716-446655440011',
+        'dependency',
+        mockParentCard.board_uid,
+        mockTaskBoard.uid,
+      );
 
       const callbackCall = fetchSpy.mock.calls.find((call) => {
         const url = call[0] as string;
@@ -242,7 +339,10 @@ describe('planning processor routes', () => {
       const payload = JSON.parse(init.body);
       expect(payload.status).toBe('success');
       expect(payload.move_to_column).toBe('delegated');
-      expect(payload.payload_updates.payload.task_card_uid).toBe('550e8400-e29b-41d4-a716-446655440010');
+      expect(payload.payload_updates.payload.task_card_uids).toEqual([
+        '550e8400-e29b-41d4-a716-446655440010',
+        '550e8400-e29b-41d4-a716-446655440011',
+      ]);
       expect(payload.payload_updates.payload.task_board_uid).toBe(mockTaskBoard.uid);
       expect(payload.payload_updates.payload.planned_tasks).toHaveLength(2);
       expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
@@ -250,7 +350,7 @@ describe('planning processor routes', () => {
       expect(mockComplete).toHaveBeenCalledTimes(1);
     });
 
-    it('parses multi-line instructions from LLM output', async () => {
+    it('creates inter-task dependency relationships by task ID', async () => {
       mockGetBoardById.mockReturnValue(mockDevBoard);
       mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
       mockParseProtocolFromString.mockReturnValue({
@@ -258,24 +358,48 @@ describe('planning processor routes', () => {
         instructions: {},
       });
       mockGetModel.mockReturnValue(undefined);
-      mockComplete.mockResolvedValue({
-        role: 'assistant',
-        content: [
-          {
-            type: 'text',
-            text: '<<<PRE_FLIGHT>>>\nComplexity: Standard (1 subtask).\nPrimary Type: implementation\n<<<TASK>>>\n<<<TITLE>>>\nImplement login endpoint\n<<<TYPE>>>\nimplementation\n<<<BODY>>>\nCreate the POST /login endpoint.\n<<<DEPENDS_ON>>>\nnone\n<<<ACCEPTANCE>>>\n- POST /login returns 200.\n<<<INSTRUCTIONS>>>\ndev: |\n  Implement the login endpoint\n  Add validation middleware\n<<<RISK>>>\nnone\n<<<END_TASK>>>\n<<<END>>>',
-          },
-        ],
-      } as unknown as Awaited<ReturnType<typeof mockComplete>>);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Define auth schema',
+                type: 'infrastructure',
+                body: ['Define the user schema and migration.'],
+                depends_on: [],
+                acceptance: ['Schema is defined.'],
+                risk: [],
+              },
+              {
+                id: 'T2',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: ['T1'],
+                acceptance: ['POST /login returns 200.'],
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
 
-      mockCreateCard.mockReturnValue({
-        uid: '550e8400-e29b-41d4-a716-446655440010',
-        board_uid: mockTaskBoard.uid,
-        display_id: 'TSK-10',
-        title: 'Implement auth system',
-      });
+      mockCreateCard
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440030',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-30',
+          title: 'Define auth schema',
+        })
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440031',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-31',
+          title: 'Implement login endpoint',
+        });
 
-      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440020';
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440025';
       await app.inject({
         method: 'POST',
         url: '/api/kanban-processor/planning/on-enter',
@@ -284,7 +408,562 @@ describe('planning processor routes', () => {
           board: mockDevBoard,
           column: mockDevBoard.schema.columns[0],
           callback_url: callbackUrl,
-          idempotency_key: '550e8400-e29b-41d4-a716-446655440010',
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440015',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockCreateCard).toHaveBeenCalledTimes(2);
+      // 2 parent→child + 1 inter-task dependency
+      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(3);
+
+      expect(mockCreateCardRelationship).toHaveBeenNthCalledWith(
+        3,
+        {},
+        mockTaskBoard.uid,
+        '550e8400-e29b-41d4-a716-446655440030',
+        '550e8400-e29b-41d4-a716-446655440031',
+        'dependency',
+        mockTaskBoard.uid,
+        mockTaskBoard.uid,
+      );
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.payload_updates.payload.task_card_uids).toEqual([
+        '550e8400-e29b-41d4-a716-446655440030',
+        '550e8400-e29b-41d4-a716-446655440031',
+      ]);
+    });
+
+    it('handles clarification-needed flow without creating child cards', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            clarification_needed: { required: true, questions: ['What auth provider should we use?'] },
+            tasks: [],
+          })
+        )
+      );
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440026';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440016',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockCreateCard).not.toHaveBeenCalled();
+      expect(mockCreateCardRelationship).not.toHaveBeenCalled();
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toEqual([]);
+      expect(payload.payload_updates.payload.clarification_needed.required).toBe(true);
+      expect(payload.payload_updates.payload.clarification_needed.questions).toEqual([
+        'What auth provider should we use?',
+      ]);
+    });
+
+    it('repairs malformed output successfully on second LLM call', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // First call: broken JSON
+      // Second call: valid JSON
+      mockComplete
+        .mockResolvedValueOnce(
+          makeLlmResponse('this is not json { broken')
+        )
+        .mockResolvedValueOnce(
+          makeLlmResponse(
+            makePlanningV1Response({
+              tasks: [
+                {
+                  id: 'T1',
+                  title: 'Implement login endpoint',
+                  type: 'implementation',
+                  body: ['Create the POST /login endpoint.'],
+                  depends_on: [],
+                  acceptance: ['POST /login returns 200.'],
+                  risk: [],
+                },
+              ],
+            })
+          )
+        );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440027';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440017',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockComplete).toHaveBeenCalledTimes(2);
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(1);
+      expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
+    });
+
+    it('falls back to clone with diagnostics when repair also fails', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: { dev: 'Build login' },
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(makeLlmResponse('still not json'));
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440020',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-20',
+        title: 'Implement auth system',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440021';
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440011',
+        },
+      });
+
+      expect(response.statusCode).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+      expect(mockCreateCardRelationship).toHaveBeenCalledTimes(1);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.task_card_uid).toBe('550e8400-e29b-41d4-a716-446655440020');
+      expect(payload.payload_updates.payload.planned_tasks).toEqual([]);
+      expect(payload.payload_updates.payload.planning_raw_output).toBeDefined();
+      expect(payload.payload_updates.payload.planning_parse_errors).toBeDefined();
+      expect(payload.payload_updates.payload.planning_validation_errors).toBeDefined();
+    });
+
+    it('falls back to clone when semantic validation fails and repair fails', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // First: valid JSON but with a self-dependency
+      // Second: still invalid
+      mockComplete
+        .mockResolvedValueOnce(
+          makeLlmResponse(
+            makePlanningV1Response({
+              tasks: [
+                {
+                  id: 'T1',
+                  title: 'Bad task',
+                  type: 'implementation',
+                  body: ['Body.'],
+                  depends_on: ['T1'],
+                  acceptance: ['Acc.'],
+                  risk: [],
+                },
+              ],
+            })
+          )
+        )
+        .mockResolvedValueOnce(makeLlmResponse('not json'))
+        .mockResolvedValueOnce(makeLlmResponse('still not json'));
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440020',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-20',
+        title: 'Implement auth system',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440028';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440018',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+      expect(mockComplete).toHaveBeenCalledTimes(3);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.payload_updates.payload.planning_validation_errors).toEqual(
+        expect.arrayContaining([expect.stringContaining('self-dependency')])
+      );
+    });
+
+    it('extracts JSONL from markdown code fences with prose', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // LLM wrapped JSONL in ```jsonl ... ``` with prose before and after
+      const fencedJsonl = `Now I have the full picture. Let me break this down.
+
+\`\`\`jsonl
+${makePlanningV1Response({
+  tasks: [
+    {
+      id: 'T1',
+      title: 'Implement login endpoint',
+      type: 'implementation',
+      body: ['Create the POST /login endpoint.'],
+      depends_on: [],
+      acceptance: ['POST /login returns 200.'],
+      risk: [],
+    },
+  ],
+})}
+\`\`\`
+
+Hope this helps! Let me know if you need anything else.`;
+
+      mockComplete.mockResolvedValue(makeLlmResponse(fencedJsonl));
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440040';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440040',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockComplete).toHaveBeenCalledTimes(1);
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(1);
+      expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
+    });
+
+    it('extracts JSONL from plain markdown fences', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // LLM used plain ``` ... ``` without language tag
+      const plainFencedJsonl = `Here is the plan:
+
+\`\`\`
+${makePlanningV1Response({
+  tasks: [
+    {
+      id: 'T1',
+      title: 'Implement login endpoint',
+      type: 'implementation',
+      body: ['Create the POST /login endpoint.'],
+      depends_on: [],
+      acceptance: ['POST /login returns 200.'],
+      risk: [],
+    },
+  ],
+})}
+\`\`\``;
+
+      mockComplete.mockResolvedValue(makeLlmResponse(plainFencedJsonl));
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440041';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440041',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockComplete).toHaveBeenCalledTimes(1);
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(1);
+      expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
+    });
+
+    it('recovers from truncated JSONL via repair pass', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // First call: truncated JSONL — last task line is incomplete
+      const truncatedJsonl = makePlanningV1Response({
+        tasks: [
+          {
+            id: 'T1',
+            title: 'Implement login endpoint',
+            type: 'implementation',
+            body: ['Create the POST /login endpoint.'],
+            depends_on: [],
+            acceptance: ['POST /login returns 200.'],
+            risk: [],
+          },
+        ],
+      }) + '\n{"id":"T2","title":"Implement signup endpoint","type":"implementation","body":["Create the';
+
+      mockComplete
+        .mockResolvedValueOnce(makeLlmResponse(truncatedJsonl))
+        .mockResolvedValueOnce(
+          makeLlmResponse(
+            makePlanningV1Response({
+              tasks: [
+                {
+                  id: 'T1',
+                  title: 'Implement login endpoint',
+                  type: 'implementation',
+                  body: ['Create the POST /login endpoint.'],
+                  depends_on: [],
+                  acceptance: ['POST /login returns 200.'],
+                  risk: [],
+                },
+                {
+                  id: 'T2',
+                  title: 'Implement signup endpoint',
+                  type: 'implementation',
+                  body: ['Create the POST /signup endpoint.'],
+                  depends_on: [],
+                  acceptance: ['POST /signup returns 201.'],
+                  risk: [],
+                },
+              ],
+            })
+          )
+        );
+
+      mockCreateCard
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440010',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-10',
+          title: 'Implement login endpoint',
+        })
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440011',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-11',
+          title: 'Implement signup endpoint',
+        });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440030';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440030',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockComplete).toHaveBeenCalledTimes(2);
+      expect(mockCreateCard).toHaveBeenCalledTimes(2);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(2);
+    });
+
+    it('generates and appends markdown summary on success', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440029';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440019',
         },
       });
 
@@ -297,13 +976,92 @@ describe('planning processor routes', () => {
       expect(callbackCall).toBeDefined();
       const init = callbackCall![1] as { body: string };
       const payload = JSON.parse(init.body);
-      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(1);
-      expect(payload.payload_updates.payload.planned_tasks[0].instructions).toEqual({
-        dev: 'Implement the login endpoint\nAdd validation middleware',
-      });
+      expect(payload.status).toBe('success');
+      expect(payload.payload_updates.description).toContain('# Planning Summary');
+      expect(payload.payload_updates.description).toContain('Implement login endpoint');
+      expect(payload.payload_updates.description).toContain('Complexity:');
     });
 
-    it('falls back to single card when LLM fails', async () => {
+    it('succeeds when LLM omits header and outputs only task objects', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+
+      // No header — only task lines
+      const taskOnlyJsonl = [
+        JSON.stringify({
+          id: 'T1',
+          title: 'Implement login endpoint',
+          type: 'implementation',
+          body: ['Create the POST /login endpoint.'],
+          depends_on: [],
+          acceptance: ['POST /login returns 200.'],
+          risk: [],
+        }),
+        JSON.stringify({
+          id: 'T2',
+          title: 'Implement signup endpoint',
+          type: 'implementation',
+          body: ['Create the POST /signup endpoint.'],
+          depends_on: [],
+          acceptance: ['POST /signup returns 201.'],
+          risk: [],
+        }),
+      ].join('\n');
+
+      mockComplete.mockResolvedValue(makeLlmResponse(taskOnlyJsonl));
+
+      mockCreateCard
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440010',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-10',
+          title: 'Implement login endpoint',
+        })
+        .mockReturnValueOnce({
+          uid: '550e8400-e29b-41d4-a716-446655440011',
+          board_uid: mockTaskBoard.uid,
+          display_id: 'TSK-11',
+          title: 'Implement signup endpoint',
+        });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440050';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440050',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockComplete).toHaveBeenCalledTimes(1);
+      expect(mockCreateCard).toHaveBeenCalledTimes(2);
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.status).toBe('success');
+      expect(payload.move_to_column).toBe('delegated');
+      expect(payload.payload_updates.payload.planned_tasks).toHaveLength(2);
+      expect(payload.payload_updates.payload.planned_tasks[0].title).toBe('Implement login endpoint');
+      expect(payload.payload_updates.payload.planned_tasks[1].title).toBe('Implement signup endpoint');
+    });
+
+    it('falls back to single card when LLM throws', async () => {
       mockGetBoardById.mockReturnValue(mockDevBoard);
       mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
       mockParseProtocolFromString.mockReturnValue({
@@ -350,6 +1108,313 @@ describe('planning processor routes', () => {
       expect(payload.move_to_column).toBe('delegated');
       expect(payload.payload_updates.payload.task_card_uid).toBe('550e8400-e29b-41d4-a716-446655440020');
       expect(payload.payload_updates.payload.planned_tasks).toEqual([]);
+    });
+
+    it('injects contact_agent_name from facilitator when tailor_shop is present', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockParseProtocol.mockReturnValue({
+        team: { Linda: 'fs-team-lead', Sola: 'architect' },
+        facilitator: 'Linda',
+        body: '',
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const cardWithTailorShop = {
+        ...mockParentCard,
+        payload: { ...mockParentCard.payload, tailor_shop: '/workspace/teams/dev' },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440060';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: cardWithTailorShop,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440060',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockParseProtocol).toHaveBeenCalledWith('/workspace/teams/dev/working_protocol.md', { requireTeam: true });
+      expect(mockCreateCard).toHaveBeenCalledTimes(1);
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].payload.instructions['Linda']).toBe(
+        'Coordinate the team to implement the Scope of Work described in this card.'
+      );
+
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.payload_updates.payload.contact_agent_name).toBe('Linda');
+    });
+
+    it('falls back to first team member when no facilitator is set', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockParseProtocol.mockReturnValue({
+        team: { Sola: 'architect', Paul: 'planner' },
+        body: '',
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const cardWithTailorShop = {
+        ...mockParentCard,
+        payload: { ...mockParentCard.payload, tailor_shop: '/workspace/teams/dev' },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440061';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: cardWithTailorShop,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440061',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].payload.instructions['Sola']).toBe(
+        'Coordinate the team to implement the Scope of Work described in this card.'
+      );
+    });
+
+    it('preserves existing LLM-assigned agent_name and does not overwrite', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockParseProtocol.mockReturnValue({
+        team: { Linda: 'fs-team-lead' },
+        facilitator: 'Linda',
+        body: '',
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                instructions: { agent_name: 'Sola', notes: ['Use JWT'] },
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const cardWithTailorShop = {
+        ...mockParentCard,
+        payload: { ...mockParentCard.payload, tailor_shop: '/workspace/teams/dev' },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440062';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: cardWithTailorShop,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440062',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].payload.instructions['Sola']).toBe('Use JWT');
+    });
+
+    it('gracefully continues when tailor_shop is missing', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            tasks: [
+              {
+                id: 'T1',
+                title: 'Implement login endpoint',
+                type: 'implementation',
+                body: ['Create the POST /login endpoint.'],
+                depends_on: [],
+                acceptance: ['POST /login returns 200.'],
+                risk: [],
+              },
+            ],
+          })
+        )
+      );
+
+      mockCreateCard.mockReturnValue({
+        uid: '550e8400-e29b-41d4-a716-446655440010',
+        board_uid: mockTaskBoard.uid,
+        display_id: 'TSK-10',
+        title: 'Implement login endpoint',
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440063';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: mockParentCard,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440063',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockParseProtocol).not.toHaveBeenCalled();
+      const createCall = mockCreateCard.mock.calls[0];
+      expect(createCall[2].payload.instructions).toBeUndefined();
+    });
+
+    it('stores contact_agent_name in parent payload even for clarification-needed', async () => {
+      mockGetBoardById.mockReturnValue(mockDevBoard);
+      mockListBoards.mockReturnValue([mockDevBoard, mockTaskBoard]);
+      mockParseProtocolFromString.mockReturnValue({
+        body: 'Create a full auth system with JWT.',
+        instructions: {},
+      });
+      mockParseProtocol.mockReturnValue({
+        team: { Linda: 'fs-team-lead' },
+        facilitator: 'Linda',
+        body: '',
+      });
+      mockGetModel.mockReturnValue(undefined);
+      mockComplete.mockResolvedValue(
+        makeLlmResponse(
+          makePlanningV1Response({
+            clarification_needed: { required: true, questions: ['What provider?'] },
+            tasks: [],
+          })
+        )
+      );
+
+      const cardWithTailorShop = {
+        ...mockParentCard,
+        payload: { ...mockParentCard.payload, tailor_shop: '/workspace/teams/dev' },
+      };
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440064';
+      await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/planning/on-enter',
+        payload: {
+          card: cardWithTailorShop,
+          board: mockDevBoard,
+          column: mockDevBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440064',
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockCreateCard).not.toHaveBeenCalled();
+      const callbackCall = fetchSpy.mock.calls.find((call) => {
+        const url = call[0] as string;
+        return typeof url === 'string' && url.includes('/api/callbacks/');
+      });
+      expect(callbackCall).toBeDefined();
+      const init = callbackCall![1] as { body: string };
+      const payload = JSON.parse(init.body);
+      expect(payload.payload_updates.payload.contact_agent_name).toBe('Linda');
     });
 
     it('returns 400 for invalid body', async () => {

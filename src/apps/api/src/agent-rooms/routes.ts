@@ -1,16 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { createRoomFromMarkdown } from "./manager.js";
 import {
-	createRoomFromMarkdown,
 	listRooms,
 	getRoom,
 	getRoomStatus,
-	getRoomEvents,
 	addSseClient,
 	removeSseClient,
 	sendInstructions,
 	destroyRoom,
-} from "./manager.js";
+} from "./lifecycle.js";
+import { getRoomEvents } from "./event-store.js";
 
 const InstructionsBodySchema = z.object({
 	targetAgents: z.array(z.string().min(1)).min(1),
@@ -34,7 +34,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 	);
 
 	instance.get("/", async (request, reply) => {
-		const { status } = request.query as { status?: string };
+		const { status, tag } = request.query as { status?: string; tag?: string };
 		const { limit: limitRaw, offset: offsetRaw } = request.query as {
 			limit?: string;
 			offset?: string;
@@ -49,7 +49,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			const parsed = parseInt(offsetRaw, 10);
 			if (!isNaN(parsed)) offset = parsed;
 		}
-		return reply.status(200).send(listRooms(status, limit, offset));
+		return reply.status(200).send(listRooms(status, limit, offset, tag));
 	});
 
 	instance.post("/", async (request, reply) => {
@@ -61,6 +61,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		const markdown = request.body as string;
 		const callbackUrl = normalizeHeader(request.headers["x-room-callback-url"]);
 		const callbackSecret = normalizeHeader(request.headers["x-room-callback-secret"]);
+		const tag = normalizeHeader(request.headers["x-room-tag"]);
 
 		if (callbackSecret && !callbackUrl) {
 			return reply.status(400).send({ error: "x-room-callback-secret requires x-room-callback-url" });
@@ -76,7 +77,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			}
 		}
 
-		const result = await createRoomFromMarkdown(markdown, { callbackUrl, callbackSecret });
+		const result = await createRoomFromMarkdown(markdown, { callbackUrl, callbackSecret, tag });
 		return reply.status(201).send({ roomId: result.roomId, status: "initialized" });
 	});
 

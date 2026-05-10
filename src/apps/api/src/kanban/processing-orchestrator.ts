@@ -247,7 +247,7 @@ export async function consumeCallback(
 
     const updateData: Partial<typeof cards.$inferInsert> = {
       updated_at: now,
-      version: sql`${cards.version} + 1`,
+      version: sql<number>`${cards.version} + 1` as unknown as number,
     };
 
     if (payload.status === 'success') {
