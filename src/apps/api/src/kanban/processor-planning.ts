@@ -301,7 +301,7 @@ function extractJsonlFromText(text: string): {
   // (e.g. "...description.```jsonl") in addition to being on its own line.
   // We match any line that ENDS with the fence marker rather than requiring it
   // to occupy the entire line.
-  let jsonlLines: string[] = [];
+  const jsonlLines: string[] = [];
   let insideFence = false;
   let foundFence = false;
   const fenceOpenRegex = /```(?:jsonl)?\s*$/;  // fence at end of any line

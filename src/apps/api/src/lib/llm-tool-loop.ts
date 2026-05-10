@@ -153,7 +153,7 @@ export async function runLlmWithToolLoop<TApi extends Api>(
     ? buildWorkspacePreamble(workingDir) + (systemPrompt ?? '')
     : systemPrompt;
 
-  let messages: Message[] = [
+  const messages: Message[] = [
     { role: 'user', content: userMessage, timestamp: Date.now() },
   ];
 
