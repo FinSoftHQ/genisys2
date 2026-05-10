@@ -10,6 +10,12 @@ import {
 	RoomLog,
 	upsertRoom,
 	upsertAgent,
+	upsertPendingCallbackDelivery,
+	listPendingCallbackDeliveries,
+	getCallbackDelivery,
+	updatePendingCallbackAttempt,
+	markCallbackDelivered,
+	markCallbackFailedPermanent,
 	getRoomPromptsDir,
 	getRoomProtocolPath,
 } from "@repo/agent-rooms-core";
@@ -30,6 +36,10 @@ const IDLE_COMPLETION_GRACE_MS = Number.isFinite(idleCompletionGraceMsRaw)
 	: 60_000;
 
 const COMPLETED_TTL_MS = Number(process.env.AGENT_ROOM_COMPLETED_TTL_MS ?? 300_000);
+const CALLBACK_RETRY_DELAYS_MS = [1000, 4000, 16000, 60000, 300000, 900000, 1800000];
+const CALLBACK_MAX_ATTEMPTS = CALLBACK_RETRY_DELAYS_MS.length + 1;
+
+const callbackRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 export const rooms = new Map<string, Room>();
 const EXPIRY_MS = 1000 * 60 * 60 * 2; // 2 hours
@@ -85,60 +95,157 @@ function computeCallbackSignature(payload: string, secret: string): string {
 	return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
+function callbackPayload(roomId: string, reason: RoomCloseReason, at: string): string {
+	return JSON.stringify({
+		type: "room_closed",
+		roomId,
+		reason,
+		at,
+	});
+}
+
+function getCallbackBackoffDelay(attemptsAfterFailure: number): number {
+	const index = Math.max(0, Math.min(CALLBACK_RETRY_DELAYS_MS.length - 1, attemptsAfterFailure - 1));
+	const base = CALLBACK_RETRY_DELAYS_MS[index] ?? CALLBACK_RETRY_DELAYS_MS[CALLBACK_RETRY_DELAYS_MS.length - 1] ?? 1000;
+	const jitter = 0.9 + Math.random() * 0.2;
+	return Math.round(base * jitter);
+}
+
+function clearCallbackRetryTimer(roomId: string): void {
+	const timer = callbackRetryTimers.get(roomId);
+	if (!timer) return;
+	clearTimeout(timer);
+	callbackRetryTimers.delete(roomId);
+}
+
+async function attemptRoomClosedCallbackDelivery(input: {
+	roomId: string;
+	callbackUrl: string;
+	callbackSecret?: string;
+	reason: RoomCloseReason;
+	at: string;
+}): Promise<void> {
+	clearCallbackRetryTimer(input.roomId);
+	const state = getCallbackDelivery(input.roomId);
+	if (!state || state.state !== "pending") return;
+
+	const payload = callbackPayload(input.roomId, input.reason, input.at);
+	const headers: Record<string, string> = { "content-type": "application/json" };
+	if (input.callbackSecret) {
+		headers["x-signature"] = computeCallbackSignature(payload, input.callbackSecret);
+	}
+
+	try {
+		const response = await fetch(input.callbackUrl, {
+			method: "POST",
+			headers,
+			body: payload,
+			signal: AbortSignal.timeout(5000),
+		});
+		if (response.ok) {
+			markCallbackDelivered(input.roomId);
+			console.info(`[agent-rooms] callback delivered for room ${input.roomId} (${input.reason})`);
+			return;
+		}
+
+		const failure = `HTTP ${response.status} ${response.statusText}`;
+		const pending = getCallbackDelivery(input.roomId);
+		if (!pending || pending.state !== "pending") return;
+		if (pending.attempts + 1 >= CALLBACK_MAX_ATTEMPTS) {
+			markCallbackFailedPermanent(input.roomId, failure);
+			const room = rooms.get(input.roomId);
+			if (room) {
+				pushEvent(room, {
+					type: "room_error",
+					from: "system",
+					at: new Date().toISOString(),
+					reason: `callback_failed_permanent: ${input.callbackUrl}`,
+				});
+			}
+			console.error(`[agent-rooms] callback permanently failed for room ${input.roomId} after ${CALLBACK_MAX_ATTEMPTS} attempts`);
+			return;
+		}
+		const delay = getCallbackBackoffDelay(pending.attempts + 1);
+		const nextAttemptAt = Date.now() + delay;
+		updatePendingCallbackAttempt(input.roomId, nextAttemptAt, failure);
+		callbackRetryTimers.set(
+			input.roomId,
+			setTimeout(() => {
+				void attemptRoomClosedCallbackDelivery(input);
+			}, delay),
+		);
+		console.warn(`[agent-rooms] callback attempt failed for room ${input.roomId}: ${failure}; retrying in ${delay}ms`);
+	} catch (err: unknown) {
+		const message = err instanceof Error ? err.message : String(err);
+		const pending = getCallbackDelivery(input.roomId);
+		if (!pending || pending.state !== "pending") return;
+		if (pending.attempts + 1 >= CALLBACK_MAX_ATTEMPTS) {
+			markCallbackFailedPermanent(input.roomId, message);
+			const room = rooms.get(input.roomId);
+			if (room) {
+				pushEvent(room, {
+					type: "room_error",
+					from: "system",
+					at: new Date().toISOString(),
+					reason: `callback_failed_permanent: ${input.callbackUrl}`,
+				});
+			}
+			console.error(`[agent-rooms] callback permanently failed for room ${input.roomId} after ${CALLBACK_MAX_ATTEMPTS} attempts`);
+			return;
+		}
+		const delay = getCallbackBackoffDelay(pending.attempts + 1);
+		const nextAttemptAt = Date.now() + delay;
+		updatePendingCallbackAttempt(input.roomId, nextAttemptAt, message);
+		callbackRetryTimers.set(
+			input.roomId,
+			setTimeout(() => {
+				void attemptRoomClosedCallbackDelivery(input);
+			}, delay),
+		);
+		console.warn(`[agent-rooms] callback attempt failed for room ${input.roomId}: ${message}; retrying in ${delay}ms`);
+	}
+}
+
+export function replayPendingRoomClosedCallbacks(): void {
+	for (const pending of listPendingCallbackDeliveries(Number.MAX_SAFE_INTEGER)) {
+		if (pending.state !== "pending") continue;
+		const delay = Math.max(0, pending.next_attempt_at - Date.now());
+		callbackRetryTimers.set(
+			pending.room_id,
+			setTimeout(() => {
+				void attemptRoomClosedCallbackDelivery({
+					roomId: pending.room_id,
+					callbackUrl: pending.callback_url,
+					callbackSecret: pending.callback_secret ?? undefined,
+					reason: pending.reason as RoomCloseReason,
+					at: pending.closed_at,
+				});
+			}, delay),
+		);
+	}
+}
+
 export async function notifyRoomClosedCallback(
 	room: Room,
 	reason: RoomCloseReason,
 	at: string,
 ): Promise<void> {
 	if (!room.callbackUrl) return;
-
-	const payload = JSON.stringify({
-		type: "room_closed",
+	upsertPendingCallbackDelivery({
 		roomId: room.id,
+		callbackUrl: room.callbackUrl,
+		callbackSecret: room.callbackSecret,
+		reason,
+		closedAt: at,
+		nextAttemptAt: Date.now(),
+	});
+	await attemptRoomClosedCallbackDelivery({
+		roomId: room.id,
+		callbackUrl: room.callbackUrl,
+		callbackSecret: room.callbackSecret,
 		reason,
 		at,
 	});
-	const headers: Record<string, string> = {
-		"content-type": "application/json",
-	};
-	if (room.callbackSecret) {
-		headers["x-signature"] = computeCallbackSignature(payload, room.callbackSecret);
-	}
-
-	// Phase C6: retry with exponential backoff
-	const delays = [1000, 4000, 16000];
-	for (let attempt = 0; attempt < delays.length; attempt++) {
-		try {
-			const response = await fetch(room.callbackUrl, {
-				method: "POST",
-				headers,
-				body: payload,
-				signal: AbortSignal.timeout(5000),
-			});
-			if (response.ok) {
-				console.info(`[agent-rooms] callback delivered for room ${room.id} (${reason})`);
-				return;
-			}
-			console.warn(
-				`[agent-rooms] callback attempt ${attempt + 1} failed for room ${room.id}: ${response.status} ${response.statusText}`,
-			);
-		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			console.warn(`[agent-rooms] callback attempt ${attempt + 1} failed for room ${room.id}: ${message}`);
-		}
-		if (attempt < delays.length - 1) {
-			await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
-		}
-	}
-
-	// Log final failure to event log
-	pushEvent(room, {
-		type: "room_error",
-		from: "system",
-		at: new Date().toISOString(),
-		reason: `callback_failed: ${room.callbackUrl}`,
-	});
-	console.error(`[agent-rooms] callback permanently failed for room ${room.id} after ${delays.length} attempts`);
 }
 
 export function allActiveAgentsCompleted(room: Room): boolean {
@@ -564,6 +671,9 @@ export async function completeRoom(id: string): Promise<void> {
 }
 
 export async function shutdownAllRooms(): Promise<void> {
+	for (const roomId of callbackRetryTimers.keys()) {
+		clearCallbackRetryTimer(roomId);
+	}
 	for (const room of rooms.values()) {
 		if (room.expireTimeout) clearTimeout(room.expireTimeout);
 		clearIdleCompletionTimeout(room);

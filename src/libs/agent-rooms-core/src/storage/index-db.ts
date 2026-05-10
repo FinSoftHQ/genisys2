@@ -49,6 +49,26 @@ export function openIndexDb(): Database.Database {
 
 		CREATE INDEX IF NOT EXISTS idx_rooms_status_tag_created ON rooms(status, tag, created_at);
 		CREATE INDEX IF NOT EXISTS idx_rooms_updated ON rooms(updated_at);
+
+		CREATE TABLE IF NOT EXISTS callback_deliveries (
+			room_id TEXT PRIMARY KEY,
+			callback_url TEXT NOT NULL,
+			callback_secret TEXT,
+			reason TEXT NOT NULL,
+			closed_at TEXT NOT NULL,
+			state TEXT NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_attempt_at INTEGER,
+			next_attempt_at INTEGER NOT NULL,
+			last_error TEXT,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			CHECK(state IN ('pending', 'delivered', 'failed_permanent')),
+			FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_callback_deliveries_state_next_attempt
+			ON callback_deliveries(state, next_attempt_at);
 	`);
 
 	return db;
@@ -109,6 +129,23 @@ export interface AgentLiveStatePatch {
 	ready?: number;
 	task_completed?: number;
 	has_participated?: number;
+}
+
+export type CallbackDeliveryState = "pending" | "delivered" | "failed_permanent";
+
+export interface CallbackDeliveryRow {
+	room_id: string;
+	callback_url: string;
+	callback_secret: string | null;
+	reason: string;
+	closed_at: string;
+	state: CallbackDeliveryState;
+	attempts: number;
+	last_attempt_at: number | null;
+	next_attempt_at: number;
+	last_error: string | null;
+	created_at: number;
+	updated_at: number;
 }
 
 export function upsertRoom(row: RoomIndexRow): void {
@@ -311,4 +348,127 @@ export function getTerminalRoomsOlderThan(timestamp: number): { id: string; comp
 	return d
 		.prepare("SELECT id, completed_at FROM rooms WHERE status IN ('completed','error') AND updated_at < ?")
 		.all(timestamp) as { id: string; completed_at: number | null }[];
+}
+
+export function upsertPendingCallbackDelivery(input: {
+	roomId: string;
+	callbackUrl: string;
+	callbackSecret?: string;
+	reason: string;
+	closedAt: string;
+	nextAttemptAt?: number;
+}): void {
+	const d = getIndexDb();
+	const now = Date.now();
+	d.prepare(`
+		INSERT INTO callback_deliveries (
+			room_id,
+			callback_url,
+			callback_secret,
+			reason,
+			closed_at,
+			state,
+			attempts,
+			next_attempt_at,
+			created_at,
+			updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+		ON CONFLICT(room_id) DO UPDATE SET
+			callback_url = excluded.callback_url,
+			callback_secret = excluded.callback_secret,
+			reason = excluded.reason,
+			closed_at = excluded.closed_at,
+			state = 'pending',
+			next_attempt_at = excluded.next_attempt_at,
+			updated_at = excluded.updated_at
+	`).run(
+		input.roomId,
+		input.callbackUrl,
+		input.callbackSecret ?? null,
+		input.reason,
+		input.closedAt,
+		input.nextAttemptAt ?? now,
+		now,
+		now,
+	);
+}
+
+export function getCallbackDelivery(roomId: string): CallbackDeliveryRow | undefined {
+	const d = getIndexDb();
+	return d.prepare("SELECT * FROM callback_deliveries WHERE room_id = ?").get(roomId) as CallbackDeliveryRow | undefined;
+}
+
+export function listPendingCallbackDeliveries(now = Date.now()): CallbackDeliveryRow[] {
+	const d = getIndexDb();
+	return d
+		.prepare("SELECT * FROM callback_deliveries WHERE state = 'pending' AND next_attempt_at <= ? ORDER BY next_attempt_at ASC")
+		.all(now) as CallbackDeliveryRow[];
+}
+
+export function updatePendingCallbackAttempt(roomId: string, nextAttemptAt: number, lastError: string): void {
+	const d = getIndexDb();
+	const now = Date.now();
+	d.prepare(`
+		UPDATE callback_deliveries
+		SET attempts = attempts + 1,
+			last_attempt_at = ?,
+			next_attempt_at = ?,
+			last_error = ?,
+			updated_at = ?
+		WHERE room_id = ? AND state = 'pending'
+	`).run(now, nextAttemptAt, lastError, now, roomId);
+}
+
+export function markCallbackDelivered(roomId: string): void {
+	const d = getIndexDb();
+	const now = Date.now();
+	d.prepare(`
+		UPDATE callback_deliveries
+		SET state = 'delivered',
+			attempts = attempts + 1,
+			last_attempt_at = ?,
+			updated_at = ?
+		WHERE room_id = ? AND state = 'pending'
+	`).run(now, now, roomId);
+}
+
+export function markCallbackFailedPermanent(roomId: string, lastError: string): void {
+	const d = getIndexDb();
+	const now = Date.now();
+	d.prepare(`
+		UPDATE callback_deliveries
+		SET state = 'failed_permanent',
+			attempts = attempts + 1,
+			last_attempt_at = ?,
+			last_error = ?,
+			updated_at = ?
+		WHERE room_id = ? AND state = 'pending'
+	`).run(now, lastError, now, roomId);
+}
+
+export function countLiveRooms(): number {
+	const d = getIndexDb();
+	const row = d
+		.prepare("SELECT COUNT(*) AS count FROM rooms WHERE status IN ('initialized', 'running')")
+		.get() as { count: number };
+	return row.count;
+}
+
+export function countActiveAgents(): number {
+	const d = getIndexDb();
+	const row = d
+		.prepare(
+			"SELECT COUNT(*) AS count FROM agents a INNER JOIN rooms r ON r.id = a.room_id WHERE r.status = 'running' AND a.status != 'idle'",
+		)
+		.get() as { count: number };
+	return row.count;
+}
+
+export function countFailedPermanentCallbacks(): number {
+	const d = getIndexDb();
+	const row = d
+		.prepare("SELECT COUNT(*) AS count FROM callback_deliveries WHERE state = 'failed_permanent'")
+		.get() as { count: number };
+	return row.count;
 }

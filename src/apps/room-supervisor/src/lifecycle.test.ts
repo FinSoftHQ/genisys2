@@ -6,6 +6,7 @@ import {
 	sendInstructions,
 	completeRoom,
 	destroyRoom,
+	replayPendingRoomClosedCallbacks,
 } from './lifecycle.js';
 import { getRoomEvents } from './event-store.js';
 import {
@@ -14,6 +15,8 @@ import {
 	clearIndexDb,
 	listRoomsIndex,
 	getRoomIndex,
+	getCallbackDelivery,
+	upsertPendingCallbackDelivery,
 } from '@repo/agent-rooms-core';
 
 describe('agent-rooms lifecycle', () => {
@@ -158,8 +161,33 @@ Say hello briefly.
 		const headers = init.headers as Record<string, string>;
 		expect(headers['x-signature']).toBeTypeOf('string');
 		expect(headers['x-signature'].length).toBeGreaterThan(0);
+		const callbackDelivery = getCallbackDelivery(result.roomId);
+		expect(callbackDelivery?.state).toBe('delivered');
 
 		await destroyRoom(result.roomId);
+		fetchSpy.mockRestore();
+	});
+
+	it('replays pending callback delivery on recovery', async () => {
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response(null, { status: 204 }));
+
+		upsertPendingCallbackDelivery({
+			roomId: roomId,
+			callbackUrl: 'https://example.com/room-hook',
+			reason: 'completed',
+			closedAt: '2026-05-11T10:00:00.000Z',
+			nextAttemptAt: Date.now() - 1000,
+		});
+
+		replayPendingRoomClosedCallbacks();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(fetchSpy).toHaveBeenCalled();
+		const callbackDelivery = getCallbackDelivery(roomId);
+		expect(callbackDelivery?.state).toBe('delivered');
+
 		fetchSpy.mockRestore();
 	});
 

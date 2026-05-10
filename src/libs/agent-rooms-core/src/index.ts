@@ -40,7 +40,15 @@ export {
 	getRoomPromptsDir,
 } from "./storage/paths.js";
 
-export type { RoomIndexRow, AgentIndexRow, ListCursor, RoomLiveStatePatch, AgentLiveStatePatch } from "./storage/index-db.js";
+export type {
+	RoomIndexRow,
+	AgentIndexRow,
+	ListCursor,
+	RoomLiveStatePatch,
+	AgentLiveStatePatch,
+	CallbackDeliveryState,
+	CallbackDeliveryRow,
+} from "./storage/index-db.js";
 export {
 	openIndexDb,
 	closeIndexDb,
@@ -55,6 +63,15 @@ export {
 	getRoomAgentsIndex,
 	getTerminalRoomsOlderThan,
 	deleteRoomIndex,
+	upsertPendingCallbackDelivery,
+	getCallbackDelivery,
+	listPendingCallbackDeliveries,
+	updatePendingCallbackAttempt,
+	markCallbackDelivered,
+	markCallbackFailedPermanent,
+	countLiveRooms,
+	countActiveAgents,
+	countFailedPermanentCallbacks,
 } from "./storage/index-db.js";
 
 export { RoomLog } from "./storage/room-log.js";

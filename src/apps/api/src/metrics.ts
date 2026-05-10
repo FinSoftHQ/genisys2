@@ -1,19 +1,33 @@
 import { collectDefaultMetrics, Counter, Gauge, Registry } from "prom-client";
-import { getIndexDb } from "@repo/agent-rooms-core";
+import { countActiveAgents, countFailedPermanentCallbacks, countLiveRooms } from "@repo/agent-rooms-core";
 
 const register = new Registry();
 collectDefaultMetrics({ register });
 
 export const agentRoomsTotalGauge = new Gauge({
 	name: "agent_rooms_total",
-	help: "Total number of agent rooms in index",
+	help: "Total number of active agent rooms",
 	registers: [register],
+	collect() {
+		try {
+			this.set(countLiveRooms());
+		} catch {
+			this.set(0);
+		}
+	},
 });
 
 export const agentRoomsActiveAgentsGauge = new Gauge({
 	name: "agent_rooms_active_agents",
 	help: "Total number of active (non-idle) agents across running rooms",
 	registers: [register],
+	collect() {
+		try {
+			this.set(countActiveAgents());
+		} catch {
+			this.set(0);
+		}
+	},
 });
 
 export const agentRoomsSseSubscribersGauge = new Gauge({
@@ -50,29 +64,22 @@ export function setAgentRoomsSseSubscribers(delta: number): void {
 	agentRoomsSseSubscribersGauge.set(sseSubscribers);
 }
 
-export function refreshAgentRoomsSnapshotMetrics(): void {
-	const db = getIndexDb();
-	const totalRow = db.prepare("SELECT COUNT(*) AS count FROM rooms").get() as { count: number };
-	const activeAgentsRow = db
-		.prepare(
-			"SELECT COUNT(*) AS count FROM agents a INNER JOIN rooms r ON r.id = a.room_id WHERE r.status = 'running' AND a.status != 'idle'",
-		)
-		.get() as { count: number };
-	const callbackFailureRow = db
-		.prepare("SELECT COUNT(*) AS count FROM rooms WHERE failed_reason LIKE 'callback_failed:%'")
-		.get() as { count: number };
-
-	agentRoomsTotalGauge.set(totalRow.count);
-	agentRoomsActiveAgentsGauge.set(activeAgentsRow.count);
-	if (callbackFailureRow.count > callbackFailureObserved) {
-		agentRoomsCallbackFailuresTotal.inc(callbackFailureRow.count - callbackFailureObserved);
+export function refreshAgentRoomsCallbackFailureCounter(): void {
+	let current = 0;
+	try {
+		current = countFailedPermanentCallbacks();
+	} catch {
+		current = callbackFailureObserved;
 	}
-	callbackFailureObserved = callbackFailureRow.count;
+	if (current > callbackFailureObserved) {
+		agentRoomsCallbackFailuresTotal.inc(current - callbackFailureObserved);
+	}
+	callbackFailureObserved = current;
 }
 
 export async function registerMetricsRoute(app: { get: (path: string, handler: (request: unknown, reply: { header: (name: string, value: string) => void; send: (body: string) => unknown }) => unknown) => void }): Promise<void> {
 	app.get("/metrics", async (_request, reply) => {
-		refreshAgentRoomsSnapshotMetrics();
+		refreshAgentRoomsCallbackFailureCounter();
 		reply.header("Content-Type", register.contentType);
 		return reply.send(await register.metrics());
 	});

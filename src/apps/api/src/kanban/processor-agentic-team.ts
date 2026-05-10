@@ -11,7 +11,15 @@ import {
   OnEnterDispatchAcceptedResponseSchema,
   HealthCheckResponseSchema,
 } from '@repo/shared';
-import { getCardById, updateCard, moveCard, getBoardById, updateCardProcessingState } from './repository.js';
+import {
+  getCardById,
+  updateCard,
+  moveCard,
+  getBoardById,
+  updateCardProcessingState,
+  listBoards,
+  getSnapshot,
+} from './repository.js';
 import { startProcessing } from './processing-orchestrator.js';
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
@@ -220,7 +228,143 @@ const RoomClosedCallbackSchema = z.object({
   at: z.string().min(1),
 });
 
+type RoomClosedCallback = z.infer<typeof RoomClosedCallbackSchema>;
+
+async function applyRoomClosedToCard(instance: unknown, record: { cardUid: string; boardUid: string }, roomClosed: RoomClosedCallback): Promise<void> {
+  const { roomId, reason, at } = roomClosed;
+  const currentCard = getCardById(instance, record.boardUid, record.cardUid);
+  if (!currentCard) {
+    console.warn('[agentic-team] Card not found for room:', roomId, 'card:', record.cardUid);
+    return;
+  }
+
+  if (typeof currentCard.payload.room_close_reason === 'string' && currentCard.payload.room_close_reason.length > 0) {
+    return;
+  }
+
+  const updatedPayload = {
+    ...currentCard.payload,
+    room_status: 'completed',
+    room_closed_at: at,
+    room_close_reason: reason,
+  };
+
+  const result = updateCard(
+    instance,
+    record.boardUid,
+    record.cardUid,
+    { version: currentCard.version, payload: updatedPayload },
+    'system:room-closed',
+  );
+
+  if (!result) {
+    console.warn('[agentic-team] Failed to update card for room:', roomId);
+    return;
+  }
+
+  console.log('[agentic-team] Room', roomId, 'closed (', reason, ') for card', record.cardUid);
+
+  try {
+    const idleCard = updateCardProcessingState(
+      instance,
+      record.boardUid,
+      record.cardUid,
+      'PROCESSING',
+      'IDLE',
+      { is_editable: true },
+    );
+    if (!idleCard) {
+      console.warn('[agentic-team] Failed to transition card to IDLE for room:', roomId);
+      return;
+    }
+
+    const board = getBoardById(instance, record.boardUid);
+    if (!board) {
+      return;
+    }
+    const currentColumn = board.schema.columns.find((c) => c.uid === idleCard.current_status);
+    const nextColumnUid = currentColumn?.exit_logic?.default;
+    if (!nextColumnUid) {
+      return;
+    }
+
+    const movedCard = moveCard(
+      instance,
+      record.boardUid,
+      record.cardUid,
+      nextColumnUid,
+      'system:room-closed',
+    );
+
+    const nextColumn = board.schema.columns.find((c) => c.uid === nextColumnUid);
+    if (nextColumn && nextColumn.type === 'Processing') {
+      await startProcessing(instance, board, movedCard, nextColumn as {
+        uid: string;
+        title: string;
+        type: 'Processing';
+        processor_id: string;
+        exit_logic: Record<string, string>;
+        order: number;
+      });
+    }
+  } catch (moveErr) {
+    const moveMessage = moveErr instanceof Error ? moveErr.message : String(moveErr);
+    console.warn('[agentic-team] Failed to move card after room close:', moveMessage);
+  }
+}
+
+async function fetchRoomStatus(roomId: string): Promise<{ status?: string } | null> {
+  const url = `${getAgentRoomsUrl()}/${roomId}/status`;
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+    if (!response.ok) return null;
+    return await response.json() as { status?: string };
+  } catch {
+    return null;
+  }
+}
+
+async function reconcileProcessingCards(instance: unknown): Promise<void> {
+  const boards = listBoards(instance);
+  let reconciled = 0;
+  for (const board of boards) {
+    const snapshot = getSnapshot(instance, board.uid);
+    if (!snapshot) continue;
+    for (const card of snapshot.cards) {
+      if (card.processing_state !== 'PROCESSING') continue;
+      const roomId = typeof card.payload.room_id === 'string' ? card.payload.room_id : '';
+      if (!roomId) continue;
+      if (typeof card.payload.room_close_reason === 'string' && card.payload.room_close_reason.length > 0) continue;
+      const status = await fetchRoomStatus(roomId);
+      if (!status) continue;
+      if (status.status !== 'completed' && status.status !== 'error') continue;
+
+      const reason = status.status === 'completed' ? 'completed' : 'manual';
+      agenticTeamRoomRegistry.set(roomId, { cardUid: card.uid, boardUid: card.board_uid });
+      await applyRoomClosedToCard(instance, { cardUid: card.uid, boardUid: card.board_uid }, {
+        type: 'room_closed',
+        roomId,
+        reason,
+        at: new Date().toISOString(),
+      });
+      reconciled++;
+    }
+  }
+  if (reconciled > 0) {
+    console.info('[agentic-team] startup reconcile closed rooms:', reconciled);
+  }
+}
+
 export async function agenticTeamProcessorRoutes(instance: FastifyInstance): Promise<void> {
+  instance.addHook('onReady', async () => {
+    await reconcileProcessingCards(instance);
+  });
+
   instance.get('/health', async (_request, reply) => {
     const response = HealthCheckResponseSchema.parse({ status: 'healthy' });
     return reply.status(200).send(response);
@@ -300,78 +444,7 @@ export async function agenticTeamProcessorRoutes(instance: FastifyInstance): Pro
     }
 
     try {
-      const currentCard = getCardById({}, record.boardUid, record.cardUid);
-      if (!currentCard) {
-        console.warn('[agentic-team] Card not found for room:', roomId, 'card:', record.cardUid);
-        return reply.status(200).send({ status: 'acknowledged' });
-      }
-
-      const updatedPayload = {
-        ...currentCard.payload,
-        room_status: 'completed',
-        room_closed_at: at,
-        room_close_reason: reason,
-      };
-
-      const result = updateCard(
-        {},
-        record.boardUid,
-        record.cardUid,
-        { version: currentCard.version, payload: updatedPayload },
-        'system:room-closed',
-      );
-
-      if (result) {
-        console.log('[agentic-team] Room', roomId, 'closed (', reason, ') for card', record.cardUid);
-
-        try {
-          // 1. Transition from PROCESSING → IDLE to complete agentic-team work
-          const idleCard = updateCardProcessingState(
-            {},
-            record.boardUid,
-            record.cardUid,
-            'PROCESSING',
-            'IDLE',
-            { is_editable: true },
-          );
-          if (!idleCard) {
-            console.warn('[agentic-team] Failed to transition card to IDLE for room:', roomId);
-            return reply.status(200).send({ status: 'acknowledged' });
-          }
-
-          const board = getBoardById({}, record.boardUid);
-          if (board) {
-            const currentColumn = board.schema.columns.find((c) => c.uid === idleCard.current_status);
-            const nextColumnUid = currentColumn?.exit_logic?.default;
-            if (nextColumnUid) {
-              const movedCard = moveCard(
-                {},
-                record.boardUid,
-                record.cardUid,
-                nextColumnUid,
-                'system:room-closed',
-              );
-
-              const nextColumn = board.schema.columns.find((c) => c.uid === nextColumnUid);
-              if (nextColumn && nextColumn.type === 'Processing') {
-                await startProcessing({}, board, movedCard, nextColumn as {
-                  uid: string;
-                  title: string;
-                  type: 'Processing';
-                  processor_id: string;
-                  exit_logic: Record<string, string>;
-                  order: number;
-                });
-              }
-            }
-          }
-        } catch (moveErr) {
-          const moveMessage = moveErr instanceof Error ? moveErr.message : String(moveErr);
-          console.warn('[agentic-team] Failed to move card after room close:', moveMessage);
-        }
-      } else {
-        console.warn('[agentic-team] Failed to update card for room:', roomId);
-      }
+      await applyRoomClosedToCard({}, record, { type: 'room_closed', roomId, reason, at });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn('[agentic-team] Error handling room closed callback:', message);

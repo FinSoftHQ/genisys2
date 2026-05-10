@@ -1,6 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '../test-helpers.js';
-import { openIndexDb, closeIndexDb, getRoomIndex, listRoomsIndex, upsertRoom, getTerminalRoomsOlderThan } from './index-db.js';
+import {
+	openIndexDb,
+	closeIndexDb,
+	getRoomIndex,
+	listRoomsIndex,
+	upsertRoom,
+	getTerminalRoomsOlderThan,
+	upsertPendingCallbackDelivery,
+	getCallbackDelivery,
+	updatePendingCallbackAttempt,
+	markCallbackDelivered,
+	markCallbackFailedPermanent,
+	countLiveRooms,
+	countFailedPermanentCallbacks,
+} from './index-db.js';
 import { RoomLog } from './room-log.js';
 
 describe('agent-rooms storage', () => {
@@ -196,5 +210,96 @@ describe('agent-rooms storage', () => {
 		const limit2 = await RoomLog.readEvents('rm_filter', undefined, 2);
 		expect(limit2.events.length).toBe(2);
 		expect(limit2.hasMore).toBe(true);
+	});
+
+	it('tracks callback delivery lifecycle', () => {
+		const roomId = 'rm_callback_1';
+		const now = Date.now();
+		upsertRoom({
+			id: roomId,
+			status: 'completed',
+			tag: null,
+			created_at: now,
+			updated_at: now,
+			last_activity_at: now,
+			protocol_body: '',
+			facilitator: null,
+			routing_strategy: 'broadcast',
+			failed_agent: null,
+			failed_reason: null,
+			callback_url: 'https://example.com/hook',
+			callback_secret: null,
+			completed_at: now,
+		});
+
+		upsertPendingCallbackDelivery({
+			roomId,
+			callbackUrl: 'https://example.com/hook',
+			reason: 'completed',
+			closedAt: '2026-05-11T10:00:00.000Z',
+			nextAttemptAt: now,
+		});
+
+		let delivery = getCallbackDelivery(roomId);
+		expect(delivery?.state).toBe('pending');
+		expect(delivery?.attempts).toBe(0);
+
+		updatePendingCallbackAttempt(roomId, now + 1000, 'network_down');
+		delivery = getCallbackDelivery(roomId);
+		expect(delivery?.attempts).toBe(1);
+		expect(delivery?.last_error).toBe('network_down');
+
+		markCallbackDelivered(roomId);
+		delivery = getCallbackDelivery(roomId);
+		expect(delivery?.state).toBe('delivered');
+		expect(delivery?.attempts).toBe(2);
+	});
+
+	it('counts live rooms and permanent callback failures', () => {
+		const now = Date.now();
+		upsertRoom({
+			id: 'rm_live',
+			status: 'running',
+			tag: null,
+			created_at: now,
+			updated_at: now,
+			last_activity_at: now,
+			protocol_body: '',
+			facilitator: null,
+			routing_strategy: 'broadcast',
+			failed_agent: null,
+			failed_reason: null,
+			callback_url: null,
+			callback_secret: null,
+			completed_at: null,
+		});
+		upsertRoom({
+			id: 'rm_done',
+			status: 'completed',
+			tag: null,
+			created_at: now,
+			updated_at: now,
+			last_activity_at: now,
+			protocol_body: '',
+			facilitator: null,
+			routing_strategy: 'broadcast',
+			failed_agent: null,
+			failed_reason: null,
+			callback_url: 'https://example.com/hook',
+			callback_secret: null,
+			completed_at: now,
+		});
+
+		expect(countLiveRooms()).toBe(1);
+
+		upsertPendingCallbackDelivery({
+			roomId: 'rm_done',
+			callbackUrl: 'https://example.com/hook',
+			reason: 'completed',
+			closedAt: '2026-05-11T10:00:00.000Z',
+			nextAttemptAt: now,
+		});
+		markCallbackFailedPermanent('rm_done', 'timeout');
+		expect(countFailedPermanentCallbacks()).toBe(1);
 	});
 });

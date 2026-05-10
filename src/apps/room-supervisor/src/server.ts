@@ -17,6 +17,7 @@ import {
 	sendInstructions,
 	destroyRoom,
 	rooms,
+	replayPendingRoomClosedCallbacks,
 } from "./lifecycle.js";
 import { performCrashRecovery } from "./crash-recovery.js";
 
@@ -120,6 +121,7 @@ export async function startSupervisorServer(): Promise<Server> {
 
 	openIndexDb();
 	await performCrashRecovery();
+	replayPendingRoomClosedCallbacks();
 	startRetentionGc();
 
 	const srv = createServer((socket) => {

@@ -280,10 +280,16 @@ This allows you to keep shared configuration (team roster, routing rules, etc.) 
 - Request (HTTP):
   ```
   GET /api/v1/agent-rooms/:roomId/stream
+  GET /api/v1/agent-rooms/:roomId/stream?channels=raw,storedevent
   Headers:
-    Last-Event-Id: 42   (optional — replay events after this id on reconnect)
+    Last-Event-Id: 42   (optional — replay applies only to storedevent channel)
   Body: none
   ```
+
+- Query params:
+  - `channels` (optional): comma-separated subset of `raw,storedevent`.
+    - default (omitted/empty/invalid): `raw,storedevent`
+    - examples: `?channels=raw`, `?channels=storedevent`
 
 - Success: 200 OK with headers:
   ```
@@ -294,14 +300,26 @@ This allows you to keep shared configuration (team roster, routing rules, etc.) 
 - Common error: 404 `ROOM_NOT_FOUND`
 
 - Reconnect behavior:
-  - Clients should set the `Last-Event-Id` header to the last `id:` field received before disconnect.
-  - The server replays all events with `id > Last-Event-Id` before resuming the live stream.
-  - Each SSE event includes an `id:` field derived from the event's numeric `id`:
+  - `Last-Event-Id` replay is only applied when `storedevent` channel is subscribed.
+  - Replay returns stored events with `id > Last-Event-Id` before switching to live delivery.
+  - `raw` events do not support replay ids.
+
+- Event frames:
+  - `storedevent` channel (includes `id:`):
     ```
     id: 42
-    event: message
+    event: storedevent
     data: {"id":42,"from":"smith","type":"message","text":"hello"}
     ```
+  - `raw` channel:
+    ```
+    event: raw
+    data: {"type":"room_closed","reason":"completed"}
+    ```
+
+- Heartbeat and backpressure:
+  - Server emits heartbeat comments every 15s: `: heartbeat <ISO timestamp>`.
+  - If a client falls behind and socket write buffer exceeds `AGENT_ROOM_SSE_HIGH_WATERMARK` (default `1048576` bytes), the stream is terminated.
 
 ---
 

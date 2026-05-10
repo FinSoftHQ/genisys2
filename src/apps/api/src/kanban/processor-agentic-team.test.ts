@@ -7,6 +7,8 @@ const mockMoveCard = vi.fn();
 const mockGetBoardById = vi.fn();
 const mockUpdateCardProcessingState = vi.fn();
 const mockStartProcessing = vi.fn();
+const mockListBoards = vi.fn();
+const mockGetSnapshot = vi.fn();
 
 vi.mock('./repository.js', () => ({
   getCardById: (...args: unknown[]) => mockGetCardById(...args),
@@ -14,6 +16,8 @@ vi.mock('./repository.js', () => ({
   moveCard: (...args: unknown[]) => mockMoveCard(...args),
   getBoardById: (...args: unknown[]) => mockGetBoardById(...args),
   updateCardProcessingState: (...args: unknown[]) => mockUpdateCardProcessingState(...args),
+  listBoards: (...args: unknown[]) => mockListBoards(...args),
+  getSnapshot: (...args: unknown[]) => mockGetSnapshot(...args),
 }));
 
 vi.mock('./processing-orchestrator.js', () => ({
@@ -100,6 +104,9 @@ describe('agentic-team processor routes', () => {
     mockGetBoardById.mockReset();
     mockUpdateCardProcessingState.mockReset();
     mockStartProcessing.mockReset();
+    mockListBoards.mockReset();
+    mockGetSnapshot.mockReset();
+    mockListBoards.mockReturnValue([]);
   });
 
   afterEach(async () => {
@@ -441,6 +448,62 @@ describe('agentic-team processor routes', () => {
           body: expect.stringContaining('"status":"success"'),
         }),
       );
+    });
+  });
+
+  describe('startup reconcile', () => {
+    it('reconciles PROCESSING cards with already-closed rooms', async () => {
+      const processingCard = {
+        ...mockCardWithProtocol,
+        processing_state: 'PROCESSING' as const,
+        payload: {
+          ...mockCardWithProtocol.payload,
+          room_id: 'rm_stuck',
+        },
+      };
+
+      mockListBoards.mockReturnValue([mockBoard]);
+      mockGetSnapshot.mockReturnValue({ board: mockBoard, cards: [processingCard] });
+      mockGetCardById.mockReturnValue(processingCard);
+      mockUpdateCard.mockReturnValue({
+        ...processingCard,
+        version: 2,
+        payload: {
+          ...processingCard.payload,
+          room_status: 'completed',
+          room_close_reason: 'completed',
+          room_closed_at: '2026-05-11T10:00:00.000Z',
+        },
+      });
+      mockUpdateCardProcessingState.mockReturnValue({ ...processingCard, processing_state: 'IDLE', version: 3 });
+      mockGetBoardById.mockReturnValue(mockBoard);
+      mockMoveCard.mockReturnValue({ ...processingCard, current_status: 'wrap', version: 4 });
+
+      fetchSpy.mockImplementation(async (url: string | URL | Request) => {
+        if (typeof url === 'string' && url.includes('/api/v1/agent-rooms/rm_stuck/status')) {
+          return new Response(JSON.stringify({ roomId: 'rm_stuck', status: 'completed', agents: {} }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 200 });
+      });
+
+      await app.ready();
+
+      expect(mockUpdateCard).toHaveBeenCalledWith(
+        expect.anything(),
+        processingCard.board_uid,
+        processingCard.uid,
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            room_status: 'completed',
+            room_close_reason: 'completed',
+          }),
+        }),
+        'system:room-closed',
+      );
+      expect(mockUpdateCardProcessingState).toHaveBeenCalled();
     });
   });
 
