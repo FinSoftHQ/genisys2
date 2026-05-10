@@ -1,9 +1,6 @@
 import { buildServer } from './server.js';
 import { openDb, closeDb } from './kanban/db-context.js';
-import { shutdownAllRooms, rooms } from './agent-rooms/lifecycle.js';
-import { killAgentProcess } from './agent-rooms/spawn.js';
-import { openIndexDb, closeIndexDb } from './agent-rooms/storage/index-db.js';
-import { startRetentionGc, stopRetentionGc } from './agent-rooms/storage/retention-gc.js';
+import { openIndexDb, closeIndexDb } from '@repo/agent-rooms-core';
 
 const port = Number(process.env.PORT) || 8080;
 const host = '0.0.0.0';
@@ -13,12 +10,6 @@ let shuttingDown = false;
 
 async function performShutdown(signal: string): Promise<void> {
   if (shuttingDown) {
-    // Second signal — escalate to SIGKILL for any remaining children
-    for (const room of rooms.values()) {
-      for (const agent of room.agents.values()) {
-        if (agent.proc) killAgentProcess(agent.proc, 'SIGKILL');
-      }
-    }
     process.exit(1);
   }
   shuttingDown = true;
@@ -30,23 +21,7 @@ async function performShutdown(signal: string): Promise<void> {
 
   app.log.info(`${signal} received, closing server gracefully...`);
   try {
-    // Terminate all agent processes gracefully
-    shutdownAllRooms();
-
-    // Give children a short window to exit cleanly
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    // Escalate to SIGKILL for stragglers
-    for (const room of rooms.values()) {
-      for (const agent of room.agents.values()) {
-        if (agent.proc && !agent.proc.killed) {
-          killAgentProcess(agent.proc, 'SIGKILL');
-        }
-      }
-    }
-
     await app.close();
-    stopRetentionGc();
     closeIndexDb();
     closeDb();
     process.exit(0);
@@ -72,7 +47,6 @@ try {
   const dbPath = process.env.KANBAN_DB_PATH ?? ':memory:';
   openDb(dbPath);
   openIndexDb();
-  startRetentionGc();
   app = await buildServer();
   await app.listen({ port, host });
   app.log.info(`API listening on http://${host}:${String(port)}`);

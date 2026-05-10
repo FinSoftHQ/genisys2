@@ -1,15 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { createRoomFromMarkdown } from "./manager.js";
 import {
-	listRooms,
-	getRoom,
-	getRoomStatus,
-	addSseClient,
-	sendInstructions,
-	destroyRoom,
-} from "./lifecycle.js";
-import { getRoomEvents } from "./event-store.js";
+	createRoom,
+	sendInstructions as sendInstructionsIpc,
+	destroyRoom as destroyRoomIpc,
+	subscribeToRoom,
+} from "./client.js";
+import { listRooms, getRoom, getRoomStatus, getRoomEvents } from "./lifecycle-api.js";
 
 const InstructionsBodySchema = z.object({
 	targetAgents: z.array(z.string().min(1)).min(1),
@@ -72,8 +69,13 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			}
 		}
 
-		const result = await createRoomFromMarkdown(markdown, { callbackUrl, callbackSecret, tag });
-		return reply.status(201).send({ roomId: result.roomId, status: "initialized" });
+		try {
+			const result = await createRoom(markdown, { callbackUrl, callbackSecret, tag });
+			return reply.status(201).send({ roomId: result.roomId, status: result.status });
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			return reply.status(502).send({ error: `Supervisor error: ${message}` });
+		}
 	});
 
 	instance.get("/:roomId/status", async (request, reply) => {
@@ -127,7 +129,33 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			Connection: "keep-alive",
 		});
 
-		addSseClient(room, reply);
+		try {
+			const socket = await subscribeToRoom(
+				roomId,
+				(event) => {
+					try {
+						reply.raw.write(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
+					} catch {
+						socket.end();
+					}
+				},
+				(err) => {
+					console.warn(`[agent-rooms] SSE subscription error for ${roomId}:`, err.message);
+					try { reply.raw.end(); } catch {}
+				},
+			);
+
+			reply.raw.on("close", () => {
+				socket.end();
+			});
+			reply.raw.on("error", () => {
+				socket.end();
+			});
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			console.warn(`[agent-rooms] SSE subscription failed for ${roomId}:`, message);
+			try { reply.raw.end(); } catch {}
+		}
 	});
 
 	instance.post("/:roomId/instructions", async (request, reply) => {
@@ -149,7 +177,7 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		let totalQueued = 0;
 		for (const agentName of body.data.targetAgents) {
 			try {
-				const result = await sendInstructions(room, agentName, body.data.followUp);
+				const result = await sendInstructionsIpc(roomId, agentName, body.data.followUp);
 				totalQueued += result.queuedItems;
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -165,7 +193,12 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 		if (!room) {
 			return reply.status(404).send({ error: "Room not found" });
 		}
-		destroyRoom(roomId);
-		return reply.status(200).send({ roomId, status: "deleted" });
+		try {
+			await destroyRoomIpc(roomId);
+			return reply.status(200).send({ roomId, status: "deleted" });
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			return reply.status(502).send({ error: `Supervisor error: ${message}` });
+		}
 	});
 }

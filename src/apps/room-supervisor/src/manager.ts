@@ -1,5 +1,5 @@
 import { attachAgentEventHandlers } from "./internal/event-handlers.js";
-import type { Room, AgentState } from "./types.js";
+import type { Room, AgentState } from "@repo/agent-rooms-core";
 import { sendToAgent, spawnAgentProcess } from "./spawn.js";
 import {
 	type CreateRoomDeps,
@@ -45,15 +45,14 @@ const createRoomDeps: CreateRoomDeps = {
 
 export async function createRoom(
 	protocol: import("@repo/shared").Protocol,
-	options?: import("./types.js").RoomCreateOptions,
+	options?: import("@repo/agent-rooms-core").RoomCreateOptions,
 ): Promise<{ roomId: string }> {
 	return createRoomImpl(protocol, createRoomDeps, options);
 }
 
 export async function createRoomFromMarkdown(
 	markdown: string,
-	options?: import("./types.js").RoomCreateOptions,
+	options?: import("@repo/agent-rooms-core").RoomCreateOptions,
 ): Promise<{ roomId: string }> {
 	return createRoomFromMarkdownImpl(markdown, createRoomDeps, options);
 }
-

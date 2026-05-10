@@ -1,4 +1,3 @@
-import type { FastifyReply } from "fastify";
 import type { RoomLogger } from "./internal/room-logger.js";
 import type { RingBuffer } from "./ring-buffer.js";
 import type { RoomLog } from "./storage/room-log.js";
@@ -64,7 +63,9 @@ export interface Room {
 	id: string;
 	status: RoomStatus;
 	agents: Map<string, AgentState>;
-	sseClients: Set<FastifyReply>;
+	// sseClients is typed as unknown so API (FastifyReply) and supervisor (IpcConnection)
+	// can each cast to their own concrete type.
+	sseClients: Set<unknown>;
 	createdAt: number;
 	lastActivityAt: number;
 	protocolBody: string;

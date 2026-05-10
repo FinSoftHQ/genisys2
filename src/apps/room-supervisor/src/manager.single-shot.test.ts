@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from './test-helpers.js';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '@repo/agent-rooms-core';
 
 class FakeProc extends EventEmitter {
 	stdout: Record<string, never>;

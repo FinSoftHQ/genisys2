@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ChildProcess } from 'child_process';
-import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from './test-helpers.js';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '@repo/agent-rooms-core';
 
 vi.mock('child_process', async () => {
 	const actual = await vi.importActual<typeof import('child_process')>('child_process');

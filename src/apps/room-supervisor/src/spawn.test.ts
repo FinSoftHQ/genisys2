@@ -11,7 +11,7 @@ import {
 	terminateSingleShotAgent,
 	waitForAllAgentsReady,
 } from "./spawn.js";
-import type { AgentState, Room } from "./types.js";
+import type { AgentState, Room } from "@repo/agent-rooms-core";
 
 vi.mock("child_process", () => ({
 	spawn: vi.fn(() => ({

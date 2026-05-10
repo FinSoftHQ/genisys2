@@ -1,9 +1,13 @@
-import type { Room, StoredEvent, StoredEventInput, ReturnedEvent } from "./types.js";
-import { RoomLog } from "./storage/room-log.js";
+import type { Room, StoredEvent, StoredEventInput, ReturnedEvent } from "@repo/agent-rooms-core";
+import { RoomLog, writeMessage } from "@repo/agent-rooms-core";
+import { Socket } from "net";
 
 const DEFAULT_EVENT_LIMIT = 100;
 const MAX_EVENT_FIELD_LENGTH = 4000;
-const SSE_HIGH_WATERMARK = Number(process.env.AGENT_ROOM_SSE_HIGH_WATERMARK ?? 1_048_576);
+
+function generateMsgId(): string {
+	return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`;
+}
 
 export function pushEvent(room: Room, event: StoredEventInput): void {
 	room.eventSeq += 1;
@@ -12,16 +16,17 @@ export function pushEvent(room: Room, event: StoredEventInput): void {
 	room.roomLog.append(record);
 }
 
-export function broadcast(room: Room, payload: object): void {
-	const data = `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
+export function broadcast(room: Room, payload: Record<string, unknown>): void {
 	for (const client of room.sseClients) {
+		const socket = client as Socket;
 		try {
-			if (client.raw.writableLength > SSE_HIGH_WATERMARK) {
-				throw new Error("SSE backpressure");
-			}
-			client.raw.write(data);
+			writeMessage(socket, {
+				id: generateMsgId(),
+				type: "event",
+				payload,
+			});
 		} catch {
-			try { client.raw.end(); } catch {}
+			try { socket.end(); } catch {}
 			room.sseClients.delete(client);
 		}
 	}

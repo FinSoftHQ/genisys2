@@ -2,13 +2,21 @@ import { createHmac } from "crypto";
 import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve, isAbsolute } from "path";
-import type { FastifyReply } from "fastify";
+import { Socket } from "net";
 import { parseProtocol, type Protocol } from "@repo/shared";
-import { RoomLogger } from "./internal/room-logger.js";
-import type { Room, AgentState, RoomCreateOptions, RoomCloseReason } from "./types.js";
-import { pushEvent } from "./event-store.js";
-import { shouldCheckCompletionAfterTaskMarker } from "./router.js";
-import { RingBuffer } from "./ring-buffer.js";
+import type { Room, AgentState, RoomCreateOptions, RoomCloseReason, ExecutionMode, RoomStatus, RoutingStrategy } from "@repo/agent-rooms-core";
+import {
+	RoomLogger,
+	RingBuffer,
+	RoomLog,
+	upsertRoom,
+	getRoomIndex,
+	getRoomAgentsIndex,
+	listRoomsIndex,
+	getRoomPromptsDir,
+	getRoomProtocolPath,
+	type RoomIndexRow,
+} from "@repo/agent-rooms-core";
 import {
 	buildPiArgs,
 	spawnAgentProcess,
@@ -16,15 +24,9 @@ import {
 	waitForAllAgentsReady,
 	killAgentProcess,
 } from "./spawn.js";
-import {
-	upsertRoom,
-	getRoomIndex,
-	getRoomAgentsIndex,
-	listRoomsIndex,
-} from "./storage/index-db.js";
-import { getRoomPromptsDir, getRoomProtocolPath } from "./storage/paths.js";
-import { RoomLog } from "./storage/room-log.js";
-import type { RoomIndexRow } from "./storage/index-db.js";
+import { pushEvent } from "./event-store.js";
+import { shouldCheckCompletionAfterTaskMarker } from "./router.js";
+import { writeMessage } from "@repo/agent-rooms-core";
 
 export const TASK_COMPLETION_MARKER = "[@TASK: VIPER-RTB]";
 const idleCompletionGraceMsRaw = Number(process.env.AGENT_ROOM_IDLE_COMPLETION_MS ?? 60_000);
@@ -39,6 +41,10 @@ const EXPIRY_MS = 1000 * 60 * 60 * 2; // 2 hours
 
 function generateId(): string {
 	return `rm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function generateMsgId(): string {
+	return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`;
 }
 
 export function resetExpiry(room: Room): void {
@@ -77,24 +83,40 @@ export async function notifyRoomClosedCallback(
 		headers["x-signature"] = computeCallbackSignature(payload, room.callbackSecret);
 	}
 
-	try {
-		const response = await fetch(room.callbackUrl, {
-			method: "POST",
-			headers,
-			body: payload,
-			signal: AbortSignal.timeout(5000),
-		});
-		if (!response.ok) {
+	// Phase C6: retry with exponential backoff
+	const delays = [1000, 4000, 16000];
+	for (let attempt = 0; attempt < delays.length; attempt++) {
+		try {
+			const response = await fetch(room.callbackUrl, {
+				method: "POST",
+				headers,
+				body: payload,
+				signal: AbortSignal.timeout(5000),
+			});
+			if (response.ok) {
+				console.info(`[agent-rooms] callback delivered for room ${room.id} (${reason})`);
+				return;
+			}
 			console.warn(
-				`[agent-rooms] callback failed for room ${room.id}: ${response.status} ${response.statusText}`,
+				`[agent-rooms] callback attempt ${attempt + 1} failed for room ${room.id}: ${response.status} ${response.statusText}`,
 			);
-			return;
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			console.warn(`[agent-rooms] callback attempt ${attempt + 1} failed for room ${room.id}: ${message}`);
 		}
-		console.info(`[agent-rooms] callback delivered for room ${room.id} (${reason})`);
-	} catch (err: unknown) {
-		const message = err instanceof Error ? err.message : String(err);
-		console.warn(`[agent-rooms] callback failed for room ${room.id}: ${message}`);
+		if (attempt < delays.length - 1) {
+			await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+		}
 	}
+
+	// Log final failure to event log
+	pushEvent(room, {
+		type: "room_error",
+		from: "system",
+		at: new Date().toISOString(),
+		reason: `callback_failed: ${room.callbackUrl}`,
+	});
+	console.error(`[agent-rooms] callback permanently failed for room ${room.id} after ${delays.length} attempts`);
 }
 
 export function allActiveAgentsCompleted(room: Room): boolean {
@@ -363,7 +385,7 @@ export function getRoom(id: string): Room | undefined {
 	for (const ar of agentRows) {
 		agents.set(ar.name, {
 			proc: null,
-			executionMode: ar.execution_mode as import("./types.js").ExecutionMode,
+			executionMode: ar.execution_mode as ExecutionMode,
 			piArgs: [],
 			name: ar.name,
 			role: ar.role,
@@ -382,14 +404,14 @@ export function getRoom(id: string): Room | undefined {
 
 	const room: Room = {
 		id,
-		status: row.status as import("./types.js").RoomStatus,
+		status: row.status as RoomStatus,
 		agents,
 		sseClients: new Set(),
 		createdAt: row.created_at,
 		lastActivityAt: row.last_activity_at,
 		protocolBody: row.protocol_body ?? "",
 		facilitator: row.facilitator ?? undefined,
-		routingStrategy: (row.routing_strategy as import("./types.js").RoutingStrategy) ?? "broadcast",
+		routingStrategy: (row.routing_strategy as RoutingStrategy) ?? "broadcast",
 		failedAgent: row.failed_agent ?? undefined,
 		failedReason: row.failed_reason ?? undefined,
 		events: new RingBuffer(200),
@@ -425,36 +447,6 @@ export function getRoomStatus(room: Room): object {
 				}
 			: {}),
 	};
-}
-
-export function addSseClient(room: Room, reply: FastifyReply): void {
-	room.sseClients.add(reply);
-
-	const heartbeatInterval = setInterval(() => {
-		try {
-			const ok = reply.raw.write(":heartbeat\n\n");
-			if (!ok) {
-				// backpressure — trigger cleanup on next tick via error path
-				throw new Error("SSE backpressure on heartbeat");
-			}
-		} catch {
-			clearInterval(heartbeatInterval);
-			room.sseClients.delete(reply);
-			try { reply.raw.end(); } catch {}
-		}
-	}, 15_000);
-
-	const onClose = () => {
-		clearInterval(heartbeatInterval);
-		room.sseClients.delete(reply);
-	};
-
-	reply.raw.on("close", onClose);
-	reply.raw.on("error", onClose);
-}
-
-export function removeSseClient(room: Room, reply: FastifyReply): void {
-	room.sseClients.delete(reply);
 }
 
 export async function sendInstructions(
@@ -528,12 +520,14 @@ export function destroyRoom(
 		}
 	}
 
+	// Broadcast room_closed to IPC subscribers
 	for (const client of room.sseClients) {
 		try {
-			client.raw.write(
-				`event: message\ndata: ${JSON.stringify({ type: "room_closed", reason })}\n\n`,
-			);
-			client.raw.end();
+			writeMessage(client as Socket, {
+				id: generateMsgId(),
+				type: "event",
+				payload: { type: "room_closed", reason },
+			});
 		} catch {
 			// ignore
 		}
@@ -593,12 +587,14 @@ export function completeRoom(id: string): void {
 		}
 	}
 
+	// Broadcast room_closed to IPC subscribers
 	for (const client of room.sseClients) {
 		try {
-			client.raw.write(
-				`event: message\ndata: ${JSON.stringify({ type: "room_closed", reason: "completed" })}\n\n`,
-			);
-			client.raw.end();
+			writeMessage(client as Socket, {
+				id: generateMsgId(),
+				type: "event",
+				payload: { type: "room_closed", reason: "completed" },
+			});
 		} catch {
 			// ignore
 		}
@@ -649,7 +645,7 @@ export function shutdownAllRooms(): void {
 
 		for (const client of room.sseClients) {
 			try {
-				client.raw.end();
+				(client as Socket).end();
 			} catch {
 				// ignore
 			}

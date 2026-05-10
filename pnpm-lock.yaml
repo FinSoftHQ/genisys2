@@ -189,6 +189,9 @@ importers:
       '@octokit/rest':
         specifier: 'catalog:'
         version: 21.1.1
+      '@repo/agent-rooms-core':
+        specifier: workspace:*
+        version: link:../../libs/agent-rooms-core
       '@repo/logger':
         specifier: workspace:*
         version: link:../../libs/logger
@@ -223,6 +226,34 @@ importers:
       drizzle-kit:
         specifier: 'catalog:'
         version: 0.31.10
+      tsup:
+        specifier: 'catalog:'
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.12)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      tsx:
+        specifier: 'catalog:'
+        version: 4.21.0
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+
+  src/apps/room-supervisor:
+    dependencies:
+      '@repo/agent-rooms-core':
+        specifier: workspace:*
+        version: link:../../libs/agent-rooms-core
+      '@repo/shared':
+        specifier: workspace:*
+        version: link:../../libs/shared
+      better-sqlite3:
+        specifier: 'catalog:'
+        version: 12.9.0
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: 'catalog:'
+        version: 7.6.13
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
       tsup:
         specifier: 'catalog:'
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.12)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
@@ -287,6 +318,25 @@ importers:
       vue-tsc:
         specifier: 'catalog:'
         version: 3.2.8(typescript@5.9.3)
+
+  src/libs/agent-rooms-core:
+    dependencies:
+      better-sqlite3:
+        specifier: 'catalog:'
+        version: 12.9.0
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: 'catalog:'
+        version: 7.6.13
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      tsup:
+        specifier: 'catalog:'
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.12)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
 
   src/libs/logger:
     dependencies:

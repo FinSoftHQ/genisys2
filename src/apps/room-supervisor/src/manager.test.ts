@@ -4,8 +4,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { createRoomFromMarkdown } from './manager.js';
 import { getRoom, destroyRoom } from './lifecycle.js';
-import type { Room } from './types.js';
-import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from './test-helpers.js';
+import type { Room } from '@repo/agent-rooms-core';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '@repo/agent-rooms-core';
 
 describe('agent-rooms manager', () => {
 	let roomId: string;

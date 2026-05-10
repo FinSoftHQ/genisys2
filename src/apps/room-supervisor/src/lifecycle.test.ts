@@ -12,8 +12,8 @@ import {
 	destroyRoom,
 } from './lifecycle.js';
 import { getRoomEvents } from './event-store.js';
-import type { Room } from './types.js';
-import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from './test-helpers.js';
+import type { Room } from '@repo/agent-rooms-core';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '@repo/agent-rooms-core';
 
 describe('agent-rooms lifecycle', () => {
 	let roomId: string;

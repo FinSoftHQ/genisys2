@@ -5,7 +5,7 @@ import {
 	shouldCheckCompletionAfterTaskMarker,
 	routeMessageToAgents,
 } from "./router.js";
-import type { Room, AgentState } from "./types.js";
+import type { Room, AgentState } from "@repo/agent-rooms-core";
 
 describe("router", () => {
 	describe("determineRecipients", () => {

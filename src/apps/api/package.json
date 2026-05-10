@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format esm --out-dir dist --target node22 && cp -r src/db/migrations dist/migrations",
+    "build": "tsup src/index.ts --format esm --out-dir dist --target node22 && cp -r src/db/migrations dist/migrations && cp bin/start.js dist/start.js",
     "start": "node dist/index.js",
+    "start:both": "node dist/start.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,6 +18,7 @@
     "@mariozechner/pi-ai": "catalog:",
     "@mariozechner/pi-coding-agent": "catalog:",
     "@octokit/rest": "catalog:",
+    "@repo/agent-rooms-core": "workspace:*",
     "@repo/logger": "workspace:*",
     "@repo/shared": "workspace:*",
     "better-sqlite3": "catalog:",

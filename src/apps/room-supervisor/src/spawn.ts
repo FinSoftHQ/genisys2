@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { writeFileSync, existsSync, readFileSync } from "fs";
 import { join, resolve, isAbsolute } from "path";
 import { parseAgentPromptFile } from "@repo/shared";
-import type { Room, AgentState, ExecutionMode } from "./types.js";
+import type { Room, AgentState, ExecutionMode } from "@repo/agent-rooms-core";
 
 export function killAgentProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
 	try {

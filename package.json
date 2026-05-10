@@ -16,7 +16,7 @@
   "scripts": {
     "dev": "just dev",
     "build": "just build",
-    "test": "vitest run --config src/apps/api/vitest.config.ts && vitest run --config src/libs/shared/vitest.config.ts && vitest run --config src/libs/logger/vitest.config.ts",
+    "test": "vitest run --config src/apps/api/vitest.config.ts && vitest run --config src/apps/room-supervisor/vitest.config.ts && vitest run --config src/libs/agent-rooms-core/vitest.config.ts && vitest run --config src/libs/shared/vitest.config.ts && vitest run --config src/libs/logger/vitest.config.ts",
     "test:unit": "pnpm test",
     "test:web": "pnpm --filter @repo/web exec vitest run",
     "test:e2e": "just test-e2e",

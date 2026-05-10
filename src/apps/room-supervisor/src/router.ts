@@ -1,4 +1,4 @@
-import type { Room, AgentState } from "./types.js";
+import type { Room, AgentState } from "@repo/agent-rooms-core";
 import { pushEvent, broadcast } from "./event-store.js";
 
 export interface RouterDeps {

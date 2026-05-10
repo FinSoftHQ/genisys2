@@ -1,6 +1,6 @@
 import { attachJsonlReader } from "./jsonl.js";
-import { loggingEnabled } from "./room-logger.js";
-import type { Room, AgentState } from "../types.js";
+import { loggingEnabled } from "@repo/agent-rooms-core";
+import type { Room, AgentState } from "@repo/agent-rooms-core";
 import { pushEvent, broadcast } from "../event-store.js";
 import { routeMessageToAgents } from "../router.js";
 import { sendToAgent, terminateSingleShotAgent } from "../spawn.js";

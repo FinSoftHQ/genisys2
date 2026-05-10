@@ -23,7 +23,7 @@ export function stopRetentionGc(): void {
 	}
 }
 
-function performGc(): void {
+export function performGc(): void {
 	const cutoff = Date.now() - RETENTION_MS;
 	const oldRooms = getTerminalRoomsOlderThan(cutoff);
 	for (const row of oldRooms) {

@@ -1,11 +1,14 @@
 import { mkdirSync } from "fs";
 import { join } from "path";
 
-const DATA_DIR = process.env.GENISYS_DATA_DIR ?? join(process.cwd(), ".genisys-data");
+function getDataDir(): string {
+	return process.env.GENISYS_DATA_DIR ?? join(process.cwd(), ".genisys-data");
+}
 
 export function ensureDataDir(): string {
-	mkdirSync(DATA_DIR, { recursive: true });
-	return DATA_DIR;
+	const dir = getDataDir();
+	mkdirSync(dir, { recursive: true });
+	return dir;
 }
 
 export function getIndexDbPath(): string {
