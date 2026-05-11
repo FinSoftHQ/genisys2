@@ -4,6 +4,11 @@ import type { NuxtConfig } from 'nuxt/schema';
 const config: NuxtConfig & { nitro?: unknown } = {
   compatibilityDate: '2025-01-01',
   ssr: false,
+  app: {
+    head: {
+      title: 'AI Workflow',
+    },
+  },
   devtools: { enabled: true },
   modules: ['@nuxt/ui'],
   css: ['~/assets/css/main.css'],

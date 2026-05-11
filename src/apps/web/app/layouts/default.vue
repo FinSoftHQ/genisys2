@@ -56,8 +56,8 @@ const navItems = computed<NavigationMenuItem[][]>(() => {
           class="flex items-center gap-2 font-semibold text-lg"
           :class="collapsed ? 'justify-center' : ''"
         >
-          <UIcon name="i-lucide-layout-kanban" class="size-6 text-primary" />
-          <span v-if="!collapsed">Hello Board</span>
+          <img src="/logo.png" alt="Surii logo" class="h-6 w-auto object-contain" />
+          <span v-if="!collapsed">AI Workflow</span>
         </NuxtLink>
       </template>
 
