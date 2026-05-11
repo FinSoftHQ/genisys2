@@ -112,6 +112,18 @@ describe('board stream', () => {
       stream.broadcast(mockBoardUid, makeCardCreatedEvent('e1'));
       expect(handler).not.toHaveBeenCalled();
     });
+
+    it('isolates throwing handlers so others still receive events', () => {
+      const goodHandler = vi.fn();
+      const badHandler = vi.fn(() => {
+        throw new Error('write failure');
+      });
+      stream.subscribe(mockBoardUid, badHandler);
+      stream.subscribe(mockBoardUid, goodHandler);
+      stream.broadcast(mockBoardUid, makeCardCreatedEvent('e1'));
+      expect(badHandler).toHaveBeenCalledTimes(1);
+      expect(goodHandler).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('replay subscription', () => {
@@ -162,6 +174,24 @@ describe('board stream', () => {
       const call = handler.mock.calls[0][0];
       expect(call).toContain('event: BOARD_RELOAD');
       expect(call).toContain('SERVER_RESET');
+    });
+
+    it('isolates throwing handlers during replay so others still receive missed events', () => {
+      const e1 = makeCardCreatedEvent('e1');
+      const e2 = makeCardMovedEvent('e2', 'backlog', 'in-progress');
+      const e3 = makeCardCreatedEvent('e3');
+      stream.broadcast(mockBoardUid, e1);
+      stream.broadcast(mockBoardUid, e2);
+      stream.broadcast(mockBoardUid, e3);
+
+      const badHandler = vi.fn(() => {
+        throw new Error('write failure');
+      });
+      const goodHandler = vi.fn();
+      stream.subscribe(mockBoardUid, badHandler, 'e1');
+      stream.subscribe(mockBoardUid, goodHandler, 'e1');
+      expect(badHandler).toHaveBeenCalledTimes(2);
+      expect(goodHandler).toHaveBeenCalledTimes(2);
     });
   });
 

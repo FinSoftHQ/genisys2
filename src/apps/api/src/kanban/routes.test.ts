@@ -1318,6 +1318,22 @@ describe('kanban routes', () => {
 
       expect(response.payload).toContain(`id: ${eventId}`);
     });
+
+    it('cleans up subscription on request close', async () => {
+      const unsubscribeSpy = vi.fn();
+      vi.mocked(subscribeToBoardEvents).mockImplementation((_boardUid, handler) => {
+        handler('id: test\nevent: test\ndata: {}\n\n');
+        return unsubscribeSpy;
+      });
+
+      await app.inject({
+        method: 'GET',
+        url: `/api/boards/${mockBoard.uid}/stream`,
+        simulate: { close: true },
+      });
+
+      expect(unsubscribeSpy).toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/boards/:boardId/audit-log — Slice 4 audit', () => {

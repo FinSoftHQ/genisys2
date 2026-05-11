@@ -30,7 +30,11 @@ export class BoardStreamManager {
     const formatted = this.formatSse(event);
     const handlers = this.subscribers.get(boardUid) ?? [];
     for (const handler of handlers) {
-      handler(formatted);
+      try {
+        handler(formatted);
+      } catch {
+        // swallow — individual subscriber cleanup is their responsibility
+      }
     }
   }
 
@@ -100,7 +104,11 @@ export class BoardStreamManager {
 
     const missed = buf.slice(index + 1);
     for (const item of missed) {
-      handler(this.formatSse(item.event));
+      try {
+        handler(this.formatSse(item.event));
+      } catch {
+        // swallow — individual subscriber cleanup is their responsibility
+      }
     }
   }
 

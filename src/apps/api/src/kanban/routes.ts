@@ -494,20 +494,39 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
       'Connection': 'keep-alive',
     });
 
+    const heartbeat = setInterval(() => {
+      if (reply.raw.destroyed || reply.raw.writableEnded) return;
+      try {
+        reply.raw.write(': ping\n\n');
+      } catch {
+        cleanup();
+      }
+    }, 15000);
+
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      clearInterval(heartbeat);
+      clearTimeout(timeout);
+      unsubscribe();
+      try { reply.raw.end(); } catch {}
+    };
+
     const unsubscribe = subscribeToBoardEvents(params.data.boardId, (chunk) => {
-      reply.raw.write(chunk);
+      try {
+        reply.raw.write(chunk);
+      } catch {
+        cleanup();
+      }
     }, lastEventId);
 
     const timeout = setTimeout(() => {
-      unsubscribe();
-      reply.raw.end();
+      cleanup();
     }, process.env.VITEST ? 10 : 300000);
 
-    request.raw.on('close', () => {
-      clearTimeout(timeout);
-      unsubscribe();
-      reply.raw.end();
-    });
+    request.raw.on('close', cleanup);
+    reply.raw.once('error', cleanup);
   });
 
   instance.get('/:boardId/audit-log', async (request, reply) => {
