@@ -86,6 +86,31 @@ describe('kanban contracts', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects exit_logic targets that reference non-existent column uids', () => {
+    const result = BoardSchemaDocumentSchema.safeParse({
+      columns: [
+        {
+          uid: 'backlog',
+          title: 'Backlog',
+          type: 'Normal',
+          processor_id: 'default-manual',
+          exit_logic: { default: 'non-existent-column' },
+          order: 0,
+        },
+        {
+          uid: 'in-progress',
+          title: 'In Progress',
+          type: 'Processing',
+          processor_id: 'default-manual',
+          exit_logic: { default: 'done' },
+          order: 1,
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('validates create card request', () => {
     const result = CreateCardRequestSchema.safeParse({
       title: 'Ship static board UI',
@@ -253,6 +278,22 @@ describe('kanban contracts', () => {
               exit_logic: { approved: 'done', rejected: 'backlog' },
               order: 0,
             },
+            {
+              uid: 'done',
+              title: 'Done',
+              type: 'Processing',
+              processor_id: 'done',
+              exit_logic: { default: 'done' },
+              order: 1,
+            },
+            {
+              uid: 'backlog',
+              title: 'Backlog',
+              type: 'Normal',
+              processor_id: 'default-manual',
+              exit_logic: { default: 'in-review' },
+              order: 2,
+            },
           ],
         },
         permissions: { read: ['role:marketing'], write: ['role:marketing-lead'] },
@@ -323,6 +364,22 @@ describe('kanban contracts', () => {
                 processor_id: 'default-manual',
                 exit_logic: { default: 'in-progress' },
                 order: 0,
+              },
+              {
+                uid: 'in-progress',
+                title: 'In Progress',
+                type: 'Normal',
+                processor_id: 'default-manual',
+                exit_logic: { default: 'done' },
+                order: 1,
+              },
+              {
+                uid: 'done',
+                title: 'Done',
+                type: 'Processing',
+                processor_id: 'done',
+                exit_logic: { default: 'done' },
+                order: 2,
               },
             ],
           },

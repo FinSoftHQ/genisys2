@@ -144,6 +144,19 @@ export const BoardSchemaDocumentSchema = z
       }
       seenOrders.add(column.order);
     });
+
+    const columnUidSet = new Set(value.columns.map((column) => column.uid));
+    value.columns.forEach((column, index) => {
+      Object.entries(column.exit_logic).forEach(([routeKey, targetUid]) => {
+        if (!columnUidSet.has(targetUid)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['columns', index, 'exit_logic', routeKey],
+            message: `exit_logic target must reference an existing column uid: ${targetUid}`,
+          });
+        }
+      });
+    });
   });
 
 const JsonValueSchema: z.ZodType<
