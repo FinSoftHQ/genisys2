@@ -32,6 +32,7 @@ import {
   createCard,
   updateCard,
   moveCard,
+  deleteCard,
   createBoard,
   createSuite,
   updateBoard,
@@ -45,6 +46,7 @@ import {
   deleteCardRelationship,
   getCardFamily,
 } from './repository.js';
+import { destroyRoom } from '../agent-rooms/client.js';
 import { dispatchSyncHook, dispatchOnUpdateHook, dispatchAsyncHook, dispatchFireAndForgetHook } from './hook-dispatcher.js';
 import { consumeCallback, startProcessing } from './processing-orchestrator.js';
 import { getDefaultProcessor } from './config.js';
@@ -224,6 +226,35 @@ export async function kanbanRoutes(instance: FastifyInstance): Promise<void> {
 
     const family = await callRepo(getCardFamily, params.data.boardId, params.data.cardId);
     return reply.status(200).send({ data: { ...family } });
+  });
+
+  instance.delete('/:boardId/cards/:cardId', async (request, reply) => {
+    const params = CardPathParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send(errorResponse('INVALID_PARAMS', 'Invalid path parameters', { issues: params.error.issues }));
+    }
+
+    const card = await callRepo(getCardById, params.data.boardId, params.data.cardId);
+    if (!card) {
+      return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
+    }
+
+    // If card has an active room, destroy it first
+    if (card.room_id && card.processing_state === 'PROCESSING') {
+      try {
+        await destroyRoom(card.room_id, 'manual');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn('[kanban] Failed to destroy room', card.room_id, 'for deleted card:', message);
+      }
+    }
+
+    const deleted = await callRepo(deleteCard, params.data.boardId, params.data.cardId);
+    if (!deleted) {
+      return reply.status(404).send(errorResponse('CARD_NOT_FOUND', 'Card not found'));
+    }
+
+    return reply.status(200).send({ data: { deleted: true } });
   });
 
   instance.patch('/:boardId/cards/:cardId', async (request, reply) => {

@@ -1,7 +1,7 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, or, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { BoardEntitySchema, CardEntitySchema, ProcessorRegistryEntitySchema, CallbackTokenEntitySchema, ProcessingStateTransitionSchema, BoardStreamSseEventSchema } from '@repo/shared';
-import { boards, boardSuites, boardSequences, cards, processorRegistry, callbackTokens } from '../db/schema.js';
+import { boards, boardSuites, boardSequences, cards, processorRegistry, callbackTokens, cardRelationships } from '../db/schema.js';
 import type { ProcessorRegistryEntity } from '@repo/shared';
 import '../db/seed.js';
 import type { BoardEntity, CardEntity } from '@repo/shared';
@@ -405,7 +405,7 @@ export function getCardById(instance: unknown, boardUid: string, cardUid: string
 export function createCard(
   instance: unknown,
   boardUid: string,
-  input: { title: string; description?: string | null; current_status: string; payload?: Record<string, unknown> },
+  input: { title: string; description?: string | null; current_status: string; payload?: Record<string, unknown>; room_id?: string | null },
   actor: string = 'user:anonymous',
 ): CardEntity {
   const { db } = resolveDb(instance);
@@ -442,6 +442,7 @@ export function createCard(
       is_editable: true,
       payload: input.payload ?? {},
       current_status: input.current_status,
+      room_id: input.room_id ?? null,
       created_at: now,
       updated_at: now,
     };
@@ -483,7 +484,7 @@ export function updateCard(
   instance: unknown,
   boardUid: string,
   cardUid: string,
-  input: { version: number; title?: string; description?: string | null; payload?: Record<string, unknown> },
+  input: { version: number; title?: string; description?: string | null; payload?: Record<string, unknown>; room_id?: string | null },
   actor: string = 'user:anonymous',
 ): CardEntity | null {
   const { db } = resolveDb(instance);
@@ -503,6 +504,9 @@ export function updateCard(
     }
     if (input.payload !== undefined) {
       updateData.payload = input.payload;
+    }
+    if (input.room_id !== undefined) {
+      updateData.room_id = input.room_id;
     }
 
     const conditions = [
@@ -527,6 +531,7 @@ export function updateCard(
     if (input.title !== undefined) payloadDelta.title = input.title;
     if (input.description !== undefined) payloadDelta.description = input.description;
     if (input.payload !== undefined) payloadDelta.payload = input.payload;
+    if (input.room_id !== undefined) payloadDelta.room_id = input.room_id;
 
     const logEvent = appendEventLog(instance, {
       event_id: randomUUID(),
@@ -545,10 +550,11 @@ export function updateCard(
     const parsed = CardEntitySchema.safeParse(result);
     if (parsed.success) {
       const enriched = enrichCardFamily(instance, parsed.data);
-      const changedFields: Array<'title' | 'description' | 'payload' | 'processing_state' | 'is_editable' | 'current_status' | 'version' | 'updated_at'> = ['version', 'updated_at'];
+      const changedFields: Array<'title' | 'description' | 'payload' | 'processing_state' | 'is_editable' | 'current_status' | 'version' | 'updated_at' | 'room_id'> = ['version', 'updated_at'];
       if (input.title !== undefined) changedFields.push('title');
       if (input.description !== undefined) changedFields.push('description');
       if (input.payload !== undefined) changedFields.push('payload');
+      if (input.room_id !== undefined) changedFields.push('room_id');
       const updatedEvent = BoardStreamSseEventSchema.parse({
         id: logEvent.event_id,
         event: 'CARD_UPDATED',
@@ -817,4 +823,76 @@ export function upsertProcessorRegistry(
   const parsed = ProcessorRegistryEntitySchema.safeParse(result);
   if (!parsed.success) throw new Error('INVALID_PROCESSOR_DATA');
   return parsed.data;
+}
+
+
+export function getProcessingCardsWithRoomId(instance: unknown): Array<{ uid: string; board_uid: string; room_id: string | null; payload: unknown }> {
+  const { db } = resolveDb(instance);
+  return db
+    .select({ uid: cards.uid, board_uid: cards.board_uid, room_id: cards.room_id, payload: cards.payload })
+    .from(cards)
+    .where(and(eq(cards.processing_state, 'PROCESSING'), sql`${cards.room_id} IS NOT NULL`))
+    .all();
+}
+
+export function getCardByRoomId(instance: unknown, roomId: string): CardEntity | undefined {
+  const { db } = resolveDb(instance);
+  const card = db
+    .select()
+    .from(cards)
+    .where(eq(cards.room_id, roomId))
+    .get();
+  if (!card) return undefined;
+  const parsed = CardEntitySchema.safeParse(card);
+  return parsed.success ? enrichCardFamily(instance, parsed.data) : undefined;
+}
+
+export function deleteCard(
+  instance: unknown,
+  boardUid: string,
+  cardUid: string,
+  actor: string = 'user:anonymous',
+): CardEntity | null {
+  const { db } = resolveDb(instance);
+  const now = new Date().toISOString();
+
+  return db.transaction(() => {
+    // Delete relationships first
+    db.delete(cardRelationships)
+      .where(
+        or(
+          and(eq(cardRelationships.parent_card_uid, cardUid), eq(cardRelationships.parent_board_uid, boardUid)),
+          and(eq(cardRelationships.child_card_uid, cardUid), eq(cardRelationships.child_board_uid, boardUid)),
+        ),
+      )
+      .run();
+
+    const card = db
+      .select()
+      .from(cards)
+      .where(and(eq(cards.board_uid, boardUid), eq(cards.uid, cardUid)))
+      .get();
+
+    if (!card) return null;
+
+    db.delete(cards)
+      .where(and(eq(cards.board_uid, boardUid), eq(cards.uid, cardUid)))
+      .run();
+
+    appendEventLog(instance, {
+      event_id: randomUUID(),
+      timestamp: now,
+      card_uid: cardUid,
+      board_uid: boardUid,
+      actor,
+      action: 'ADMIN_OVERRIDE',
+      category: 'system',
+      lifecycle_event: null,
+      from_column: card.current_status as string | null,
+      to_column: null,
+    } as Parameters<typeof appendEventLog>[1]);
+
+    const parsed = CardEntitySchema.safeParse(card);
+    return parsed.success ? enrichCardFamily(instance, parsed.data) : null;
+  });
 }

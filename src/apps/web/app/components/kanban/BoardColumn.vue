@@ -11,6 +11,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'create', columnUid: string): void;
   (e: 'edit', card: CardEntity): void;
+  (e: 'delete', card: CardEntity): void;
+  (e: 'view-room', card: CardEntity): void;
   (e: 'drop-card', payload: { cardId: string; toColumnUid: string }): void;
 }>();
 
@@ -65,6 +67,8 @@ function onDrop(event: DragEvent) {
           :key="card.uid"
           :card="card"
           @edit="emit('edit', $event)"
+          @delete="emit('delete', $event)"
+          @view-room="emit('view-room', $event)"
         />
       </TransitionGroup>
       <p

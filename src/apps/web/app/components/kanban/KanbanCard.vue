@@ -8,6 +8,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'edit', card: CardEntity): void;
+  (e: 'delete', card: CardEntity): void;
+  (e: 'view-room', card: CardEntity): void;
 }>();
 
 const isLocked = computed(() =>
@@ -19,6 +21,22 @@ const isDelegated = computed(() => props.card.current_status === 'delegated');
 const isTaskCard = computed(() => {
   const payload = props.card.payload;
   return payload && typeof payload.parent_card_uid === 'string';
+});
+
+const roomStatus = computed(() => {
+  const payload = props.card.payload;
+  if (!props.card.room_id) return null;
+  const status = payload?.room_status || payload?._room_status || 'running';
+  return String(status);
+});
+
+const roomBadgeColor = computed(() => {
+  const status = roomStatus.value;
+  if (!status) return 'neutral';
+  if (status === 'completed') return 'success';
+  if (status === 'error') return 'error';
+  if (status === 'manual' || status === 'expired') return 'warning';
+  return 'info';
 });
 
 const cardRootUi = computed(() => {
@@ -72,15 +90,24 @@ function onDragStart(event: DragEvent) {
         <p class="font-medium text-sm text-default truncate">{{ card.title }}</p>
         <p v-if="card.description" class="text-xs text-muted mt-1 line-clamp-2">{{ card.description }}</p>
       </div>
-      <UButton
-        v-if="card.is_editable && !isLocked"
-        icon="i-lucide-pencil"
-        variant="ghost"
-        color="neutral"
-        size="xs"
-        class="shrink-0"
-        @click="emit('edit', card)"
-      />
+      <div class="flex items-center gap-1 shrink-0">
+        <UButton
+          v-if="card.is_editable && !isLocked"
+          icon="i-lucide-pencil"
+          variant="ghost"
+          color="neutral"
+          size="xs"
+          @click="emit('edit', card)"
+        />
+        <UButton
+          v-if="card.is_editable && !isLocked"
+          icon="i-lucide-trash-2"
+          variant="ghost"
+          color="error"
+          size="xs"
+          @click="emit('delete', card)"
+        />
+      </div>
     </div>
 
     <div class="flex flex-wrap items-center gap-2 mt-2">
@@ -100,6 +127,17 @@ function onDragStart(event: DragEvent) {
         size="xs"
       >
         Task
+      </UBadge>
+      <UBadge
+        v-if="card.room_id"
+        :color="roomBadgeColor"
+        variant="soft"
+        size="xs"
+        class="cursor-pointer"
+        @click.stop="emit('view-room', card)"
+      >
+        <UIcon name="i-lucide-bot" class="size-3 mr-1" />
+        {{ roomStatus }}
       </UBadge>
     </div>
 

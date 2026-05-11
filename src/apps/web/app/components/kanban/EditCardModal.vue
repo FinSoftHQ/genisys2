@@ -14,6 +14,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'updated'): void;
+  (e: 'view-room'): void;
 }>();
 
 const { updateCard } = useBoardStore();
@@ -134,6 +135,32 @@ function isExternal(item: CardFamilyMetadata): boolean {
           <UTextarea v-model="state.description" placeholder="Optional description" :rows="3" />
         </UFormField>
 
+        <!-- Room Section -->
+        <div v-if="card && card.room_id" class="mb-4">
+          <UCard variant="subtle" :ui="{ body: 'p-3' }">
+            <div class="flex items-center justify-between mb-2">
+              <h4 class="text-xs font-semibold text-muted uppercase tracking-wide">Agent Room</h4>
+              <UBadge
+                :color="statusColor(String(card.payload?.room_status || 'running'))"
+                variant="soft"
+                size="xs"
+              >
+                {{ card.payload?.room_status || 'running' }}
+              </UBadge>
+            </div>
+            <div class="text-xs text-muted mb-2 font-mono truncate">{{ card.room_id }}</div>
+            <UButton
+              icon="i-lucide-bot"
+              variant="soft"
+              color="neutral"
+              size="xs"
+              @click="emit('view-room')"
+            >
+              View Room Logs
+            </UButton>
+          </UCard>
+        </div>
+
         <!-- Family Tree Section -->
         <div v-if="card && (card.parents?.length || card.children?.length)" class="mb-4">
           <UCard variant="subtle" :ui="{ body: 'p-3' }">
@@ -227,6 +254,14 @@ function isExternal(item: CardFamilyMetadata): boolean {
 
         <div class="flex justify-end gap-2">
           <UButton variant="ghost" @click="onClose">Cancel</UButton>
+          <UButton
+            v-if="card?.room_id"
+            variant="soft"
+            color="neutral"
+            @click="emit('view-room')"
+          >
+            View Room
+          </UButton>
           <UButton type="submit" :loading="isSaving" :disabled="!!conflictServerCard || isLocked">Save</UButton>
         </div>
       </UForm>

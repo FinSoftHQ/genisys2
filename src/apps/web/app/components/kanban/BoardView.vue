@@ -8,6 +8,7 @@ import { parseApiError, parseMoveBlockedError } from '~/utils/api-error';
 import BoardColumn from './BoardColumn.vue';
 import CreateCardModal from './CreateCardModal.vue';
 import EditCardModal from './EditCardModal.vue';
+import RoomDetailModal from './RoomDetailModal.vue';
 import AuditLogPanel from './AuditLogPanel.vue';
 
 const props = defineProps<{
@@ -20,6 +21,7 @@ const {
   setSaving,
   setError,
   updateCard,
+  removeCard,
   moveCardLocal,
   getCardsForColumn,
   getCardById,
@@ -46,6 +48,9 @@ const editingCard = computed<CardEntity | null>(() => {
   return getCardById(editingCardId.value) ?? null;
 });
 
+const roomModalOpen = ref(false);
+const viewingRoomCard = ref<CardEntity | null>(null);
+
 function onCreateCard(columnUid: string) {
   createColumnUid.value = columnUid;
   createModalOpen.value = true;
@@ -54,6 +59,38 @@ function onCreateCard(columnUid: string) {
 function onEditCard(card: CardEntity) {
   editingCardId.value = card.uid;
   editModalOpen.value = true;
+}
+
+async function onDeleteCard(card: CardEntity) {
+  if (!confirm(`Delete card ${card.display_id}?`)) return;
+  setSaving(true);
+  setError(null);
+  try {
+    await $fetch(`/api/boards/${props.boardUid}/cards/${card.uid}`, { method: 'DELETE' });
+    removeCard(card.uid);
+    toast.add({
+      title: 'Card deleted',
+      description: `${card.display_id} has been removed.`,
+      color: 'success',
+      icon: 'i-lucide-check',
+    });
+  } catch (err: unknown) {
+    const apiErr = parseApiError(err);
+    setError(apiErr?.error.message || 'Failed to delete card');
+    toast.add({
+      title: 'Delete failed',
+      description: apiErr?.error.message || 'Failed to delete card',
+      color: 'error',
+      icon: 'i-lucide-alert-circle',
+    });
+  } finally {
+    setSaving(false);
+  }
+}
+
+function onViewRoom(card: CardEntity) {
+  viewingRoomCard.value = card;
+  roomModalOpen.value = true;
 }
 
 async function onDropCard({ cardId, toColumnUid }: { cardId: string; toColumnUid: string }) {
@@ -205,6 +242,8 @@ onUnmounted(() => {
           :board-uid="boardUid"
           @create="onCreateCard"
           @edit="onEditCard"
+          @delete="onDeleteCard"
+          @view-room="onViewRoom"
           @drop-card="onDropCard"
         />
       </div>
@@ -222,6 +261,12 @@ onUnmounted(() => {
       :card="editingCard"
       :board-uid="boardUid"
       @updated="refreshSnapshot"
+      @view-room="onViewRoom(editingCard!)"
+    />
+
+    <RoomDetailModal
+      v-model:open="roomModalOpen"
+      :card="viewingRoomCard"
     />
 
     <AuditLogPanel

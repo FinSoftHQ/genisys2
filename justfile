@@ -29,8 +29,12 @@ stage:
     @echo "Staged all changes"
 
 dev:
-    @echo "Starting API (Bun hot reload) and Web (Nuxt dev)..."
-    pnpm --filter @repo/agent-rooms-core build & pnpm --filter @repo/room-supervisor dev & pnpm --filter api dev & pnpm --filter web dev & wait
+    @echo "Building workspace dependencies..."
+    pnpm --filter @repo/shared build
+    pnpm --filter @repo/logger build
+    pnpm --filter @repo/agent-rooms-core build
+    @echo "Starting API (Bun hot reload), Room Supervisor, and Web (Nuxt dev)..."
+    pnpm --filter @repo/room-supervisor dev & pnpm --filter api dev & pnpm --filter web dev & wait
 
 dev-ai:
     @echo "Starting API, Web, and AI Workflow..."
@@ -68,6 +72,7 @@ bootup:
     @echo "Building workspace packages (libs and tooling)..."
     pnpm --filter @repo/shared build
     pnpm --filter @repo/logger build
+    pnpm --filter @repo/agent-rooms-core build
     @echo "Bootup complete!"
 
 build-tools:

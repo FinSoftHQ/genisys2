@@ -135,6 +135,20 @@ export function useBoardStore() {
     }
   }
 
+  function removeCard(cardId: string) {
+    const card = store.value.cardsById.get(cardId);
+    if (!card) return;
+
+    const nextCards = new Map(store.value.cardsById);
+    nextCards.delete(cardId);
+    store.value.cardsById = nextCards;
+
+    const nextColumns = new Map(store.value.columnCardIds);
+    const list = nextColumns.get(card.current_status) ?? [];
+    nextColumns.set(card.current_status, list.filter((id) => id !== cardId));
+    store.value.columnCardIds = nextColumns;
+  }
+
   function moveCardLocal(cardId: string, toColumnUid: string) {
     const card = store.value.cardsById.get(cardId);
     if (!card) return;
@@ -192,6 +206,7 @@ export function useBoardStore() {
     hydrate,
     addCard,
     updateCard,
+    removeCard,
     moveCardLocal,
     setDraggedCardId,
     startPolling,

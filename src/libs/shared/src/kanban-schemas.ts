@@ -285,6 +285,7 @@ export const CardEntitySchema = z
     is_editable: z.boolean(),
     payload: CardPayloadSchema,
     current_status: ColumnUidSchema,
+    room_id: z.string().nullable().optional(),
     created_at: IsoDateTimeSchema,
     updated_at: IsoDateTimeSchema,
     parents: z.array(CardFamilyMetadataSchema).optional(),
@@ -392,6 +393,12 @@ export const UpdateCardRequestSchema = z
 export const UpdateCardResponseSchema = z
   .object({
     data: CardResponseDataSchema,
+  })
+  .strict();
+
+export const DeleteCardResponseSchema = z
+  .object({
+    data: z.object({ deleted: z.literal(true) }).strict(),
   })
   .strict();
 
