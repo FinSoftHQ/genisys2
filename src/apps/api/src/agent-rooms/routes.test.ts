@@ -164,4 +164,37 @@ describe("agent-room routes", () => {
 
 		expect(response.statusCode).toBe(413);
 	});
+
+	it("returns actionable SUPERVISOR_ERROR when supervisor socket is missing", async () => {
+		mocks.mockCreateRoom.mockRejectedValue(new Error("connect ENOENT .genisys-data/supervisor.sock"));
+
+		const response = await app.inject({
+			method: "POST",
+			url: "/agent-rooms",
+			headers: { "content-type": "text/markdown" },
+			payload: "# test",
+		});
+
+		expect(response.statusCode).toBe(502);
+		const body = response.json();
+		expect(body.error.code).toBe("SUPERVISOR_ERROR");
+		expect(body.error.message).toContain("Supervisor is not running or socket is missing");
+		expect(body.error.message).toContain("start:both");
+	});
+
+	it("returns generic SUPERVISOR_ERROR for non-socket IPC failures", async () => {
+		mocks.mockCreateRoom.mockRejectedValue(new Error("IPC response timeout after 10000ms"));
+
+		const response = await app.inject({
+			method: "POST",
+			url: "/agent-rooms",
+			headers: { "content-type": "text/markdown" },
+			payload: "# test",
+		});
+
+		expect(response.statusCode).toBe(502);
+		const body = response.json();
+		expect(body.error.code).toBe("SUPERVISOR_ERROR");
+		expect(body.error.message).toBe("IPC response timeout after 10000ms");
+	});
 });

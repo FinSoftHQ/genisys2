@@ -125,9 +125,15 @@ export async function agentRoomRoutes(instance: FastifyInstance): Promise<void> 
 			agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "ok" });
 			return reply.status(201).send({ roomId: result.roomId, status: result.status });
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
+			const rawMessage = err instanceof Error ? err.message : String(err);
 			agentRoomsRequestsTotal.inc({ method: "POST", route: "create", status: "error" });
 			agentRoomsIpcErrorsTotal.inc({ operation: "room.create" });
+
+			const isSocketMissing = rawMessage.includes("supervisor.sock") || rawMessage.includes("ENOENT");
+			const message = isSocketMissing
+				? `Supervisor is not running or socket is missing (${rawMessage}). Start the supervisor process (e.g., pnpm start:both) and ensure GENISYS_DATA_DIR is consistent between API and supervisor.`
+				: rawMessage;
+
 			return sendError(reply, 502, {
 				code: ErrorCodes.SUPERVISOR_ERROR,
 				message,
