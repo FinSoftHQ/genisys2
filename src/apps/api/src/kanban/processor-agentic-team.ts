@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, eq, sql } from 'drizzle-orm';
+
 import {
   OnEnterDispatchRequestSchema,
   OnUpdateRequestSchema,
@@ -21,7 +21,7 @@ import {
   updateCardProcessingState,
 } from './repository.js';
 import { startProcessing } from './processing-orchestrator.js';
-import { cards } from '../db/schema.js';
+
 
 function errorResponse(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
