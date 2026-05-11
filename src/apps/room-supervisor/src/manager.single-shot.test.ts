@@ -35,7 +35,13 @@ class FakeProc extends EventEmitter {
 					});
 				}
 			},
-			end: () => {},
+			end: () => {
+				// Mirrors pi's real RPC behaviour: closing stdin triggers graceful
+				// shutdown via process.stdin.on('end') -> shutdown() -> process.exit(0).
+				queueMicrotask(() => {
+					this.emit('exit', 0, null);
+				});
+			},
 		};
 	}
 

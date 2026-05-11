@@ -128,8 +128,18 @@ export async function startSupervisorServer(): Promise<Server> {
 		createMessageReader(
 			socket,
 			async (msg) => {
-				const response = await handleRequest(msg as IpcRequest, socket);
-				writeMessage(socket, response);
+				try {
+					const response = await handleRequest(msg as IpcRequest, socket);
+					writeMessage(socket, response);
+				} catch (err: unknown) {
+					const message = err instanceof Error ? err.message : String(err);
+					console.error("[supervisor] Error handling IPC request:", message);
+					writeMessage(socket, {
+						id: (msg as IpcRequest).id,
+						type: "error",
+						error: `Internal supervisor error: ${message}`,
+					});
+				}
 			},
 			(err) => {
 				console.error("[supervisor] IPC read error:", err.message);

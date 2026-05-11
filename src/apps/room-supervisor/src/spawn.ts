@@ -188,9 +188,12 @@ export function spawnAgentProcess(room: Room, agent: AgentState): ChildProcess {
 	return proc;
 }
 
-export function terminateSingleShotAgent(agent: AgentState): void {
+export async function terminateAgentGracefully(
+	agent: AgentState,
+	timeoutMs = 3000,
+): Promise<void> {
 	if (!agent.proc) return;
-	// Capture and null agent.proc BEFORE calling kill().
+	// Capture and null agent.proc BEFORE initiating shutdown.
 	// The exit handler uses `agent.proc !== proc` to detect deliberate termination.
 	// Setting agent.proc = null first ensures the check works whether the exit event
 	// fires synchronously (in tests) or asynchronously (in production with a real proc).
@@ -199,13 +202,38 @@ export function terminateSingleShotAgent(agent: AgentState): void {
 	agent.isStreaming = false;
 	agent.status = "idle";
 	agent.ready = false;
+
 	try {
 		procToKill.stdin!.write(`${JSON.stringify({ type: "abort" })}\n`);
 		procToKill.stdin!.end();
-		killAgentProcess(procToKill);
 	} catch {
 		// ignore — process may have already exited
 	}
+
+	await new Promise<void>((resolve) => {
+		const timeout = setTimeout(() => {
+			try {
+				killAgentProcess(procToKill, "SIGKILL");
+			} catch {
+				// ignore
+			}
+			resolve();
+		}, timeoutMs);
+
+		procToKill.on("exit", () => {
+			clearTimeout(timeout);
+			resolve();
+		});
+
+		if (procToKill.exitCode !== null) {
+			clearTimeout(timeout);
+			resolve();
+		}
+	});
+}
+
+export function terminateSingleShotAgent(agent: AgentState): void {
+	void terminateAgentGracefully(agent);
 }
 
 export async function waitForAllAgentsReady(room: Room): Promise<void> {

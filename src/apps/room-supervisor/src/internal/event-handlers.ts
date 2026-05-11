@@ -44,7 +44,7 @@ export function attachAgentEventHandlers(
 		// expected — do NOT treat it as an error regardless of exit code.
 		// NOTE: pi's RPC SIGTERM handler calls process.exit(143), so code is 143 (not null).
 		// Checking code === null would always miss and fall through to the error branch.
-		if (agent.executionMode === "single-shot" && agent.proc !== proc) {
+		if (agent.proc !== proc) {
 			return;
 		}
 

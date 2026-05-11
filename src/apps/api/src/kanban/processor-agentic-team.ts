@@ -189,51 +189,73 @@ async function runWipWorkflow(
   },
   callbackUrl: string,
 ) {
-  const workingDir = typeof card.payload.working_dir === 'string' ? card.payload.working_dir.trim() : '';
-  if (!workingDir) {
-    const errorMessage = `Agentic team workflow failed for card ${card.display_id}: missing working_dir in card payload`;
-    console.error('[agentic-team]', errorMessage);
-    fireAndForgetCallback(callbackUrl, {
-      status: 'error',
-      error_message: errorMessage,
-    });
-    return;
-  }
+  try {
+    const workingDir = typeof card.payload.working_dir === 'string' ? card.payload.working_dir.trim() : '';
+    if (!workingDir) {
+      const errorMessage = `Agentic team workflow failed for card ${card.display_id}: missing working_dir in card payload`;
+      console.error('[agentic-team]', errorMessage);
+      fireAndForgetCallback(callbackUrl, {
+        status: 'error',
+        error_message: errorMessage,
+      });
+      return;
+    }
 
-  const markdown = composeMarkdownFromPayload(card);
-  console.log('[agentic-team] Composed markdown for card', card.display_id);
-  console.log(markdown);
+    const markdown = composeMarkdownFromPayload(card);
+    console.log('[agentic-team] Composed markdown for card', card.display_id);
+    console.log(markdown);
 
-  const roomClosedCallbackUrl = getRoomClosedCallbackUrl();
-  const tag = `kanban:${card.display_id}`;
-  const callbackSecret = process.env.AGENTIC_TEAM_CALLBACK_SECRET;
-  const result = await createAgentRoom(markdown, roomClosedCallbackUrl, tag, callbackSecret);
+    const roomClosedCallbackUrl = getRoomClosedCallbackUrl();
+    const tag = `kanban:${card.display_id}`;
+    const callbackSecret = process.env.AGENTIC_TEAM_CALLBACK_SECRET;
+    const result = await createAgentRoom(markdown, roomClosedCallbackUrl, tag, callbackSecret);
 
-  if ('error' in result) {
-    console.error('[agentic-team] Card', card.display_id, result.error);
-    // Transition card to ERROR so it doesn't stay stuck in PROCESSING
-    updateCardProcessingState(
+    if ('error' in result) {
+      console.error('[agentic-team] Card', card.display_id, result.error);
+      // Transition card to ERROR so it doesn't stay stuck in PROCESSING
+      updateCardProcessingState(
+        instance,
+        card.board_uid,
+        card.uid,
+        'PROCESSING',
+        'ERROR',
+        { is_editable: false, payload: { ...card.payload, error_message: result.error } },
+      );
+      return;
+    }
+
+    const roomId = result.roomId;
+    console.log('[agentic-team] Card', card.display_id, 'created agent room:', roomId);
+
+    // Update card with room_id in both the dedicated column and payload
+    updateCard(
       instance,
       card.board_uid,
       card.uid,
-      'PROCESSING',
-      'ERROR',
-      { is_editable: false, payload: { ...card.payload, error_message: result.error } },
+      { version: card.version, room_id: roomId, payload: { ...card.payload, room_id: roomId } },
+      'system:agentic-team',
     );
-    return;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[agentic-team] runWipWorkflow failed for card', card.display_id, ':', message);
+    fireAndForgetCallback(callbackUrl, {
+      status: 'error',
+      error_message: `Agentic team workflow failed: ${message}`,
+    });
+    // Best-effort: transition card to ERROR so it doesn't stay stuck in PROCESSING
+    try {
+      updateCardProcessingState(
+        instance,
+        card.board_uid,
+        card.uid,
+        'PROCESSING',
+        'ERROR',
+        { is_editable: false, payload: { ...card.payload, error_message: `Agentic team workflow failed: ${message}` } },
+      );
+    } catch (stateErr) {
+      console.error('[agentic-team] Failed to transition card to ERROR after runWipWorkflow failure:', stateErr);
+    }
   }
-
-  const roomId = result.roomId;
-  console.log('[agentic-team] Card', card.display_id, 'created agent room:', roomId);
-
-  // Update card with room_id in both the dedicated column and payload
-  updateCard(
-    instance,
-    card.board_uid,
-    card.uid,
-    { version: card.version, room_id: roomId, payload: { ...card.payload, room_id: roomId } },
-    'system:agentic-team',
-  );
 }
 
 const RoomClosedCallbackSchema = z.object({
@@ -414,7 +436,10 @@ export async function agenticTeamProcessorRoutes(instance: FastifyInstance): Pro
     console.log('[agentic-team] Card', card.display_id, 'payload:', JSON.stringify(card.payload, null, 2));
 
     // Fire-and-forget: create agent room in background
-    runWipWorkflow(instance, card, body.data.callback_url);
+    runWipWorkflow(instance, card, body.data.callback_url).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[agentic-team] Unhandled error in runWipWorkflow for card', card.display_id, ':', message);
+    });
 
     return reply.status(202).send(response);
   });

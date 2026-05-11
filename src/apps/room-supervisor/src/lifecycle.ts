@@ -22,9 +22,8 @@ import {
 import {
 	buildPiArgs,
 	spawnAgentProcess,
-	sendToAgent,
 	waitForAllAgentsReady,
-	killAgentProcess,
+	terminateAgentGracefully,
 } from "./spawn.js";
 import { pushEvent, broadcast } from "./event-store.js";
 import { shouldCheckCompletionAfterTaskMarker } from "./router.js";
@@ -554,16 +553,11 @@ export async function destroyRoom(
 	const closedAt = new Date().toISOString();
 	void notifyRoomClosedCallback(room, reason, closedAt);
 
-	for (const agent of room.agents.values()) {
-		if (!agent.proc) continue;
-		try {
-			sendToAgent(agent, { type: "abort" });
-			agent.proc.stdin!.end();
-			killAgentProcess(agent.proc);
-		} catch {
-			// ignore
-		}
-	}
+	await Promise.all(
+		Array.from(room.agents.values())
+			.filter((agent) => agent.proc)
+			.map((agent) => terminateAgentGracefully(agent)),
+	);
 
 	const stored = pushEvent(room, {
 		type: "room_closed",
@@ -623,17 +617,11 @@ export async function completeRoom(id: string): Promise<void> {
 	});
 	broadcast(room, "storedevent", stored);
 	void notifyRoomClosedCallback(room, "completed", closedAt);
-
-	for (const agent of room.agents.values()) {
-		if (!agent.proc) continue;
-		try {
-			sendToAgent(agent, { type: "abort" });
-			agent.proc.stdin!.end();
-			killAgentProcess(agent.proc);
-		} catch {
-			// ignore
-		}
-	}
+	await Promise.all(
+		Array.from(room.agents.values())
+			.filter((agent) => agent.proc)
+			.map((agent) => terminateAgentGracefully(agent)),
+	);
 
 	broadcast(room, "raw", { type: "room_closed", reason: "completed" });
 	for (const client of room.sseClients) {
@@ -678,17 +666,11 @@ export async function shutdownAllRooms(): Promise<void> {
 		if (room.expireTimeout) clearTimeout(room.expireTimeout);
 		clearIdleCompletionTimeout(room);
 		if (room.completedTtlTimer) clearTimeout(room.completedTtlTimer);
-
-		for (const agent of room.agents.values()) {
-			if (!agent.proc) continue;
-			try {
-				sendToAgent(agent, { type: "abort" });
-				agent.proc.stdin!.end();
-				killAgentProcess(agent.proc);
-			} catch {
-				// ignore
-			}
-		}
+		await Promise.all(
+			Array.from(room.agents.values())
+				.filter((agent) => agent.proc)
+				.map((agent) => terminateAgentGracefully(agent)),
+		);
 
 		for (const client of room.sseClients) {
 			try {
