@@ -9,9 +9,10 @@ import {
 	killAgentProcess,
 	spawnAgentProcess,
 	terminateSingleShotAgent,
+	terminateAgentGracefully,
 	waitForAllAgentsReady,
 } from "./spawn.js";
-import type { AgentState, Room } from "./types.js";
+import type { AgentState, Room } from "@repo/agent-rooms-core";
 
 vi.mock("child_process", () => ({
 	spawn: vi.fn(() => ({
@@ -101,7 +102,7 @@ describe("spawn", () => {
 				expect.objectContaining({
 					cwd: "/tmp/work",
 					detached: true,
-					stdio: ["pipe", "pipe", "inherit"],
+					stdio: ["pipe", "pipe", "pipe"],
 				}),
 			);
 		});
@@ -134,14 +135,87 @@ describe("spawn", () => {
 		});
 	});
 
-	describe("terminateSingleShotAgent", () => {
-		it("sends abort, ends stdin, kills process, and resets agent state", () => {
+	describe("terminateAgentGracefully", () => {
+		it("sends abort, ends stdin, waits for exit, and resets agent state", async () => {
+			const writeFn = vi.fn();
+			const endFn = vi.fn();
+			const killFn = vi.fn();
+			const exitCallbacks: Array<() => void> = [];
+			const proc = {
+				stdin: { write: writeFn, end: endFn },
+				kill: killFn,
+				on: vi.fn((event: string, cb: () => void) => {
+					if (event === "exit") exitCallbacks.push(cb);
+				}),
+				exitCode: null,
+			} as unknown as ChildProcess;
+			const agent = {
+				name: "alpha",
+				proc,
+				isStreaming: true,
+				status: "streaming",
+				ready: true,
+			} as unknown as AgentState;
+
+			const promise = terminateAgentGracefully(agent, 50);
+			// Simulate graceful exit after a tick
+			setTimeout(() => exitCallbacks.forEach((cb) => cb()), 10);
+			await promise;
+
+			expect(writeFn).toHaveBeenCalledWith('{"type":"abort"}\n');
+			expect(endFn).toHaveBeenCalled();
+			expect(killFn).not.toHaveBeenCalled();
+			expect(agent.proc).toBeNull();
+			expect(agent.isStreaming).toBe(false);
+			expect(agent.status).toBe("idle");
+			expect(agent.ready).toBe(false);
+		});
+
+		it("escalates to SIGKILL if process does not exit in time", async () => {
 			const writeFn = vi.fn();
 			const endFn = vi.fn();
 			const killFn = vi.fn();
 			const proc = {
 				stdin: { write: writeFn, end: endFn },
 				kill: killFn,
+				on: vi.fn(),
+				exitCode: null,
+			} as unknown as ChildProcess;
+			const agent = {
+				name: "alpha",
+				proc,
+				isStreaming: true,
+				status: "streaming",
+				ready: true,
+			} as unknown as AgentState;
+
+			await terminateAgentGracefully(agent, 10);
+			expect(killFn).toHaveBeenCalledWith("SIGKILL");
+			expect(agent.proc).toBeNull();
+		});
+
+		it("is a no-op when agent has no process", async () => {
+			const agent = {
+				name: "alpha",
+				proc: null,
+				isStreaming: true,
+				status: "streaming",
+			} as unknown as AgentState;
+
+			await terminateAgentGracefully(agent);
+			expect(agent.proc).toBeNull();
+			expect(agent.isStreaming).toBe(true);
+		});
+	});
+
+	describe("terminateSingleShotAgent", () => {
+		it("sends abort, ends stdin, and resets agent state (fire-and-forget)", () => {
+			const writeFn = vi.fn();
+			const endFn = vi.fn();
+			const proc = {
+				stdin: { write: writeFn, end: endFn },
+				on: vi.fn(),
+				exitCode: null,
 			} as unknown as ChildProcess;
 			const agent = {
 				name: "alpha",
@@ -154,7 +228,6 @@ describe("spawn", () => {
 			terminateSingleShotAgent(agent);
 			expect(writeFn).toHaveBeenCalledWith('{"type":"abort"}\n');
 			expect(endFn).toHaveBeenCalled();
-			expect(killFn).toHaveBeenCalledWith("SIGTERM");
 			expect(agent.proc).toBeNull();
 			expect(agent.isStreaming).toBe(false);
 			expect(agent.status).toBe("idle");

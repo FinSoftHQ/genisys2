@@ -2,18 +2,26 @@ import fastify, { type FastifyInstance } from 'fastify';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mockGetCardById = vi.fn();
+const mockGetCardByRoomId = vi.fn();
+const mockGetProcessingCardsWithRoomId = vi.fn();
 const mockUpdateCard = vi.fn();
 const mockMoveCard = vi.fn();
 const mockGetBoardById = vi.fn();
 const mockUpdateCardProcessingState = vi.fn();
 const mockStartProcessing = vi.fn();
+const mockListBoards = vi.fn();
+const mockGetSnapshot = vi.fn();
 
 vi.mock('./repository.js', () => ({
   getCardById: (...args: unknown[]) => mockGetCardById(...args),
+  getCardByRoomId: (...args: unknown[]) => mockGetCardByRoomId(...args),
+  getProcessingCardsWithRoomId: (...args: unknown[]) => mockGetProcessingCardsWithRoomId(...args),
   updateCard: (...args: unknown[]) => mockUpdateCard(...args),
   moveCard: (...args: unknown[]) => mockMoveCard(...args),
   getBoardById: (...args: unknown[]) => mockGetBoardById(...args),
   updateCardProcessingState: (...args: unknown[]) => mockUpdateCardProcessingState(...args),
+  listBoards: (...args: unknown[]) => mockListBoards(...args),
+  getSnapshot: (...args: unknown[]) => mockGetSnapshot(...args),
 }));
 
 vi.mock('./processing-orchestrator.js', () => ({
@@ -43,6 +51,22 @@ const mockBoard = {
         processor_id: 'agentic-team',
         exit_logic: { default: 'wrap' },
         order: 0,
+      },
+      {
+        uid: 'wrap',
+        title: 'Wrap',
+        type: 'Processing' as const,
+        processor_id: 'wrap',
+        exit_logic: { default: 'done' },
+        order: 1,
+      },
+      {
+        uid: 'done',
+        title: 'Done',
+        type: 'Processing' as const,
+        processor_id: 'done',
+        exit_logic: { default: 'done' },
+        order: 2,
       },
     ],
   },
@@ -95,11 +119,17 @@ describe('agentic-team processor routes', () => {
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockGetCardById.mockReset();
+    mockGetCardByRoomId.mockReset();
+    mockGetProcessingCardsWithRoomId.mockReset();
     mockUpdateCard.mockReset();
     mockMoveCard.mockReset();
     mockGetBoardById.mockReset();
     mockUpdateCardProcessingState.mockReset();
     mockStartProcessing.mockReset();
+    mockListBoards.mockReset();
+    mockGetSnapshot.mockReset();
+    mockListBoards.mockReturnValue([]);
+    mockGetProcessingCardsWithRoomId.mockReturnValue([]);
   });
 
   afterEach(async () => {
@@ -227,12 +257,13 @@ describe('agentic-team processor routes', () => {
       });
       expect(agentRoomsCall).toBeDefined();
 
-      // Verify card payload was updated with room_id directly
+      // Verify card was updated with room_id in both column and payload
       expect(mockUpdateCard).toHaveBeenCalledWith(
-        {},
+        expect.anything(),
         mockCard.board_uid,
         mockCard.uid,
         expect.objectContaining({
+          room_id: 'rm_default123',
           payload: expect.objectContaining({ room_id: 'rm_default123' }),
         }),
         'system:agentic-team',
@@ -295,12 +326,13 @@ describe('agentic-team processor routes', () => {
       expect(markdownBody).toContain('Card: TST-1 / Test Card');
       expect(markdownBody).toContain('Build the new feature.');
 
-      // Verify card payload was updated with room_id directly
+      // Verify card was updated with room_id in both column and payload
       expect(mockUpdateCard).toHaveBeenCalledWith(
-        {},
+        expect.anything(),
         mockCardWithProtocol.board_uid,
         mockCardWithProtocol.uid,
         expect.objectContaining({
+          room_id: roomId,
           payload: expect.objectContaining({ room_id: roomId }),
         }),
         'system:agentic-team',
@@ -355,7 +387,7 @@ describe('agentic-team processor routes', () => {
       expect(markdownBody).toContain('alice: "|"');
     });
 
-    it('callbacks with error when agent-rooms returns non-2xx', async () => {
+    it('transitions card to ERROR when agent-rooms returns non-2xx', async () => {
       fetchSpy.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
         if (typeof url === 'string' && url.includes('/api/v1/agent-rooms')) {
           return new Response(JSON.stringify({ error: 'No team members found' }), {
@@ -364,6 +396,12 @@ describe('agentic-team processor routes', () => {
           });
         }
         return new Response(null, { status: 200 });
+      });
+
+      mockUpdateCardProcessingState.mockReturnValue({
+        ...mockCardWithProtocol,
+        processing_state: 'ERROR',
+        version: 2,
       });
 
       const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440001';
@@ -382,15 +420,14 @@ describe('agentic-team processor routes', () => {
       expect(response.statusCode).toBe(202);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const kanbanCallbackCall = fetchSpy.mock.calls.find((call) => {
-        const url = call[0] as string;
-        return typeof url === 'string' && url.includes('/api/callbacks/');
-      });
-      expect(kanbanCallbackCall).toBeDefined();
-      const kanbanInit = kanbanCallbackCall![1] as { body: string };
-      const kanbanPayload = JSON.parse(kanbanInit.body);
-      expect(kanbanPayload.status).toBe('error');
-      expect(kanbanPayload.error_message).toContain('Agent room creation failed');
+      expect(mockUpdateCardProcessingState).toHaveBeenCalledWith(
+        expect.anything(),
+        mockCardWithProtocol.board_uid,
+        mockCardWithProtocol.uid,
+        'PROCESSING',
+        'ERROR',
+        expect.objectContaining({ is_editable: false }),
+      );
     });
 
     it('returns 400 for invalid body', async () => {
@@ -441,6 +478,63 @@ describe('agentic-team processor routes', () => {
           body: expect.stringContaining('"status":"success"'),
         }),
       );
+    });
+  });
+
+  describe('startup reconcile', () => {
+    it('reconciles PROCESSING cards with already-closed rooms', async () => {
+      const processingCard = {
+        ...mockCardWithProtocol,
+        processing_state: 'PROCESSING' as const,
+        payload: {
+          ...mockCardWithProtocol.payload,
+          room_id: 'rm_stuck',
+        },
+      };
+
+      mockGetProcessingCardsWithRoomId.mockReturnValue([
+        { uid: processingCard.uid, board_uid: processingCard.board_uid, room_id: 'rm_stuck', payload: processingCard.payload },
+      ]);
+      mockGetCardByRoomId.mockReturnValue(processingCard);
+      mockUpdateCard.mockReturnValue({
+        ...processingCard,
+        version: 2,
+        payload: {
+          ...processingCard.payload,
+          room_status: 'completed',
+          room_close_reason: 'completed',
+          room_closed_at: '2026-05-11T10:00:00.000Z',
+        },
+      });
+      mockUpdateCardProcessingState.mockReturnValue({ ...processingCard, processing_state: 'IDLE', version: 3 });
+      mockGetBoardById.mockReturnValue(mockBoard);
+      mockMoveCard.mockReturnValue({ ...processingCard, current_status: 'wrap', version: 4 });
+
+      fetchSpy.mockImplementation(async (url: string | URL | Request) => {
+        if (typeof url === 'string' && url.includes('/api/v1/agent-rooms/rm_stuck/status')) {
+          return new Response(JSON.stringify({ roomId: 'rm_stuck', status: 'completed', agents: {} }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 200 });
+      });
+
+      await app.ready();
+
+      expect(mockUpdateCard).toHaveBeenCalledWith(
+        expect.anything(),
+        processingCard.board_uid,
+        processingCard.uid,
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            room_status: 'completed',
+            room_close_reason: 'completed',
+          }),
+        }),
+        'system:room-closed',
+      );
+      expect(mockUpdateCardProcessingState).toHaveBeenCalled();
     });
   });
 
@@ -519,7 +613,7 @@ describe('agentic-team processor routes', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      mockGetCardById.mockReturnValue({
+      mockGetCardByRoomId.mockReturnValue({
         ...mockCardWithProtocol,
         payload: { ...mockCardWithProtocol.payload, room_id: 'rm_test123' },
       });
@@ -551,9 +645,9 @@ describe('agentic-team processor routes', () => {
       const body = response.json();
       expect(body.status).toBe('acknowledged');
 
-      expect(mockGetCardById).toHaveBeenCalledWith({}, mockCardWithProtocol.board_uid, mockCardWithProtocol.uid);
+      expect(mockGetCardByRoomId).toHaveBeenCalledWith(expect.anything(), 'rm_test123');
       expect(mockUpdateCard).toHaveBeenCalledWith(
-        {},
+        expect.anything(),
         mockCardWithProtocol.board_uid,
         mockCardWithProtocol.uid,
         expect.objectContaining({
@@ -596,7 +690,7 @@ describe('agentic-team processor routes', () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       mockUpdateCard.mockClear();
-      mockGetCardById.mockReturnValue(null);
+      mockGetCardByRoomId.mockReturnValue(null);
 
       const response = await app.inject({
         method: 'POST',
@@ -663,7 +757,7 @@ describe('agentic-team processor routes', () => {
         payload: { ...mockCardWithProtocol.payload, room_id: 'rm_test789' },
       };
 
-      mockGetCardById.mockReturnValue(cardInProcessing);
+      mockGetCardByRoomId.mockReturnValue(cardInProcessing);
 
       const updatedCard = {
         ...cardInProcessing,
@@ -702,7 +796,7 @@ describe('agentic-team processor routes', () => {
       expect(body.status).toBe('acknowledged');
 
       expect(mockUpdateCardProcessingState).toHaveBeenCalledWith(
-        {},
+        expect.anything(),
         mockCardWithProtocol.board_uid,
         mockCardWithProtocol.uid,
         'PROCESSING',
@@ -711,14 +805,14 @@ describe('agentic-team processor routes', () => {
       );
 
       expect(mockMoveCard).toHaveBeenCalledWith(
-        {},
+        expect.anything(),
         mockCardWithProtocol.board_uid,
         mockCardWithProtocol.uid,
         'wrap',
         'system:room-closed',
       );
 
-      expect(mockGetBoardById).toHaveBeenCalledWith({}, mockCardWithProtocol.board_uid);
+      expect(mockGetBoardById).toHaveBeenCalledWith(expect.anything(), mockCardWithProtocol.board_uid);
       expect(mockStartProcessing).toHaveBeenCalled();
     });
 
@@ -755,7 +849,7 @@ describe('agentic-team processor routes', () => {
         payload: { ...mockCardWithProtocol.payload, room_id: 'rm_test999' },
       };
 
-      mockGetCardById.mockReturnValue(cardInProcessing);
+      mockGetCardByRoomId.mockReturnValue(cardInProcessing);
 
       mockUpdateCard.mockReturnValue({
         ...cardInProcessing,

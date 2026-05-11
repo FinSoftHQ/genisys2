@@ -342,6 +342,108 @@ describe('explore processor routes', () => {
       expect(fetchPayload.payload_updates.payload.body).toContain('Explore Warnings');
       expect(fetchPayload.payload_updates.payload.explore_warnings).toBeDefined();
     });
+
+    it('skips missing targets and continues with valid ones', async () => {
+      mockComplete.mockResolvedValue({
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: '{"file":".dossier/sow.md","reasoning":"Mission statement."}\n{"file":"src/missing.ts","reasoning":"Missing file test."}',
+          },
+        ],
+      } as unknown as Awaited<ReturnType<typeof mockComplete>>);
+
+      mockAccess.mockImplementation(async (path: unknown) => {
+        const p = String(path);
+        if (p.includes('missing.ts')) {
+          const err = new Error('ENOENT') as Error & { code: string };
+          err.code = 'ENOENT';
+          throw err;
+        }
+        return undefined;
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440032';
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/explore/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440033',
+        },
+      });
+
+      expect(response.statusCode).toBe(202);
+      await new Promise((r) => setTimeout(r, 100));
+
+      // context-generator + context-extractor should both run
+      expect(mockExecFilePromise).toHaveBeenCalledTimes(2);
+
+      const fetchCall = fetchSpy.mock.calls[0];
+      const fetchPayload = JSON.parse((fetchCall?.[1] as { body?: string })?.body ?? '{}');
+      expect(fetchPayload.status).toBe('success');
+      expect(fetchPayload.move_to_column).toBe('agentic-team');
+      expect(fetchPayload.payload_updates.payload.body).toContain('Explore Warnings');
+      expect(fetchPayload.payload_updates.payload.explore_warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining('missing.ts')]),
+      );
+
+      // JSONL should only contain the valid target
+      const jsonlCall = mockWriteFile.mock.calls.find((call) =>
+        String(call[0]).endsWith('.dossier/llm_extract_target.jsonl'),
+      );
+      expect(jsonlCall).toBeDefined();
+      const jsonlContent = String(jsonlCall?.[1]);
+      expect(jsonlContent).toContain('.dossier/sow.md');
+      expect(jsonlContent).not.toContain('missing.ts');
+    });
+
+    it('moves forward with warnings when all targets are invalid', async () => {
+      mockComplete.mockResolvedValue({
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: '{"file":"src/missing-a.ts","reasoning":"Missing A."}\n{"file":"src/missing-b.ts","reasoning":"Missing B."}',
+          },
+        ],
+      } as unknown as Awaited<ReturnType<typeof mockComplete>>);
+
+      mockAccess.mockImplementation(async () => {
+        const err = new Error('ENOENT') as Error & { code: string };
+        err.code = 'ENOENT';
+        throw err;
+      });
+
+      const callbackUrl = 'http://localhost:3000/api/callbacks/550e8400-e29b-41d4-a716-446655440034';
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kanban-processor/explore/on-enter',
+        payload: {
+          card: mockCard,
+          board: mockBoard,
+          column: mockBoard.schema.columns[0],
+          callback_url: callbackUrl,
+          idempotency_key: '550e8400-e29b-41d4-a716-446655440035',
+        },
+      });
+
+      expect(response.statusCode).toBe(202);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const fetchCall = fetchSpy.mock.calls[0];
+      const fetchPayload = JSON.parse((fetchCall?.[1] as { body?: string })?.body ?? '{}');
+      expect(fetchPayload.status).toBe('success');
+      expect(fetchPayload.move_to_column).toBe('agentic-team');
+      expect(fetchPayload.payload_updates.payload.body).toContain('Explore Warnings');
+      expect(fetchPayload.payload_updates.payload.explore_warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining('missing-a.ts'), expect.stringContaining('missing-b.ts')]),
+      );
+    });
   });
 
   describe('POST /api/kanban-processor/explore/on-action', () => {

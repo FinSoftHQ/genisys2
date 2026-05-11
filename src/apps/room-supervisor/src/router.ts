@@ -1,4 +1,4 @@
-import type { Room, AgentState } from "./types.js";
+import type { Room, AgentState } from "@repo/agent-rooms-core";
 import { pushEvent, broadcast } from "./event-store.js";
 
 export interface RouterDeps {
@@ -117,13 +117,14 @@ export function routeMessageToAgents(
 					.catch((err: unknown) => {
 						const reason =
 							err instanceof Error ? err.message : String(err);
-						pushEvent(room, {
+						const stored = pushEvent(room, {
 							type: "room_error",
 							from: recipientName,
 							at: new Date().toISOString(),
 							reason,
 						});
-						broadcast(room, {
+						broadcast(room, "storedevent", stored);
+						broadcast(room, "raw", {
 							type: "room_error",
 							from: recipientName,
 							reason,

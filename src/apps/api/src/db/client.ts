@@ -3,7 +3,6 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import * as schema from './schema.js';
 import { bootstrapDefaultProcessor, bootstrapTodoProcessor, bootstrapDoneProcessor, bootstrapPlanningProcessor, bootstrapPrepProcessor, bootstrapWrapProcessor, bootstrapAgenticTeamProcessor, bootstrapDelegatedProcessor, bootstrapCommitProcessor, bootstrapExploreProcessor } from './seed.js';
 
@@ -14,11 +13,8 @@ export type DbInstance = {
   db: ReturnType<typeof drizzle<typeof schema>>;
 };
 
-let memCounter = 0;
-
 export function createClient(path: string): DbInstance {
-  const dbPath = path === ':memory:' ? `file:mem_${randomUUID().replace(/-/g, '')}_${memCounter++}?mode=memory` : path;
-  const sqlite = new Database(dbPath);
+  const sqlite = new Database(path);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('synchronous = NORMAL');
   sqlite.pragma('busy_timeout = 5000');

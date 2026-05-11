@@ -2,7 +2,9 @@ import { spawn, type ChildProcess } from "child_process";
 import { writeFileSync, existsSync, readFileSync } from "fs";
 import { join, resolve, isAbsolute } from "path";
 import { parseAgentPromptFile } from "@repo/shared";
-import type { Room, AgentState, ExecutionMode } from "./types.js";
+import type { Room, AgentState, ExecutionMode } from "@repo/agent-rooms-core";
+
+let pathDeprecationWarned = false;
 
 export function killAgentProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
 	try {
@@ -17,6 +19,17 @@ export function killAgentProcess(proc: ChildProcess, signal: NodeJS.Signals = "S
 		proc.kill(signal);
 	} catch {
 		// ignore
+	}
+}
+
+export async function killAgentProcessWithEscalation(
+	proc: ChildProcess,
+	timeoutMs = 3000,
+): Promise<void> {
+	killAgentProcess(proc, "SIGTERM");
+	await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+	if (!proc.killed) {
+		killAgentProcess(proc, "SIGKILL");
 	}
 }
 
@@ -139,19 +152,14 @@ export function buildPiArgs(
 }
 
 export function spawnAgentProcess(room: Room, agent: AgentState): ChildProcess {
-	// When the API runs under pnpm / tsx, local node_modules/.bin is
-	// prepended to PATH. This shadows the global `pi` binary with a local
-	// wrapper that points to an older version of pi-coding-agent (e.g. 0.60.0),
-	// which lacks newer models. Remove local node_modules/.bin entries so
-	// the globally-installed `pi` (with the user's current models/settings)
-	// is resolved instead.
-	const originalPath = process.env.PATH ?? "";
-	const filteredPath = originalPath
-		.split(":")
-		.filter((segment) => !segment.endsWith("node_modules/.bin"))
-		.join(":");
-
-	const env = { ...process.env, PATH: filteredPath };
+	const env = { ...process.env };
+	if (
+		!pathDeprecationWarned &&
+		(process.env.PATH ?? "").split(":").some((segment) => segment.endsWith("node_modules/.bin"))
+	) {
+		pathDeprecationWarned = true;
+		console.warn("[agent-rooms] Deprecated PATH setup detected (node_modules/.bin). The supervisor no longer rewrites PATH.");
+	}
 
 	const spawnCwd = room.workingDir ?? process.cwd();
 	console.log(`[agent-rooms] Spawning agent "${agent.name}" in room ${room.id} with cwd: ${spawnCwd}`);
@@ -160,18 +168,32 @@ export function spawnAgentProcess(room: Room, agent: AgentState): ChildProcess {
 	}
 
 	const proc = spawn("pi", agent.piArgs, {
-		stdio: ["pipe", "pipe", "inherit"],
+		stdio: ["pipe", "pipe", "pipe"],
 		env,
 		detached: true,
 		cwd: spawnCwd,
 	});
 	agent.proc = proc;
+
+	proc.stderr!.on("data", (chunk: Buffer) => {
+		const lines = chunk
+			.toString("utf8")
+			.split("\n")
+			.filter((l) => l.trim());
+		for (const line of lines) {
+			console.warn(`[agent-rooms][stderr][${agent.name}] ${line}`);
+		}
+	});
+
 	return proc;
 }
 
-export function terminateSingleShotAgent(agent: AgentState): void {
+export async function terminateAgentGracefully(
+	agent: AgentState,
+	timeoutMs = 3000,
+): Promise<void> {
 	if (!agent.proc) return;
-	// Capture and null agent.proc BEFORE calling kill().
+	// Capture and null agent.proc BEFORE initiating shutdown.
 	// The exit handler uses `agent.proc !== proc` to detect deliberate termination.
 	// Setting agent.proc = null first ensures the check works whether the exit event
 	// fires synchronously (in tests) or asynchronously (in production with a real proc).
@@ -180,13 +202,38 @@ export function terminateSingleShotAgent(agent: AgentState): void {
 	agent.isStreaming = false;
 	agent.status = "idle";
 	agent.ready = false;
+
 	try {
 		procToKill.stdin!.write(`${JSON.stringify({ type: "abort" })}\n`);
 		procToKill.stdin!.end();
-		killAgentProcess(procToKill);
 	} catch {
 		// ignore — process may have already exited
 	}
+
+	await new Promise<void>((resolve) => {
+		const timeout = setTimeout(() => {
+			try {
+				killAgentProcess(procToKill, "SIGKILL");
+			} catch {
+				// ignore
+			}
+			resolve();
+		}, timeoutMs);
+
+		procToKill.on("exit", () => {
+			clearTimeout(timeout);
+			resolve();
+		});
+
+		if (procToKill.exitCode !== null) {
+			clearTimeout(timeout);
+			resolve();
+		}
+	});
+}
+
+export function terminateSingleShotAgent(agent: AgentState): void {
+	void terminateAgentGracefully(agent);
 }
 
 export async function waitForAllAgentsReady(room: Room): Promise<void> {

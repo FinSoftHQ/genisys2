@@ -1,17 +1,20 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { EventEmitter } from 'events';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '@repo/agent-rooms-core';
 
 class FakeProc extends EventEmitter {
 	stdout: Record<string, never>;
+	stderr: { on: () => void };
 	stdin: { write: (chunk: string) => void; end: () => void };
 	commands: string[];
 
 	constructor(private emitJson: (proc: FakeProc, event: Record<string, unknown>) => void) {
 		super();
 		this.stdout = {};
+		this.stderr = { on: () => {} };
 		this.commands = [];
 		this.stdin = {
 			write: (chunk: string) => {
@@ -32,7 +35,13 @@ class FakeProc extends EventEmitter {
 					});
 				}
 			},
-			end: () => {},
+			end: () => {
+				// Mirrors pi's real RPC behaviour: closing stdin triggers graceful
+				// shutdown via process.stdin.on('end') -> shutdown() -> process.exit(0).
+				queueMicrotask(() => {
+					this.emit('exit', 0, null);
+				});
+			},
 		};
 	}
 
@@ -89,9 +98,20 @@ afterEach(() => {
 });
 
 describe('single-shot lifecycle', () => {
+	beforeAll(() => {
+		setupTestDataDir();
+	});
+
+	afterAll(() => {
+		teardownTestDataDir();
+	});
+
+	beforeEach(() => {
+		clearIndexDb();
+	});
 	it('re-spawns single-shot agent after completion marker termination', async () => {
 		const { createRoomFromMarkdown, spawnAndSendToSingleShot } = await import('./manager.js');
-		const { getRoom, destroyRoom, clearIdleCompletionTimeout } = await import('./lifecycle.js');
+		const { rooms, destroyRoom, clearIdleCompletionTimeout } = await import('./lifecycle.js');
 		const { routeMessageToAgents } = await import('./router.js');
 		const { sendToAgent } = await import('./spawn.js');
 
@@ -109,7 +129,7 @@ describe('single-shot lifecycle', () => {
 
 		const markdown = `---\nteam:\n  alpha: Lead\n  beta: Reviewer\ntailor_shop: ${tailorDir}\n---\n\nProtocol body.\n`;
 		const result = await createRoomFromMarkdown(markdown);
-		const room = getRoom(result.roomId)!;
+		const room = rooms.get(result.roomId)!;
 
 		const beta = room.agents.get('beta')!;
 		expect(beta.proc).toBeNull();
@@ -146,7 +166,7 @@ describe('single-shot lifecycle', () => {
 		const secondProc = room.agents.get('beta')!.proc as unknown as FakeProc;
 		expect(secondProc).not.toBe(firstProc);
 
-		destroyRoom(result.roomId);
+		await destroyRoom(result.roomId);
 		rmSync(tailorDir, { recursive: true, force: true });
 	});
 });

@@ -5,7 +5,7 @@ import {
 	shouldCheckCompletionAfterTaskMarker,
 	routeMessageToAgents,
 } from "./router.js";
-import type { Room, AgentState } from "./types.js";
+import type { Room, AgentState } from "@repo/agent-rooms-core";
 
 describe("router", () => {
 	describe("determineRecipients", () => {
@@ -31,7 +31,7 @@ describe("router", () => {
 				events: [],
 				eventSeq: 0,
 				promptDir: "",
-			} as Room;
+			} as unknown as Room;
 		}
 
 		it("broadcast mode sends to all other agents", () => {
@@ -242,7 +242,7 @@ describe("router", () => {
 				events: [],
 				eventSeq: 0,
 				promptDir: "",
-			} as Room;
+			} as unknown as Room;
 		}
 
 		it("resolveMessageTargets returns explicit recipients first", () => {
@@ -350,7 +350,7 @@ describe("router", () => {
 				events: [],
 				eventSeq: 0,
 				promptDir: "",
-			} as Room;
+			} as unknown as Room;
 		}
 
 		const mockDeps = {

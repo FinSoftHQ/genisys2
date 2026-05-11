@@ -21,8 +21,8 @@ describe('server.ts kanban registration expectation', () => {
 });
 
 describe('server.ts testability expectations', () => {
-  it('exports the fastify app instance for programmatic use', () => {
-    expect(source).toMatch(/export\s+(?:const|let|var)?\s*app\b/);
+  it('exports a buildServer function for programmatic use', () => {
+    expect(source).toMatch(/export\s+async\s+function\s+buildServer\b/);
   });
 
   it('does not start the server at module evaluation time', () => {

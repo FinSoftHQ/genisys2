@@ -397,8 +397,9 @@ function dedupeTargets(targets: ExtractTarget[]): ExtractTarget[] {
   return deduped;
 }
 
-async function validateTargets(workingDir: string, targets: ExtractTarget[]): Promise<ExtractTarget[]> {
+async function validateTargets(workingDir: string, targets: ExtractTarget[]): Promise<{ valid: ExtractTarget[]; warnings: string[] }> {
   const fileLineCountCache = new Map<string, number>();
+  const warnings: string[] = [];
 
   async function getLineCount(absolutePath: string): Promise<number> {
     const cached = fileLineCountCache.get(absolutePath);
@@ -420,7 +421,12 @@ async function validateTargets(workingDir: string, targets: ExtractTarget[]): Pr
       throw new Error(`Target file is outside repository root: ${normalizedFile}`);
     }
 
-    await access(absolutePath, constants.F_OK);
+    try {
+      await access(absolutePath, constants.F_OK);
+    } catch {
+      warnings.push(`Skipping missing target file: ${normalizedFile}`);
+      continue;
+    }
 
     const normalizedTarget: ExtractTarget = {
       file: normalizedFile,
@@ -439,7 +445,8 @@ async function validateTargets(workingDir: string, targets: ExtractTarget[]): Pr
       const lineCount = await getLineCount(absolutePath);
 
       if (normalizedTarget.start_line !== undefined && normalizedTarget.start_line > lineCount) {
-        throw new Error(`start_line ${normalizedTarget.start_line} out of bounds for ${normalizedFile} (${lineCount} lines)`);
+        warnings.push(`Skipping ${normalizedFile}: start_line ${normalizedTarget.start_line} out of bounds (${lineCount} lines)`);
+        continue;
       }
 
       if (normalizedTarget.end_line !== undefined && normalizedTarget.end_line > lineCount) {
@@ -451,14 +458,15 @@ async function validateTargets(workingDir: string, targets: ExtractTarget[]): Pr
         && normalizedTarget.end_line !== undefined
         && normalizedTarget.end_line < normalizedTarget.start_line
       ) {
-        throw new Error(`Invalid range for ${normalizedFile}: end_line < start_line after normalization`);
+        warnings.push(`Skipping ${normalizedFile}: invalid range end_line < start_line after normalization`);
+        continue;
       }
     }
 
     validated.push(normalizedTarget);
   }
 
-  return validated;
+  return { valid: validated, warnings };
 }
 
 function stringifyTargetsJsonl(targets: ExtractTarget[]): string {
@@ -483,7 +491,7 @@ async function resolveExecutablePath(binaryName: string): Promise<string> {
   throw new Error(`Executable not found or not executable: ${binaryName}`);
 }
 
-async function generateExtractorTargets(workingDir: string): Promise<void> {
+async function generateExtractorTargets(workingDir: string): Promise<string[]> {
   const sowPath = join(workingDir, SOW_PATH);
   const llmContextPath = join(workingDir, LLM_CONTEXT_PATH);
 
@@ -524,7 +532,16 @@ async function generateExtractorTargets(workingDir: string): Promise<void> {
   const parsedTargets = parseLlmJsonl(llmText);
   const targetsWithSowFirst = ensureSowFirst(parsedTargets);
   const dedupedTargets = dedupeTargets(targetsWithSowFirst);
-  const validatedTargets = await validateTargets(workingDir, dedupedTargets);
+  const { valid: validatedTargets, warnings: validationWarnings } = await validateTargets(workingDir, dedupedTargets);
+
+  if (validationWarnings.length > 0) {
+    console.warn(`[explore] Target validation warnings: ${validationWarnings.join('; ')}`);
+  }
+
+  if (validatedTargets.length === 0) {
+    const combined = validationWarnings.length > 0 ? validationWarnings.join('; ') : 'No valid targets remain after validation';
+    throw new Error(`All extract targets were invalid: ${combined}`);
+  }
 
   const dossierDir = join(workingDir, '.dossier');
   await mkdir(dossierDir, { recursive: true });
@@ -532,7 +549,9 @@ async function generateExtractorTargets(workingDir: string): Promise<void> {
   const jsonlPath = join(workingDir, EXTRACT_TARGET_JSONL_PATH);
   await writeFile(jsonlPath, stringifyTargetsJsonl(validatedTargets), 'utf8');
 
-  console.log(`[explore] Wrote ${validatedTargets.length} JSONL targets to ${jsonlPath}`);
+  console.log(`[explore] Wrote ${validatedTargets.length} JSONL targets to ${jsonlPath} (skipped ${validationWarnings.length} invalid)`);
+
+  return validationWarnings;
 }
 
 async function runContextExtractor(workingDir: string): Promise<void> {
@@ -599,7 +618,10 @@ async function runExploreWorkflow(card: ExploreCard, callbackUrl: string) {
 
     // Step 3: generate JSONL targets + run context-extractor (best effort)
     try {
-      await generateExtractorTargets(workingDir);
+      const validationWarnings = await generateExtractorTargets(workingDir);
+      for (const w of validationWarnings) {
+        addWarning(w);
+      }
       recordGeneratedFile(EXTRACT_TARGET_JSONL_PATH);
       await runContextExtractor(workingDir);
       recordGeneratedFile(LLM_TARGET_MD_PATH);

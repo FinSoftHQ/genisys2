@@ -1,209 +1,8 @@
-# API: /api/v1/squads
-
-Purpose
-
-This API manages "squads" — short-lived groups of autonomous agents spawned from a protocol Markdown document. A squad is created from a protocol file (YAML front matter with a `team:` block plus a body). The server spawns one `pi` process per team member, injects the protocol body as the initial prompt, and exposes status, a server-sent events (SSE) stream of agent events, and control endpoints to resume, instruct, or complete the squad.
-
-This behavior mirrors tools/piteam/ (both use parseProtocol and operate on the same protocol Markdown format).
-
-Notes
-- The create endpoint requires `Content-Type: text/markdown`.
-- The protocol must contain a `team:` block either in its own front matter or in the `working_protocol.md` of a configured `tailor_shop` (see **Defaults from working_protocol.md** below).
-- Squads auto-expire after 2 hours of inactivity.
-- The host must have the `pi` binary available (spawned as `pi --mode rpc --no-session`).
-
-Endpoints (starter guide)
-
-1) Create squad
-- Purpose: Create a new squad from a protocol Markdown document and start agent processes.
-- Request (HTTP):
-  POST /api/v1/squads/
-  Headers:
-    Content-Type: text/markdown
-  Body: (raw protocol Markdown, must include front matter with team)
-
-- Success: 201 Created
-  Body: { squadId: string, status: "initialized" }
-- Common error: 415 if Content-Type does not include text/markdown
-
-- The example raw protocol (Markdown + front matter) are as follows:
-
-```md
----
-team:
-  smith: Tester
-  john: Developer
----
-
-# Working Protocol
-
-When you're ready, please say something, so that we know you're ready!
-```
-
-2) Get squad status
-- Purpose: Get a compact status snapshot for a squad and per-agent status, plus a pointer to the most recent stored event.
-- Request (HTTP):
-  GET /api/v1/squads/:squadId/status
-  Headers: (none required)
-  Body: none
-
-- Success: 200 OK
-  Body: {
-    squadId: string,
-    status: "initialized" | "running" | "suspended" | "error" | "completed",
-    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
-    // present once at least one event has been stored:
-    lastEventId?: number,       // monotonic integer id, use as ?since= cursor
-    lastEventAt?: string,       // ISO 8601 timestamp
-    lastEventType?: string,     // e.g. "message", "tool_start", "agent_end"
-    lastEventFrom?: string,     // agent name that emitted the event
-    // optional if failure:
-    failedAgent?: string,
-    reason?: string
-  }
-- Common error: 404 if squad not found
-
-3) Get stored events
-- Purpose: Retrieve all coalesced events buffered for a squad (up to 2500 most recent). These are the same events shown in the server console — full assembled messages, tool calls, retries, and lifecycle events. Per-token streaming deltas are NOT included.
-- Request (HTTP):
-  GET /api/v1/squads/:squadId/events
-  GET /api/v1/squads/:squadId/events?since=<eventId>
-  Headers: (none required)
-  Body: none
-
-- Query params:
-  since (optional): integer event id — return only events with id > since. Use lastEventId from /status as the cursor for efficient incremental polling.
-
-- Success: 200 OK
-  Body: {
-    squadId: string,
-    total: number,      // total events currently in buffer (before since filter)
-    events: Array<{
-      id: number,       // monotonic, 1-based per squad
-      from: string,     // agent name
-      at: string,       // ISO 8601 timestamp
-      type: "thinking" | "message" | "tool_start" | "tool_end"
-           | "retry_start" | "retry_end" | "agent_start" | "agent_end" | "squad_error",
-      // type-specific fields:
-      // thinking:    thinking: string
-      // message:     text: string
-      // tool_start:  toolName: string, args: unknown
-      // tool_end:    toolName: string, result: string, isError: boolean
-      // retry_start: attempt: number, maxAttempts: number, delayMs: number, errorMessage: string
-      // retry_end:   success: boolean, attempt: number, finalError?: string
-      // squad_error: reason: string
-    }>
-  }
-- Common errors: 400 for invalid since, 404 if squad not found
-
-- Notes:
-  - Buffer cap is 2500 events. Oldest events are dropped once the cap is reached.
-  - Poll pattern: call /status to get lastEventId, then call /events?since=<lastEventId> for incremental updates.
-
-4) Subscribe to SSE stream
-- Purpose: Receive real-time agent events and squad lifecycle events via Server-Sent Events.
-- Request (HTTP):
-  GET /api/v1/squads/:squadId/stream
-  Headers: none (client should handle SSE)
-  Body: none
-
-- Success: 200 OK with headers:
-    Content-Type: text/event-stream
-    Cache-Control: no-cache
-    Connection: keep-alive
-  The server sends SSE events (event: message) where `data` is a JSON object containing agent events. Manager broadcasts include a `from` property.
-- Common error: 404 if squad not found
-
-5) Resume squad (after error)
-- Purpose: Resume a squad that entered an error state (retry failed operations).
-- Request (HTTP):
-  POST /api/v1/squads/:squadId/resume
-  Headers:
-    Content-Type: application/json
-  Body (JSON):
-    { "action": "retry_error" }
-
-- Success: 202 Accepted
-  Body: { squadId: string, status: string }
-- Common errors: 400 for invalid body, 404 if squad not found
-
-6) Send instructions / follow-ups to agent(s)
-- Purpose: Queue follow-up messages to one or more agents in a squad. Messages are sent as `prompt` (if agent idle) or `follow_up` (if streaming).
-- Request (HTTP):
-  POST /api/v1/squads/:squadId/instructions
-  Headers:
-    Content-Type: application/json
-  Body (JSON):
-    {
-      "targetAgents": ["agentName1", "agentName2"],
-      "followUp": ["Please try again.", "Add tests."]
-    }
-
-- Success: 200 OK
-  Body: { squadId: string, queuedItems: number }
-- Common errors: 400 for invalid body or unknown agent, 404 if squad not found
-
-7) Complete (destroy) squad
-- Purpose: Mark a squad completed and clean up processes and SSE clients.
-- Request (HTTP):
-  DELETE /api/v1/squads/:squadId
-  Headers: none
-  Body: none
-
-- Success: 200 OK
-  Body: { squadId: string, status: "completed" }
-- Common error: 404 if squad not found
-
-8) List squads
-- Purpose: Retrieve a lightweight list of all active squad sessions with optional filtering and pagination.
-- Request (HTTP):
-  GET /api/v1/squads
-  GET /api/v1/squads?status=<status>
-  GET /api/v1/squads?limit=<number>&offset=<number>
-  Headers: (none required)
-  Body: none
-
-- Query params:
-  status (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
-  limit (optional): maximum number of squads to return. Default: `50`. Max: `200`.
-  offset (optional): number of squads to skip. Default: `0`.
-
-- Success: 200 OK
-  Body: Array<{
-    squadId: string,
-    status: "initialized" | "running" | "suspended" | "error" | "completed",
-    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
-    // present once at least one event has been stored:
-    lastEventId?: number,
-    lastEventAt?: string,
-    lastEventType?: string,
-    lastEventFrom?: string,
-    // optional if failure:
-    failedAgent?: string,
-    reason?: string
-  }>
-
-Event types (overview)
-- Events are emitted by agent processes and forwarded through SSE. Typical `type` values include:
-  - agent_start, agent_end
-  - message_start, message_update, message_end
-  - tool_execution_start, tool_execution_end
-  - auto_retry_start, auto_retry_end
-  - response
-  - squad_error (from manager)
-  - squad_closed (from manager when squad destroyed; reason: "expired"|"completed"|"manual")
-
-Integration tips
-- Use the SSE stream to build live UIs showing agent progress and tool executions.
-- Use resume and instructions to recover from agent failures or to drive additional interactions.
-
----
-
 # API: /api/v1/agent-rooms
 
 Purpose
 
-This API manages "agent rooms" — chat rooms for AI agents where messages from one agent are automatically routed to other agents. Like squads, a room is created from a protocol Markdown document (YAML front matter with a `team:` block plus a body). The server spawns one `pi` process per team member, passes the protocol body as `--append-system-prompt`, and optionally sends per-agent instructions via JSONL RPC.
+This API manages "agent rooms" — chat rooms for AI agents where messages from one agent are automatically routed to other agents. A room is created from a protocol Markdown document (YAML front matter with a `team:` block plus a body). The server spawns one `pi` process per team member, passes the protocol body as `--append-system-prompt`, and optionally sends per-agent instructions via JSONL RPC.
 
 The key behavioral difference from squads is **inter-agent message routing**: when an agent produces an assistant message, that message is forwarded to the other agents in the room so they can react and continue the conversation.
 
@@ -225,11 +24,39 @@ Notes
 - You can optionally declare a `working_dir:` block in the front matter to set the working directory for all spawned `pi` processes. Relative paths are resolved against the API server's CWD; absolute paths are used as-is. When omitted, `pi` inherits the API server's CWD.
 - You can optionally declare an `instructions:` block in the front matter to send per-agent prompt messages immediately after the room is created. When omitted, no initial prompt is sent — callers must use `POST /api/v1/agent-rooms/:roomId/instructions` to trigger agents.
 
-Endpoints (starter guide)
+## Error responses
 
-1) Create room
+All error responses use a standardized shape:
+
+```json
+{
+  "error": {
+    "code": "ROOM_NOT_FOUND",
+    "message": "Room not found",
+    "details": {} // optional, structured extra context
+  }
+}
+```
+
+Common error codes:
+- `INVALID_CONTENT_TYPE` — 415, request Content-Type is not supported
+- `INVALID_HEADER` — 400, a required header is missing or malformed
+- `INVALID_BODY` — 400, request body failed schema validation
+- `INVALID_QUERY` — 400, query parameters failed schema validation
+- `ROOM_NOT_FOUND` — 404, room does not exist
+- `ROOM_COMPLETED` — 409, room is already completed
+- `AGENT_NOT_FOUND` — 400, target agent does not exist in the room
+- `SUPERVISOR_ERROR` — 502, the room supervisor process returned an error
+- `SSE_SUBSCRIPTION_FAILED` — 502, could not establish SSE subscription
+
+---
+
+## Endpoints
+
+### 1) Create room
 - Purpose: Create a new agent room from a protocol Markdown document and start agent processes.
 - Request (HTTP):
+  ```
   POST /api/v1/agent-rooms/
   Headers:
     Content-Type: text/markdown
@@ -237,12 +64,17 @@ Endpoints (starter guide)
     x-room-callback-secret: your-shared-secret (optional, used to sign x-signature)
     x-room-tag: my-namespace (optional, scopes room to a tag for filtering)
   Body: (raw protocol Markdown. Front matter may omit `team:` if defaults are provided by `tailor_shop/working_protocol.md`.)
+  ```
 
 - Success: 201 Created
-  Body: { roomId: string, status: "initialized" }
-- Common errors: 415 if Content-Type does not include text/markdown; 400 for invalid callback headers; 500 if no team is found in either the protocol or `working_protocol.md` defaults.
+  ```json
+  { "roomId": "string", "status": "initialized" }
+  ```
+- Common errors: 415 `INVALID_CONTENT_TYPE`; 400 `INVALID_HEADER` for invalid callback headers; 502 `SUPERVISOR_ERROR` if no team is found in either the protocol or `working_protocol.md` defaults.
 - Callback behavior (optional): when `x-room-callback-url` is set, the API sends HTTP POST callbacks on room close (`completed`, `manual`, `expired`) with body:
-  `{ "type": "room_closed", "roomId": "...", "reason": "completed|manual|expired", "at": "<ISO timestamp>" }`
+  ```json
+  { "type": "room_closed", "roomId": "...", "reason": "completed|manual|expired", "at": "<ISO timestamp>" }
+  ```
   and `x-signature` header (HMAC-SHA256 hex of raw JSON body) when `x-room-callback-secret` is set.
 
 - Callback verification sample (Node/Express):
@@ -374,150 +206,218 @@ When the protocol front matter includes a `tailor_shop:` path, the server also r
 
 This allows you to keep shared configuration (team roster, routing rules, etc.) in a central `working_protocol.md` and create lightweight per-task protocols that only specify `tailor_shop:` and task-specific overrides such as `instructions:`. The main protocol always takes precedence.
 
-2) Get room status
+---
+
+### 2) Get room status
 - Purpose: Get a compact status snapshot for a room and per-agent status, plus a pointer to the most recent stored event.
 - Request (HTTP):
+  ```
   GET /api/v1/agent-rooms/:roomId/status
   Headers: (none required)
   Body: none
+  ```
 
 - Success: 200 OK
-  Body: {
-    roomId: string,
-    status: "initialized" | "running" | "suspended" | "error" | "completed",
-    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
-    // present once at least one event has been stored:
-    lastEventId?: number,
-    lastEventAt?: string,
-    lastEventType?: string,
-    lastEventFrom?: string,
-    // optional if failure:
-    failedAgent?: string,
-    reason?: string
+  ```json
+  {
+    "roomId": "string",
+    "status": "initialized | running | suspended | error | completed",
+    "agents": { "<agentName>": { "status": "idle | streaming | error" }, ... },
+    "lastEventId?": 42,
+    "lastEventAt?": "<ISO timestamp>",
+    "lastEventType?": "message",
+    "lastEventFrom?": "smith",
+    "failedAgent?": "john",
+    "reason?": "spawn_failure"
   }
-- Common error: 404 if room not found
+  ```
+- Common error: 404 `ROOM_NOT_FOUND`
 
-3) Get stored events
+---
+
+### 3) Get stored events
 - Purpose: Retrieve coalesced events buffered for a room. Events are paginated and large text fields are automatically truncated.
 - Request (HTTP):
+  ```
   GET /api/v1/agent-rooms/:roomId/events
   GET /api/v1/agent-rooms/:roomId/events?since=<eventId>
   GET /api/v1/agent-rooms/:roomId/events?since=<eventId>&limit=<number>
-  Headers: (none required)
-  Body: none
+  ```
 
 - Query params:
-  since (optional): integer event id — return only events with id > since.
-  limit (optional): maximum number of events to return. Default: 100. Must be a positive integer.
+  - `since` (optional): integer event id — return only events with `id > since`.
+  - `limit` (optional): maximum number of events to return. Default: `100`. Max: `200`. Must be a positive integer.
 
 - Success: 200 OK
-  Body: {
-    roomId: string,
-    total: number,        // total events currently in buffer (before since filter)
-    returned: number,     // number of events in this response
-    hasMore: boolean,     // true if more events are available beyond this page
-    events: Array<{
-      id: number,
-      from: string,
-      at: string,
-      type: "thinking" | "message" | "tool_start" | "tool_end"
-           | "retry_start" | "retry_end" | "agent_start" | "agent_end" | "room_error" | "room_closed",
-      // type-specific fields are identical to squads, plus:
-      // room_closed: reason: "completed"
-      // present if any field in this event was truncated:
-      _fieldTruncated?: boolean,
-    }>
+  ```json
+  {
+    "roomId": "string",
+    "total": 150,
+    "returned": 100,
+    "hasMore": true,
+    "events": [
+      {
+        "id": 1,
+        "from": "smith",
+        "at": "<ISO timestamp>",
+        "type": "thinking | message | tool_start | tool_end | retry_start | retry_end | agent_start | agent_end | room_error | room_closed",
+        "_fieldTruncated?": true
+      }
+    ]
   }
-- Common errors: 400 for invalid since or limit, 404 if room not found
+  ```
+- Common errors: 400 `INVALID_QUERY` for invalid `since` or `limit`; 404 `ROOM_NOT_FOUND`
 
 - Notes:
-  - If limit is omitted, the server defaults to 100 events.
-  - Individual string fields (message text, thinking blocks, tool results) are truncated at 4000 characters. A _fieldTruncated flag is added to affected events.
-  - Use hasMore + since cursors to paginate through large buffers.
+  - If `limit` is omitted, the server defaults to 100 events.
+  - Individual string fields (message text, thinking blocks, tool results) are truncated at 4000 characters. A `_fieldTruncated` flag is added to affected events.
+  - Use `hasMore` + `since` cursors to paginate through large buffers.
 
-4) Subscribe to SSE stream
+---
+
+### 4) Subscribe to SSE stream
 - Purpose: Receive real-time agent events and room lifecycle events via Server-Sent Events.
 - Request (HTTP):
+  ```
   GET /api/v1/agent-rooms/:roomId/stream
-  Headers: none (client should handle SSE)
+  GET /api/v1/agent-rooms/:roomId/stream?channels=raw,storedevent
+  Headers:
+    Last-Event-Id: 42   (optional — replay applies only to storedevent channel)
   Body: none
+  ```
+
+- Query params:
+  - `channels` (optional): comma-separated subset of `raw,storedevent`.
+    - default (omitted/empty/invalid): `raw,storedevent`
+    - examples: `?channels=raw`, `?channels=storedevent`
 
 - Success: 200 OK with headers:
-    Content-Type: text/event-stream
-    Cache-Control: no-cache
-    Connection: keep-alive
-- Common error: 404 if room not found
+  ```
+  Content-Type: text/event-stream
+  Cache-Control: no-cache
+  Connection: keep-alive
+  ```
+- Common error: 404 `ROOM_NOT_FOUND`
 
-5) Send instructions / follow-ups to agent(s)
+- Reconnect behavior:
+  - `Last-Event-Id` replay is only applied when `storedevent` channel is subscribed.
+  - Replay returns stored events with `id > Last-Event-Id` before switching to live delivery.
+  - `raw` events do not support replay ids.
+
+- Event frames:
+  - `storedevent` channel (includes `id:`):
+    ```
+    id: 42
+    event: storedevent
+    data: {"id":42,"from":"smith","type":"message","text":"hello"}
+    ```
+  - `raw` channel:
+    ```
+    event: raw
+    data: {"type":"room_closed","reason":"completed"}
+    ```
+
+- Heartbeat and backpressure:
+  - Server emits heartbeat comments every 15s: `: heartbeat <ISO timestamp>`.
+  - If a client falls behind and socket write buffer exceeds `AGENT_ROOM_SSE_HIGH_WATERMARK` (default `1048576` bytes), the stream is terminated.
+
+---
+
+### 5) Send instructions / follow-ups to agent(s)
 - Purpose: Queue follow-up messages to one or more agents in a room. Messages are sent as `prompt` (if agent idle) or `follow_up` (if streaming).
 - Request (HTTP):
+  ```
   POST /api/v1/agent-rooms/:roomId/instructions
   Headers:
     Content-Type: application/json
   Body (JSON):
-    {
-      "targetAgents": ["agentName1", "agentName2"],
-      "followUp": ["Please focus on performance.", "Add error handling."]
-    }
+  {
+    "targetAgents": ["agentName1", "agentName2"],
+    "followUp": ["Please focus on performance.", "Add error handling."]
+  }
+  ```
 
 - Success: 200 OK
-  Body: { roomId: string, queuedItems: number }
-- Common errors: 400 for invalid body or unknown agent, 404 if room not found
+  ```json
+  { "roomId": "string", "queuedItems": 2 }
+  ```
+- Common errors: 400 `INVALID_BODY` or `AGENT_NOT_FOUND`; 404 `ROOM_NOT_FOUND`; 409 `ROOM_COMPLETED`
 
-6) Complete (destroy) room
+---
+
+### 6) Complete (destroy) room
 - Purpose: Mark a room completed and clean up processes and SSE clients.
 - Request (HTTP):
+  ```
   DELETE /api/v1/agent-rooms/:roomId
   Headers: none
   Body: none
+  ```
 
 - Success: 200 OK
-  Body: { roomId: string, status: "completed" }
-- Common error: 404 if room not found
+  ```json
+  { "roomId": "string", "status": "deleted" }
+  ```
+- Common error: 404 `ROOM_NOT_FOUND`
 
-7) List agent rooms
-- Purpose: Retrieve a lightweight list of all active agent room sessions with optional filtering and pagination.
+---
+
+### 7) List agent rooms
+- Purpose: Retrieve a lightweight list of agent room sessions with optional filtering and **cursor-based pagination**.
 - Request (HTTP):
+  ```
   GET /api/v1/agent-rooms
   GET /api/v1/agent-rooms?status=<status>
   GET /api/v1/agent-rooms?tag=<tag>
-  GET /api/v1/agent-rooms?limit=<number>&offset=<number>
-  GET /api/v1/agent-rooms?status=<status>&tag=<tag>&limit=<number>&offset=<number>
-  Headers: (none required)
-  Body: none
+  GET /api/v1/agent-rooms?limit=<number>
+  GET /api/v1/agent-rooms?cursor=<cursor>
+  GET /api/v1/agent-rooms?status=<status>&tag=<tag>&limit=<number>&cursor=<cursor>
+  ```
 
 - Query params:
-  status (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
-  tag (optional): filter to rooms created with the matching `x-room-tag` header.
-  limit (optional): maximum number of rooms to return. Default: `50`. Max: `200`.
-  offset (optional): number of rooms to skip. Default: `0`.
+  - `status` (optional): filter by lifecycle state — one of `initialized`, `running`, `suspended`, `error`, `completed`.
+  - `tag` (optional): filter to rooms created with the matching `x-room-tag` header.
+  - `limit` (optional): maximum number of rooms to return. Default: `50`. Max: `200`.
+  - `cursor` (optional): opaque cursor string from the previous page's `nextCursor`. Omit for the first page.
 
 - Success: 200 OK
-  Body: Array<{
-    roomId: string,
-    status: "initialized" | "running" | "suspended" | "error" | "completed",
-    agents: { "<agentName>": { status: "idle" | "streaming" | "error" }, ... },
-    // present once at least one event has been stored:
-    lastEventId?: number,
-    lastEventAt?: string,
-    lastEventType?: string,
-    lastEventFrom?: string,
-    // optional if failure:
-    failedAgent?: string,
-    reason?: string
-  }>
+  ```json
+  {
+    "rooms": [
+      {
+        "roomId": "string",
+        "status": "initialized | running | suspended | error | completed",
+        "agents": { "<agentName>": { "status": "idle | streaming | error" }, ... },
+        "lastEventId?": 42,
+        "lastEventAt?": "<ISO timestamp>",
+        "lastEventType?": "message",
+        "lastEventFrom?": "smith",
+        "failedAgent?": "john",
+        "reason?": "spawn_failure"
+      }
+    ],
+    "nextCursor": "eyJjcmVhdGVkX2F0IjoxNzE1NDMyMTAwMDAwLCJyb29tX2lkIjoicm0teHl6In0" // null when no more pages
+  }
+  ```
 
-Event types (overview)
+- Pagination notes:
+  - Results are ordered by `created_at DESC, roomId DESC`.
+  - Pass `nextCursor` from the response into the next request's `cursor` query param.
+  - When `nextCursor` is `null`, there are no more pages.
+
+---
+
+## Event types (overview)
 - Events are emitted by agent processes and forwarded through SSE. Typical `type` values include:
-  - agent_start, agent_end
-  - message_start, message_update, message_end
-  - tool_execution_start, tool_execution_end
-  - auto_retry_start, auto_retry_end
-  - response
-  - room_error (from manager)
-  - room_closed (from manager when room destroyed; reason: "expired"|"completed"|"manual")
+  - `agent_start`, `agent_end`
+  - `message_start`, `message_update`, `message_end`
+  - `tool_execution_start`, `tool_execution_end`
+  - `auto_retry_start`, `auto_retry_end`
+  - `response`
+  - `room_error` (from manager)
+  - `room_closed` (from manager when room destroyed; reason: `expired|completed|manual`)
 
-Key behavioral difference from squads
+## Key behavioral difference from squads
 - When an agent emits an assistant `message`, the room manager automatically forwards that message to the other agents (formatted as `[<senderName>]: <text>`).
 - **Broadcast Mode** (no `routes:` block): messages are broadcast to all other agents.
 - **Explicit Mode** (`routes:` block present): messages are routed only to agents explicitly targeted via `@attn:<identifier>` inline mentions (resolved against names and roles) or the sender's static `routes:` entries. If no recipients are resolved, the message is forwarded to the configured `facilitator:` agent with a `[SYSTEM_ROUTING_FAILURE]` wrapper, or dropped if no facilitator exists. If the sender *is* the facilitator, one self-retry is allowed before the message is dropped with a critical error; the retry counter resets when the facilitator successfully routes a message.
@@ -574,4 +474,3 @@ Endpoints
   - 422 `NOT_A_GIT_REPO` — `workspace_path` is not a git repository
   - 502 `GENERATION_FAILED` — LLM generation failed or produced invalid/unsatisfiable output
   - 504 `GENERATION_TIMEOUT` — LLM generation timed out after 60 seconds
-

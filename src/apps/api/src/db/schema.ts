@@ -37,9 +37,12 @@ export const cards = sqliteTable('cards', {
   is_editable: integer('is_editable', { mode: 'boolean' }).notNull().default(true),
   payload: text('payload', { mode: 'json' }).notNull(),
   current_status: text('current_status').notNull(),
+  room_id: text('room_id'),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
-});
+}, (table) => ({
+  roomIdIdx: index('cards_room_id_idx').on(table.room_id),
+}));
 
 export const processorRegistry = sqliteTable('processor_registry', {
   processor_id: text('processor_id').primaryKey(),

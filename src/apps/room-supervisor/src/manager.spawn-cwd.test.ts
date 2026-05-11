@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { EventEmitter } from 'events';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ChildProcess } from 'child_process';
+import { setupTestDataDir, teardownTestDataDir, clearIndexDb } from '@repo/agent-rooms-core';
 
 vi.mock('child_process', async () => {
 	const actual = await vi.importActual<typeof import('child_process')>('child_process');
@@ -15,15 +16,16 @@ vi.mock('child_process', async () => {
 
 import { spawn as mockSpawn } from 'child_process';
 import { createRoomFromMarkdown } from './manager.js';
-import { getRoom, destroyRoom } from './lifecycle.js';
+import { rooms, destroyRoom } from './lifecycle.js';
 
 function createMockProc(): ChildProcess & { _stdout: EventEmitter; _stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> } } {
 	const stdout = new EventEmitter();
 	const stdin = { write: vi.fn(), end: vi.fn() };
+	const stderr = { on: vi.fn() };
 	const proc = {
 		stdin,
 		stdout,
-		stderr: new EventEmitter(),
+		stderr,
 		on: vi.fn(),
 		kill: vi.fn(),
 		pid: 12345,
@@ -51,8 +53,17 @@ function createMockProc(): ChildProcess & { _stdout: EventEmitter; _stdin: { wri
 }
 
 describe('agent-rooms spawn cwd', () => {
+	beforeAll(() => {
+		setupTestDataDir();
+	});
+
+	afterAll(() => {
+		teardownTestDataDir();
+	});
+
 	afterEach(() => {
 		vi.mocked(mockSpawn).mockClear();
+		clearIndexDb();
 	});
 
 	it('spawns pi with cwd set to room.workingDir when provided', async () => {
@@ -62,7 +73,7 @@ describe('agent-rooms spawn cwd', () => {
 		const markdown = `---\nteam:\n  alpha: Lead\nworking_dir: ${baseDir}\n---\n\nProtocol body.\n`;
 
 		const result = await createRoomFromMarkdown(markdown);
-		const room = getRoom(result.roomId)!;
+		const room = rooms.get(result.roomId)!;
 		expect(room).toBeDefined();
 		expect(room.workingDir).toBe(baseDir);
 
@@ -80,7 +91,7 @@ describe('agent-rooms spawn cwd', () => {
 		expect(cwdPromptIndex).toBeGreaterThan(-1);
 		expect(piArgs[cwdPromptIndex - 1]).toBe('--append-system-prompt');
 
-		destroyRoom(result.roomId);
+		await destroyRoom(result.roomId);
 		rmSync(baseDir, { recursive: true, force: true });
 	});
 
@@ -90,7 +101,7 @@ describe('agent-rooms spawn cwd', () => {
 		const markdown = `---\nteam:\n  alpha: Lead\n---\n\nProtocol body.\n`;
 
 		const result = await createRoomFromMarkdown(markdown);
-		const room = getRoom(result.roomId)!;
+		const room = rooms.get(result.roomId)!;
 		expect(room).toBeDefined();
 		expect(room.workingDir).toBeUndefined();
 
@@ -101,6 +112,6 @@ describe('agent-rooms spawn cwd', () => {
 		const options = piSpawn![2] as { cwd?: string };
 		expect(options.cwd).toBe(process.cwd());
 
-		destroyRoom(result.roomId);
+		await destroyRoom(result.roomId);
 	});
 });

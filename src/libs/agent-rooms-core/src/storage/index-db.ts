@@ -1,0 +1,474 @@
+import Database from "better-sqlite3";
+import { getIndexDbPath } from "./paths.js";
+
+let db: Database.Database | null = null;
+let dbPath: string | null = null;
+
+export function openIndexDb(): Database.Database {
+	const path = getIndexDbPath();
+	if (db && dbPath === path) return db;
+	if (db) {
+		try { db.close(); } catch {}
+	}
+	db = new Database(path);
+	dbPath = path;
+	db.pragma("journal_mode = WAL");
+	db.pragma("synchronous = NORMAL");
+	db.pragma("busy_timeout = 5000");
+
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS rooms (
+			id TEXT PRIMARY KEY,
+			status TEXT NOT NULL,
+			tag TEXT,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			last_activity_at INTEGER NOT NULL,
+			protocol_body TEXT,
+			facilitator TEXT,
+			routing_strategy TEXT,
+			failed_agent TEXT,
+			failed_reason TEXT,
+			callback_url TEXT,
+			callback_secret TEXT,
+			completed_at INTEGER
+		);
+
+		CREATE TABLE IF NOT EXISTS agents (
+			room_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			role TEXT NOT NULL,
+			execution_mode TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'idle',
+			ready INTEGER NOT NULL DEFAULT 0,
+			task_completed INTEGER NOT NULL DEFAULT 0,
+			has_participated INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (room_id, name),
+			FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_rooms_status_tag_created ON rooms(status, tag, created_at);
+		CREATE INDEX IF NOT EXISTS idx_rooms_updated ON rooms(updated_at);
+
+		CREATE TABLE IF NOT EXISTS callback_deliveries (
+			room_id TEXT PRIMARY KEY,
+			callback_url TEXT NOT NULL,
+			callback_secret TEXT,
+			reason TEXT NOT NULL,
+			closed_at TEXT NOT NULL,
+			state TEXT NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_attempt_at INTEGER,
+			next_attempt_at INTEGER NOT NULL,
+			last_error TEXT,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			CHECK(state IN ('pending', 'delivered', 'failed_permanent')),
+			FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_callback_deliveries_state_next_attempt
+			ON callback_deliveries(state, next_attempt_at);
+	`);
+
+	return db;
+}
+
+export function closeIndexDb(): void {
+	if (db) {
+		try { db.close(); } catch {}
+		db = null;
+		dbPath = null;
+	}
+}
+
+export function getIndexDb(): Database.Database {
+	if (!db) throw new Error("IndexDb not initialized");
+	return db;
+}
+
+export interface RoomIndexRow {
+	id: string;
+	status: string;
+	tag: string | null;
+	created_at: number;
+	updated_at: number;
+	last_activity_at: number;
+	protocol_body: string | null;
+	facilitator: string | null;
+	routing_strategy: string | null;
+	failed_agent: string | null;
+	failed_reason: string | null;
+	callback_url: string | null;
+	callback_secret: string | null;
+	completed_at: number | null;
+}
+
+export interface AgentIndexRow {
+	room_id: string;
+	name: string;
+	role: string;
+	execution_mode: string;
+	status: string;
+	ready: number;
+	task_completed: number;
+	has_participated: number;
+}
+
+export interface RoomLiveStatePatch {
+	status?: string;
+	updated_at?: number;
+	last_activity_at?: number;
+	failed_agent?: string | null;
+	failed_reason?: string | null;
+	completed_at?: number | null;
+}
+
+export interface AgentLiveStatePatch {
+	status?: string;
+	ready?: number;
+	task_completed?: number;
+	has_participated?: number;
+}
+
+export type CallbackDeliveryState = "pending" | "delivered" | "failed_permanent";
+
+export interface CallbackDeliveryRow {
+	room_id: string;
+	callback_url: string;
+	callback_secret: string | null;
+	reason: string;
+	closed_at: string;
+	state: CallbackDeliveryState;
+	attempts: number;
+	last_attempt_at: number | null;
+	next_attempt_at: number;
+	last_error: string | null;
+	created_at: number;
+	updated_at: number;
+}
+
+export function upsertRoom(row: RoomIndexRow): void {
+	const d = getIndexDb();
+	const stmt = d.prepare(`
+		INSERT INTO rooms (id, status, tag, created_at, updated_at, last_activity_at, protocol_body, facilitator, routing_strategy, failed_agent, failed_reason, callback_url, callback_secret, completed_at)
+		VALUES (@id, @status, @tag, @created_at, @updated_at, @last_activity_at, @protocol_body, @facilitator, @routing_strategy, @failed_agent, @failed_reason, @callback_url, @callback_secret, @completed_at)
+		ON CONFLICT(id) DO UPDATE SET
+			status = excluded.status,
+			tag = excluded.tag,
+			updated_at = excluded.updated_at,
+			last_activity_at = excluded.last_activity_at,
+			protocol_body = excluded.protocol_body,
+			facilitator = excluded.facilitator,
+			routing_strategy = excluded.routing_strategy,
+			failed_agent = excluded.failed_agent,
+			failed_reason = excluded.failed_reason,
+			callback_url = excluded.callback_url,
+			callback_secret = excluded.callback_secret,
+			completed_at = excluded.completed_at
+	`);
+	stmt.run(row);
+}
+
+export function upsertAgent(row: AgentIndexRow): void {
+	const d = getIndexDb();
+	const stmt = d.prepare(`
+		INSERT INTO agents (room_id, name, role, execution_mode, status, ready, task_completed, has_participated)
+		VALUES (@room_id, @name, @role, @execution_mode, @status, @ready, @task_completed, @has_participated)
+		ON CONFLICT(room_id, name) DO UPDATE SET
+			role = excluded.role,
+			execution_mode = excluded.execution_mode,
+			status = excluded.status,
+			ready = excluded.ready,
+			task_completed = excluded.task_completed,
+			has_participated = excluded.has_participated
+	`);
+	stmt.run(row);
+}
+
+export function updateRoomLiveState(id: string, patch: RoomLiveStatePatch): void {
+	const d = getIndexDb();
+	const clauses: string[] = [];
+	const values: Array<string | number | null> = [];
+
+	if (patch.status !== undefined) {
+		clauses.push("status = ?");
+		values.push(patch.status);
+	}
+	if (patch.updated_at !== undefined) {
+		clauses.push("updated_at = ?");
+		values.push(patch.updated_at);
+	}
+	if (patch.last_activity_at !== undefined) {
+		clauses.push("last_activity_at = ?");
+		values.push(patch.last_activity_at);
+	}
+	if (patch.failed_agent !== undefined) {
+		clauses.push("failed_agent = ?");
+		values.push(patch.failed_agent);
+	}
+	if (patch.failed_reason !== undefined) {
+		clauses.push("failed_reason = ?");
+		values.push(patch.failed_reason);
+	}
+	if (patch.completed_at !== undefined) {
+		clauses.push("completed_at = ?");
+		values.push(patch.completed_at);
+	}
+
+	if (clauses.length === 0) return;
+	values.push(id);
+	d.prepare(`UPDATE rooms SET ${clauses.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function updateAgentLiveState(roomId: string, name: string, patch: AgentLiveStatePatch): void {
+	const d = getIndexDb();
+	const clauses: string[] = [];
+	const values: Array<string | number> = [];
+
+	if (patch.status !== undefined) {
+		clauses.push("status = ?");
+		values.push(patch.status);
+	}
+	if (patch.ready !== undefined) {
+		clauses.push("ready = ?");
+		values.push(patch.ready);
+	}
+	if (patch.task_completed !== undefined) {
+		clauses.push("task_completed = ?");
+		values.push(patch.task_completed);
+	}
+	if (patch.has_participated !== undefined) {
+		clauses.push("has_participated = ?");
+		values.push(patch.has_participated);
+	}
+
+	if (clauses.length === 0) return;
+	values.push(roomId, name);
+	d.prepare(`UPDATE agents SET ${clauses.join(", ")} WHERE room_id = ? AND name = ?`).run(...values);
+}
+
+export function getRoomIndex(id: string): RoomIndexRow | undefined {
+	const d = getIndexDb();
+	return d.prepare("SELECT * FROM rooms WHERE id = ?").get(id) as RoomIndexRow | undefined;
+}
+
+export function getRoomAgentsIndex(roomId: string): AgentIndexRow[] {
+	const d = getIndexDb();
+	return d.prepare("SELECT * FROM agents WHERE room_id = ?").all(roomId) as AgentIndexRow[];
+}
+
+export function listRoomsIndex(
+	status?: string,
+	tag?: string,
+	limit = 50,
+	offset = 0,
+): RoomIndexRow[] {
+	const d = getIndexDb();
+	let sql = "SELECT * FROM rooms WHERE 1=1";
+	const params: (string | number)[] = [];
+	if (status !== undefined) {
+		sql += " AND status = ?";
+		params.push(status);
+	}
+	if (tag !== undefined) {
+		sql += " AND tag = ?";
+		params.push(tag);
+	}
+	sql += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?";
+	params.push(limit, offset);
+	return d.prepare(sql).all(...params) as RoomIndexRow[];
+}
+
+export interface ListCursor {
+	created_at: number;
+	room_id: string;
+}
+
+function encodeCursor(cursor: ListCursor): string {
+	return Buffer.from(`${cursor.created_at}:${cursor.room_id}`).toString("base64url");
+}
+
+function decodeCursor(cursor: string): ListCursor | undefined {
+	try {
+		const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+		const [created_at, room_id] = decoded.split(":");
+		const ts = parseInt(created_at, 10);
+		if (isNaN(ts) || !room_id) return undefined;
+		return { created_at: ts, room_id };
+	} catch {
+		return undefined;
+	}
+}
+
+export function listRoomsIndexCursor(
+	status?: string,
+	tag?: string,
+	limit = 50,
+	cursor?: string,
+): { rows: RoomIndexRow[]; nextCursor: string | null } {
+	const d = getIndexDb();
+	const decoded = cursor ? decodeCursor(cursor) : undefined;
+
+	let sql = "SELECT * FROM rooms WHERE 1=1";
+	const params: (string | number)[] = [];
+	if (status !== undefined) {
+		sql += " AND status = ?";
+		params.push(status);
+	}
+	if (tag !== undefined) {
+		sql += " AND tag = ?";
+		params.push(tag);
+	}
+	if (decoded) {
+		sql += " AND (created_at < ? OR (created_at = ? AND id < ?))";
+		params.push(decoded.created_at, decoded.created_at, decoded.room_id);
+	}
+	sql += " ORDER BY created_at DESC, id DESC LIMIT ?";
+	params.push(limit + 1);
+
+	const rows = d.prepare(sql).all(...params) as RoomIndexRow[];
+	const hasMore = rows.length > limit;
+	if (hasMore) {
+		rows.pop();
+	}
+	const nextCursor = hasMore && rows.length > 0
+		? encodeCursor({ created_at: rows[rows.length - 1].created_at, room_id: rows[rows.length - 1].id })
+		: null;
+	return { rows, nextCursor };
+}
+
+export function deleteRoomIndex(id: string): void {
+	const d = getIndexDb();
+	d.prepare("DELETE FROM rooms WHERE id = ?").run(id);
+}
+
+export function getTerminalRoomsOlderThan(timestamp: number): { id: string; completed_at: number | null }[] {
+	const d = getIndexDb();
+	return d
+		.prepare("SELECT id, completed_at FROM rooms WHERE status IN ('completed','error') AND updated_at < ?")
+		.all(timestamp) as { id: string; completed_at: number | null }[];
+}
+
+export function upsertPendingCallbackDelivery(input: {
+	roomId: string;
+	callbackUrl: string;
+	callbackSecret?: string;
+	reason: string;
+	closedAt: string;
+	nextAttemptAt?: number;
+}): void {
+	const d = getIndexDb();
+	const now = Date.now();
+	d.prepare(`
+		INSERT INTO callback_deliveries (
+			room_id,
+			callback_url,
+			callback_secret,
+			reason,
+			closed_at,
+			state,
+			attempts,
+			next_attempt_at,
+			created_at,
+			updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+		ON CONFLICT(room_id) DO UPDATE SET
+			callback_url = excluded.callback_url,
+			callback_secret = excluded.callback_secret,
+			reason = excluded.reason,
+			closed_at = excluded.closed_at,
+			state = 'pending',
+			next_attempt_at = excluded.next_attempt_at,
+			updated_at = excluded.updated_at
+	`).run(
+		input.roomId,
+		input.callbackUrl,
+		input.callbackSecret ?? null,
+		input.reason,
+		input.closedAt,
+		input.nextAttemptAt ?? now,
+		now,
+		now,
+	);
+}
+
+export function getCallbackDelivery(roomId: string): CallbackDeliveryRow | undefined {
+	const d = getIndexDb();
+	return d.prepare("SELECT * FROM callback_deliveries WHERE room_id = ?").get(roomId) as CallbackDeliveryRow | undefined;
+}
+
+export function listPendingCallbackDeliveries(now = Date.now()): CallbackDeliveryRow[] {
+	const d = getIndexDb();
+	return d
+		.prepare("SELECT * FROM callback_deliveries WHERE state = 'pending' AND next_attempt_at <= ? ORDER BY next_attempt_at ASC")
+		.all(now) as CallbackDeliveryRow[];
+}
+
+export function updatePendingCallbackAttempt(roomId: string, nextAttemptAt: number, lastError: string): void {
+	const d = getIndexDb();
+	const now = Date.now();
+	d.prepare(`
+		UPDATE callback_deliveries
+		SET attempts = attempts + 1,
+			last_attempt_at = ?,
+			next_attempt_at = ?,
+			last_error = ?,
+			updated_at = ?
+		WHERE room_id = ? AND state = 'pending'
+	`).run(now, nextAttemptAt, lastError, now, roomId);
+}
+
+export function markCallbackDelivered(roomId: string): void {
+	const d = getIndexDb();
+	const now = Date.now();
+	d.prepare(`
+		UPDATE callback_deliveries
+		SET state = 'delivered',
+			attempts = attempts + 1,
+			last_attempt_at = ?,
+			updated_at = ?
+		WHERE room_id = ? AND state = 'pending'
+	`).run(now, now, roomId);
+}
+
+export function markCallbackFailedPermanent(roomId: string, lastError: string): void {
+	const d = getIndexDb();
+	const now = Date.now();
+	d.prepare(`
+		UPDATE callback_deliveries
+		SET state = 'failed_permanent',
+			attempts = attempts + 1,
+			last_attempt_at = ?,
+			last_error = ?,
+			updated_at = ?
+		WHERE room_id = ? AND state = 'pending'
+	`).run(now, lastError, now, roomId);
+}
+
+export function countLiveRooms(): number {
+	const d = getIndexDb();
+	const row = d
+		.prepare("SELECT COUNT(*) AS count FROM rooms WHERE status IN ('initialized', 'running')")
+		.get() as { count: number };
+	return row.count;
+}
+
+export function countActiveAgents(): number {
+	const d = getIndexDb();
+	const row = d
+		.prepare(
+			"SELECT COUNT(*) AS count FROM agents a INNER JOIN rooms r ON r.id = a.room_id WHERE r.status = 'running' AND a.status != 'idle'",
+		)
+		.get() as { count: number };
+	return row.count;
+}
+
+export function countFailedPermanentCallbacks(): number {
+	const d = getIndexDb();
+	const row = d
+		.prepare("SELECT COUNT(*) AS count FROM callback_deliveries WHERE state = 'failed_permanent'")
+		.get() as { count: number };
+	return row.count;
+}

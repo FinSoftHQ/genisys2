@@ -1,10 +1,10 @@
-import type { FastifyReply } from "fastify";
 import type { RoomLogger } from "./internal/room-logger.js";
+import type { RingBuffer } from "./ring-buffer.js";
+import type { RoomLog } from "./storage/room-log.js";
 
 export type RoomStatus =
 	| "initialized"
 	| "running"
-	| "suspended"
 	| "error"
 	| "completed";
 
@@ -24,7 +24,7 @@ export type StoredEvent =
 	| (StoredEventBase & { type: "agent_start" })
 	| (StoredEventBase & { type: "agent_end" })
 	| (StoredEventBase & { type: "room_error"; reason: string })
-	| (StoredEventBase & { type: "room_closed"; reason: "completed" });
+	| (StoredEventBase & { type: "room_closed"; reason: RoomCloseReason });
 
 // Distributive Omit so pushEvent accepts each union member without the id field.
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -62,7 +62,9 @@ export interface Room {
 	id: string;
 	status: RoomStatus;
 	agents: Map<string, AgentState>;
-	sseClients: Set<FastifyReply>;
+	// sseClients is typed as unknown so API (FastifyReply) and supervisor (IpcConnection)
+	// can each cast to their own concrete type.
+	sseClients: Set<unknown>;
 	createdAt: number;
 	lastActivityAt: number;
 	protocolBody: string;
@@ -73,14 +75,16 @@ export interface Room {
 	failedReason?: string;
 	expireTimeout?: ReturnType<typeof setTimeout>;
 	facilitatorConsecutiveOrphanFailures?: number;
-	events: StoredEvent[];
+	events: RingBuffer<StoredEvent>;
 	eventSeq: number;
 	promptDir: string;
 	workingDir?: string;
 	idleCompletionTimeout?: ReturnType<typeof setTimeout>;
+	completedTtlTimer?: ReturnType<typeof setTimeout>;
 	callbackUrl?: string;
 	callbackSecret?: string;
 	tag?: string;
+	roomLog: RoomLog;
 }
 
 export type ReturnedEvent = StoredEvent & { _fieldTruncated?: boolean };
